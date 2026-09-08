@@ -7,7 +7,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-workflow_content=$(cat "${PLUGIN_ROOT}/skills/workflow/SKILL.md" 2>/dev/null || echo "Error reading the fablepowers:workflow skill")
+# Strip the YAML frontmatter block so the session gets the map body, not the metadata.
+workflow_content=$(awk 'NR==1 && $0 == "---" { fm = 1; next } fm && $0 == "---" { fm = 0; next } !fm' "${PLUGIN_ROOT}/skills/workflow/SKILL.md" 2>/dev/null || echo "Error reading the fablepowers:workflow skill")
 
 # Escape a string for embedding in a JSON string literal. Each ${s//old/new}
 # is a single C-level pass, so this stays fast on a whole SKILL.md.
@@ -21,7 +22,7 @@ escape_for_json() {
     printf '%s' "$s"
 }
 
-preamble="You have fablepowers. The workflow map below is your entry point for substantive dev work; invoke every other skill through the Skill tool as \`fablepowers:<name>\`."
+preamble="You have fablepowers. The workflow map below is \`fablepowers:workflow\`, your entry point for substantive dev work. Invoke the other skills through the Skill tool as \`fablepowers:<skill>\`; dispatch the implementer, strict-implementer and reviewer agents through the Agent tool with \`subagent_type: \"fablepowers:<agent>\"\`."
 
 session_context="$(escape_for_json "${preamble}")\\n\\n$(escape_for_json "${workflow_content}")"
 

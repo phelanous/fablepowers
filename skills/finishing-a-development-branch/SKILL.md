@@ -195,7 +195,7 @@ git worktree remove <worktree-path>
 ## Integration
 
 **Called by:**
-- **fablepowers:subagent-execution** - After all tasks complete
+- Called after `fablepowers:integration-review` passes and `fablepowers:verify-done` has run
 
 **Pairs with:**
 - **fablepowers:using-git-worktrees** - Cleans up worktree created by that skill

@@ -39,4 +39,4 @@ Reproduce first: write the test that fails on the current code because of the bu
 
 ## Strict-tier implementers
 
-`fablepowers:strict-implementer` subagents follow classic red-green TDD via `fablepowers:subagent-execution`'s `prompts/implementer-strict.md` — the ritual earns its cost there. The mutation check still applies to their output; the spec-checker samples it.
+`fablepowers:strict-implementer` subagents follow classic red-green TDD via `prompts/implementer-strict.md` in the `fablepowers:subagent-execution` skill directory — the ritual earns its cost there. The mutation check still applies to their output; the spec-checker samples it.

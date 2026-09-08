@@ -103,7 +103,8 @@ momentum erases them.
 ## Fork-era check-in (2026-09-07)
 
 Re-run on the 27 sessions dated 2026-08-01 → 2026-09-07 (older logs have been
-purged; the baseline numbers above are frozen). New harness:
+purged; the baseline numbers above are frozen). (Snapshot as of 2026-09-07;
+re-run the script for current numbers.) New harness:
 `scripts/analyze_delegation.py` — pairs each main transcript with its
 `<session>/subagents/agent-*.jsonl` files, which a naive counter wrongly treats
 as sessions.

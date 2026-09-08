@@ -26,7 +26,8 @@ new session, so the model knows the entry point without any CLAUDE.md edits.
 
 ## How it works
 
-Ten skills, invoked through the Skill tool as `fablepowers:<name>`.
+Ten skills, invoked through the Skill tool as `fablepowers:<name>`. The three
+agents are dispatched with the Agent tool as `subagent_type: "fablepowers:<agent>"`.
 
 | | |
 |---|---|

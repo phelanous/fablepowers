@@ -211,8 +211,8 @@ Ready to implement auth feature
 ## Integration
 
 **Called by:**
-- **fablepowers:design-spec** - REQUIRED when the design is approved and implementation follows
-- **fablepowers:subagent-execution** - REQUIRED before executing any tasks
+- Called from `fablepowers:implementation-plan`, which asks for a worktree for substantial work
+- Used before `fablepowers:subagent-execution` dispatches implementers when isolation is needed
 - Any skill needing isolated workspace
 
 **Pairs with:**

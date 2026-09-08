@@ -25,16 +25,18 @@ Constrain **outcomes**, not process. You (a frontier model) get checkpoints and 
 | Strict implementer | `fablepowers:strict-implementer` | Sonnet | mechanical, fully specified tasks under the imperative red-green prompt; followed by a spec-check |
 | Reviewer | `fablepowers:reviewer` | Opus | plan review, integration review, spec-check; fresh context; never an agent that implemented anything in the feature |
 
+Skills are invoked with the Skill tool as `fablepowers:<skill>`; the three agents are dispatched with the Agent tool by passing `subagent_type: "fablepowers:<agent>"`, never the default general-purpose agent.
+
 A task you could do yourself in this session is still dispatched: a fully briefed single-session task dispatches implementers like any other. Your job is the plan, the dispatch and the judgment calls.
 
 ## Stages
 
-| Situation | Skill | Rigidity |
+| Situation | Skill or agent | Rigidity |
 |---|---|---|
 | New feature / behavior change idea | `fablepowers:design-spec` | Flexible — scale to size |
 | Spec approved, multi-task work ahead | `fablepowers:implementation-plan` | Flexible |
 | Plan ready to execute | `fablepowers:subagent-execution` | Flexible for you; strict prompts for weak implementers |
-| Executing a plan task | `fablepowers:implementer` / `fablepowers:strict-implementer` | Dispatch is not optional |
+| Executing a plan task | `fablepowers:implementer` / `fablepowers:strict-implementer` (Agent tool, `subagent_type`) | Dispatch is not optional |
 | Writing tests for any change | `fablepowers:behavioral-testing` | Outcome is rigid, ordering is free |
 | Work complete, pre-merge | `fablepowers:integration-review` | **RIGID** |
 | About to say "done" / "fixed" / "passing" | `fablepowers:verify-done` | **RIGID** |
@@ -48,4 +50,4 @@ A task you could do yourself in this session is still dispatched: a fully briefe
 - Code-in-plan at 2–5-minute step granularity (made implementers transcriptionists and spec review a diff of a diff).
 - TDD as an Iron Law (the inert-knob bug passed test-first tests; `fablepowers:behavioral-testing` targets what TDD was for).
 - Coercive framing. If you're tempted to skip a gate, say so and why — don't perform compliance.
-- The orchestrator as implementer. The first fork-era audit found it wrote 97% of all output tokens; see `docs/rationale.md`.
+- The orchestrator as implementer. The first fork-era audit found the orchestrator's model produced 97% of all output tokens — 78% in the main loop itself, the rest in subagents that inherited its model; see `docs/rationale.md`.

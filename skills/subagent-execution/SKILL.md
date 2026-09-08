@@ -18,6 +18,8 @@ Execute a plan by dispatching a fresh subagent per task. Context isolation is th
 | Strict implementer | `fablepowers:strict-implementer` | Sonnet | mechanical, fully specified tasks under the imperative red-green prompt; followed by a spec-check |
 | Reviewer | `fablepowers:reviewer` | Opus | plan review, integration review, spec-check; fresh context; never an agent that implemented anything in the feature |
 
+Skills are invoked with the Skill tool as `fablepowers:<skill>`; the three agents are dispatched with the Agent tool by passing `subagent_type: "fablepowers:<agent>"`, never the default general-purpose agent.
+
 **`implementer` flow (the default):**
 1. Plan was already reviewed (`fablepowers:implementation-plan`). Dispatch one `fablepowers:implementer` per task with the task's plan section + relevant context.
 2. The implementer implements, satisfies the task's test obligations including the mutation check (`fablepowers:behavioral-testing`), runs the suite, commits, self-reviews, reports.
@@ -31,11 +33,11 @@ Execute a plan by dispatching a fresh subagent per task. Context isolation is th
 
 ## Dispatch hygiene (both flows)
 
-- **Always pass the agent type explicitly.** The default general-purpose agent inherits your model and effort — dispatching it is not a delegation, it is your own session in a second window.
+- **Always pass the agent type explicitly**: `subagent_type: "fablepowers:implementer"` (or `strict-implementer`, `reviewer`) on the Agent tool. The default general-purpose agent inherits your model and effort — dispatching it is not a delegation, it is your own session in a second window.
 - Include in the prompt: full task text, file paths, contracts, invariants, test obligations, how to run the tests, commit instructions.
 - Implementers may ask questions before starting — answer, then re-dispatch.
 - One task in flight per dependency chain; independent tasks may run in parallel.
-- Track tasks in TodoWrite/TaskCreate; mark complete only after the task's checks pass.
+- Track tasks in TodoWrite; mark complete only after the task's checks pass.
 
 ## Failure handling
 
@@ -43,4 +45,4 @@ If an implementer's report claims success but the diff or test output says other
 
 ## Why
 
-The first fork-era audit measured where the work actually happened: the orchestrator produced 97% of all output tokens, and 9 of 13 plan documents recorded "orchestrator implements directly". Only 4 of 12 sessions that wrote a plan dispatched implementers at all. The wording that allowed it is gone; the agents above exist so the model choice lives in a definition file rather than in whatever prompt gets typed at dispatch time. See `docs/rationale.md`.
+The first fork-era audit measured where the work actually happened: the orchestrator's model produced 97% of all output tokens — 78% in the main loop itself, the rest in subagents that inherited its model because no model was set on the spawn. 9 of 13 plan documents recorded "orchestrator implements directly". Only 4 of 12 sessions that wrote a plan dispatched implementers at all. The wording that allowed it is gone; the agents above exist so the model choice lives in a definition file rather than in whatever prompt gets typed at dispatch time. See `docs/rationale.md`.

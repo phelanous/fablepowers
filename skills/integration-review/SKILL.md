@@ -28,7 +28,7 @@ You are an adversarial reviewer. Your job is to find what's wrong, not to apprec
 
 ## Re-review cap
 
-At most **two** scoped re-reviews per feature. After the second, stop looping: fix the remaining must-fix items yourself or with a `fablepowers:implementer`, run `fablepowers:verify-done`, and tell the user the loop was capped and what remained. A third round has never found what the first two missed; it finds new opinions.
+At most **two** scoped re-reviews per feature. After the second, stop looping: fix the remaining must-fix items with a `fablepowers:implementer` (yourself only for a one-liner, and say so), run `fablepowers:verify-done`, and tell the user the loop was capped and what remained. A third round has never found what the first two missed; it finds new opinions.
 
 ## After the review
 

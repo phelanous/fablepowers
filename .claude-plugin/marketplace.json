@@ -1,0 +1,24 @@
+{
+  "name": "fablepowers",
+  "description": "Outcome-gated development workflow plugin for frontier orchestrator models; forked from superpowers.",
+  "owner": {
+    "name": "Phelanous"
+  },
+  "plugins": [
+    {
+      "name": "fablepowers",
+      "source": "./",
+      "description": "Outcome-gated development workflow for frontier orchestrator models, with pinned-model implementer and reviewer agents; forked from superpowers.",
+      "version": "0.1.0",
+      "category": "development",
+      "keywords": [
+        "workflow",
+        "code-review",
+        "subagents",
+        "tdd",
+        "planning",
+        "delegation"
+      ]
+    }
+  ]
+}

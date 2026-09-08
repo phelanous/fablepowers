@@ -1,0 +1,19 @@
+{
+  "name": "fablepowers",
+  "version": "0.1.0",
+  "description": "Outcome-gated development workflow for frontier orchestrator models, with pinned-model implementer and reviewer agents; forked from superpowers.",
+  "author": {
+    "name": "Phelanous"
+  },
+  "homepage": "https://github.com/phelanous/fablepowers",
+  "repository": "https://github.com/phelanous/fablepowers",
+  "license": "MIT",
+  "keywords": [
+    "workflow",
+    "code-review",
+    "subagents",
+    "tdd",
+    "planning",
+    "delegation"
+  ]
+}

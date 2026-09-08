@@ -211,9 +211,9 @@ Ready to implement auth feature
 ## Integration
 
 **Called by:**
-- Called from `fablepowers:implementation-plan`, which asks for a worktree for substantial work
-- Used before `fablepowers:subagent-execution` dispatches implementers when isolation is needed
+- `fablepowers:implementation-plan`, which asks for a worktree for substantial work
+- Any session that needs isolation before dispatching implementers
 - Any skill needing isolated workspace
 
 **Pairs with:**
-- **fablepowers:finishing-a-development-branch** - REQUIRED for cleanup after work complete
+- **fablepowers:finishing-a-development-branch** - for cleanup after work is complete

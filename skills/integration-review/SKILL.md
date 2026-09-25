@@ -30,8 +30,10 @@ You are an adversarial reviewer. Your job is to find what's wrong, not to apprec
 
 At most **two** scoped re-reviews per feature. After the second, stop looping: fix the remaining must-fix items with a `fablepowers:implementer` (yourself only for a one-liner, and say so), run `fablepowers:verify-done`, and tell the user the loop was capped and what remained. A third round has never found what the first two missed; it finds new opinions.
 
+In the second audit, scoped re-reviews found a must-fix about 40% of the time, frequently a regression introduced by the fix commit itself — hence the test obligation on every fix round below.
+
 ## After the review
 
-- **Must-fix findings:** fix them (`fablepowers:implementer` or, for a one-liner, yourself), then re-dispatch a fresh `fablepowers:reviewer` scoped to the fixes + their blast radius — within the cap above.
+- **Must-fix findings:** dispatch the fix to a `fablepowers:implementer` (yourself only for a one-liner, and say so). For each must-fix finding, the dispatch lists the reviewer's failure scenario as a test obligation: a test that fails on the current code for that scenario and passes after the fix. The implementer reports that before/after evidence per finding. Should-fix items may share one obligation, or be exempted with a stated reason. Then re-dispatch a fresh `fablepowers:reviewer` scoped to the fixes + their blast radius — within the cap above.
 - **Judgment-call findings:** decide explicitly and say why; surface disagreements to the user rather than silently dropping them.
 - Then proceed to `fablepowers:verify-done` and `fablepowers:finishing-a-development-branch`.

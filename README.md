@@ -32,7 +32,7 @@ agents are dispatched with the Agent tool as `subagent_type: "fablepowers:<agent
 | | |
 |---|---|
 | `fablepowers:workflow` | The map. Start substantive dev work here; it routes to everything below. |
-| `fablepowers:design-spec` | Turn an idea into a written design through dialogue, scaled to the size of the work. Ends at a standalone approval ask — the user's explicit yes, never inferred from an answer to a design question. |
+| `fablepowers:design-spec` | Turn an idea into a written design through dialogue, scaled to the size of the work. Ends with a phone-readable design brief and a two-option approval ask — the user's explicit yes, never inferred from an answer to a design question. |
 | `fablepowers:implementation-plan` | Turn the approved spec into an interface-level plan: contracts, invariants, test obligations per task. No code in the plan. |
 | `fablepowers:subagent-execution` | Dispatch one fresh implementer agent per plan task. The orchestrator coordinates and spot-checks; it does not implement. |
 | `fablepowers:behavioral-testing` | Every spec behavior gets a test, and you break the behavior to watch that test fail. Ordering is free; the mutation check is not. |
@@ -41,6 +41,10 @@ agents are dispatched with the Agent tool as `subagent_type: "fablepowers:<agent
 | `fablepowers:systematic-debugging` | Vendored from superpowers, unchanged in substance. |
 | `fablepowers:using-git-worktrees` | Vendored from superpowers, unchanged in substance. |
 | `fablepowers:finishing-a-development-branch` | Vendored from superpowers, unchanged in substance. |
+
+The approval ask is preceded by a short plain-language brief — what changes,
+the decisions made, the risk, and when the spec is worth opening — so it can be
+judged from a phone.
 
 The usual path: `workflow` → `design-spec` (approval) → `implementation-plan`
 (plan review) → `subagent-execution` (implementers, one per task) →
@@ -66,7 +70,7 @@ spawning one is not delegation.
 | Skill | Replaces | What changed |
 |---|---|---|
 | `workflow` | using-superpowers | A map plus the philosophy and the gates. No "1% rule", no mandatory-invocation preamble. Adds the who-does-what table above. |
-| `design-spec` | brainstorming | Same dialogue, tiered by size (user-visible behavior is never trivial). No HARD-GATE theater; instead one blocking user checkpoint, and the approval ask must stand alone. |
+| `design-spec` | brainstorming | Same dialogue, tiered by size (user-visible behavior is never trivial). No HARD-GATE theater; instead one blocking user checkpoint, and the approval ask is preceded by a design brief and offers only Approve or Changes needed. |
 | `implementation-plan` | writing-plans | Interface level — contracts, invariants, test obligations, PR-sized tasks — and **no code in the plan**. Adds an up-front plan review. The header names the implementing agent, not a "tier". |
 | `subagent-execution` | subagent-driven-development, executing-plans | Fresh implementer per task kept. Per-task spec review only for the strict tier. Every dispatch names an agent type; the orchestrator never implements a plan task. |
 | `behavioral-testing` | test-driven-development | TDD-as-ritual replaced by a rigid outcome plus a mutation check. Ordering free for frontier models; strict red-green retained for weak subagents and for bug fixes, where the failing test is the reproduction. |

@@ -35,6 +35,7 @@ Skills are invoked with the Skill tool as `fablepowers:<skill>`; the three agent
 
 - **Always pass the agent type explicitly**: `subagent_type: "fablepowers:implementer"` (or `strict-implementer`, `reviewer`) on the Agent tool. The default general-purpose agent inherits your model and effort — dispatching it is not a delegation, it is your own session in a second window.
 - Include in the prompt: full task text, file paths, contracts, invariants, test obligations, how to run the tests, commit instructions.
+- **Fix-round dispatches carry test obligations.** When an implementer is sent to fix review findings, list each must-fix finding's failure scenario as a test obligation — fails on the current code, passes after the fix — and expect before/after evidence per finding in the report. The full rule is in `fablepowers:integration-review`.
 - Implementers may ask questions before starting — answer, then re-dispatch.
 - One task in flight per dependency chain; independent tasks may run in parallel.
 - Track tasks in TodoWrite; mark complete only after the task's checks pass.

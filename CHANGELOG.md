@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 — 2026-09-24
+
+From the second log audit (40 sessions on 0.1.0; full numbers in `docs/rationale.md`).
+
+- **A design brief precedes the approval ask.** `design-spec` ends with a phone-readable brief under six fixed headings (What changes, Decisions I made, Not doing, Risk, Open the spec if, Verified by), then one question with exactly two options, Approve and Changes needed. 16 of 42 approval asks under 0.1.0 had no design summary in the turn; design variants had moved into the options.
+- **Fix-round dispatches carry per-finding test obligations.** When an implementer fixes review findings, each must-fix finding's failure scenario is a test that fails before the fix and passes after, with the evidence reported per finding. Re-review must-fixes were often regressions from the fix commit.
+- **`docs/rationale.md` gains the second check-in** (2026-09-24): delegation fixed (subagent share of output 59%, was 22%), approval-ask and review-yield numbers, and the decisions above.
+
 ## 0.1.0 — 2026-09-07
 
 First release. Packages the personal superpowers fork as an installable plugin.

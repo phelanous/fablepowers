@@ -5,9 +5,10 @@ document is the evidence: what the superpowers workflow cost and caught across
 ~1,470 Claude Code sessions, what changed when it was forked, and what the
 first fork-era audit found still broken.
 
-Two measurement rounds are recorded here. The baseline (2026-07-20) is frozen —
+Three measurement rounds are recorded here. The baseline (2026-07-20) is frozen —
 the logs behind it have since been purged. The fork-era check-in (2026-09-07)
-covers the 27 sessions from 2026-08-01 onward and is reproducible.
+covers the 27 sessions from 2026-08-01 onward and is reproducible; the second
+check-in (2026-09-24) covers the 40 sessions on the 0.1.0 plugin.
 
 ## Reproduce
 
@@ -135,3 +136,47 @@ as sessions.
 The numbers to re-run against after this change are the same four in "What to
 watch", plus the two the audit added: subagent share of output tokens (was 22%)
 and the count of `Agent` spawns with `model` unset (was 101 of 114).
+
+## Second check-in (2026-09-24)
+
+Re-run on the 40 sessions dated 2026-09-08 → 2026-09-24, all on the 0.1.0
+plugin. (Snapshot as of 2026-09-24; re-run the script for current numbers.)
+
+### What is working: delegation
+
+- Subagent share of output tokens rose to **59%** (was 22%).
+- Implementation left the main loop: 185 main-loop Edit/Write plus 357 Bash file-writes vs 2,028 subagent edits (was 960 vs 288).
+- Reviewer:implementer spawns are 127:254 = **0.5:1** (was 2.4:1). Implementers now outnumber reviewers.
+- 91% of subagent output ran on Opus — the pinned-model agents are what actually runs.
+- Cost (estimated from usage records, same pricing basis as above): main loop $1,638, subagents $3,475. Spend moved to where the work is done.
+
+### What is not: approval asks without a design
+
+- 16 of 42 approval asks fired with no design summary in the same turn.
+- Every thin ask has the same shape: the design variants moved into the `AskUserQuestion` options ("Approve, skip the themed test") and the summary was dropped. The 0.1.0 wording "the ask stands alone" was read as "the ask must be alone".
+- Approvals are often reviewed on a phone through remote control, where the spec file may not open. An ask that points at the file without summarizing it asks for a yes the user cannot inform.
+
+### Review yield
+
+Regex classification, approximate:
+
+- Plan reviews carry a must-fix ~50% of the time.
+- Integration reviews ~35%.
+- Scoped re-reviews ~40%; "final" re-reviews ~40%.
+- Re-review must-fixes are often regressions introduced by the fix commit itself.
+
+### Decisions (2026-09-24)
+
+`fablepowers:design-spec` now ends in a **design brief** followed by the ask,
+in the same turn: six fixed headings (What changes, Decisions I made, Not doing,
+Risk, Open the spec if, Verified by), at most 20 words per bullet, no tables,
+written to be judged from a phone; the spec file is the appendix. The ask is one
+question with exactly two options, Approve and Changes needed — a design variant
+is a design question and is asked in an earlier round. When an implementer is
+dispatched to fix review findings, `fablepowers:subagent-execution` and
+`fablepowers:integration-review` now require each must-fix finding's failure
+scenario to arrive as a **test obligation**: a test that fails on the current
+code for that scenario and passes after the fix, with before/after evidence per
+finding in the report — aimed at the regressions re-reviews keep finding in fix
+commits. Review cadence and the two-round re-review cap are unchanged: the
+yields above say the reviews earn their cost.

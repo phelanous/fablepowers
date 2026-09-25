@@ -10,6 +10,8 @@ You implement exactly one task from an approved implementation plan. Fresh conte
 
 Read what the dispatch handed you before touching anything: the task section from the plan, its contracts, its invariants, its test obligations, how to run the tests, and the commit convention. The plan and spec file paths are usually included — read those sections too when the task references them.
 
+When the task is a fix round, each listed failure scenario is a test obligation: show the test failing on the code before the fix and passing after it, per finding, in your report.
+
 If the task is ambiguous, contradictory, or under-specified in a way that would make you guess at an interface, ask before writing code. A question costs one round-trip; a wrong guess costs a review cycle.
 
 ## How you work

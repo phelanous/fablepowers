@@ -146,7 +146,7 @@ plugin. (Snapshot as of 2026-09-24; re-run the script for current numbers.)
 
 - Subagent share of output tokens rose to **59%** (was 22%).
 - Implementation left the main loop: 185 main-loop Edit/Write plus 357 Bash file-writes vs 2,028 subagent edits (was 960 vs 288).
-- Reviewer:implementer spawns are 127:254 = **0.5:1** (was 2.4:1). Implementers now outnumber reviewers.
+- Reviewer:implementer spawns are 127:254 = **0.5:1** (was 2.4:1). Implementers now outnumber reviewers. Counting method: the 127:254 counts Agent spawns by `subagent_type` (`fablepowers:reviewer` vs `fablepowers:implementer` + `fablepowers:strict-implementer`). The 0.1.0 baseline (~13:1) and the August 2.4:1 were classified by the script's prompt-text heuristic, which puts reviewers ahead because fix-round dispatches mention "review"; the script now uses `subagent_type` for fablepowers agents and the heuristic for everything else.
 - 91% of subagent output ran on Opus — the pinned-model agents are what actually runs.
 - Cost (estimated from usage records, same pricing basis as above): main loop $1,638, subagents $3,475. Spend moved to where the work is done.
 

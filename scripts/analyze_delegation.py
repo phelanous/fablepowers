@@ -54,7 +54,17 @@ def cost(usage, model):
             + usage.get("cache_read_input_tokens", 0) * p[2] + usage.get("output_tokens", 0) * p[3]) / 1e6
 
 
-def role(prompt, desc=""):
+AGENT_ROLES = {"fablepowers:reviewer": "reviewer",
+               "fablepowers:implementer": "implementer",
+               "fablepowers:strict-implementer": "implementer"}
+
+
+def role(prompt, desc="", subagent_type=None):
+    """A fablepowers agent's `subagent_type` names its role outright. Anything else
+    falls back to a prompt-text heuristic, which over-counts reviewers: fix-round
+    dispatches to an implementer mention "review"."""
+    if subagent_type in AGENT_ROLES:
+        return AGENT_ROLES[subagent_type]
     p = (desc + " " + prompt[:600]).lower()
     if re.search(r"review|critique|audit|verify|spec.?check|adversarial", p):
         return "reviewer"
@@ -120,7 +130,7 @@ def scan_main(path):
             elif n == "AskUserQuestion":
                 s["seq"].append(("ask", ""))
             elif n in ("Agent", "Task"):
-                s["spawns"].append(dict(model=i.get("model"), role=role(i.get("prompt", ""), i.get("description", ""))))
+                s["spawns"].append(dict(model=i.get("model"), role=role(i.get("prompt", ""), i.get("description", ""), i.get("subagent_type"))))
     return s
 
 

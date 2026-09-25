@@ -10,7 +10,7 @@ Turn an idea into a design the user has agreed to, through dialogue — before a
 ## Scale to the work
 
 - **Trivial** (rename, config tweak, obvious one-liner): no spec doc. State your understanding in one sentence and proceed unless the user objects.
-- **Small** (single-file feature, clear scope): the brief from step 7 (same headings, shorter) is the design summary; get a nod, go.
+- **Small** (single-file feature, clear scope): no spec file. The brief from step 7 is the design summary: same headings, shorter, with "Open the spec if" replaced by "Ask me if" (what the user might want to weigh in on) and "Verified by" describing the tests directly. The ask is the same two-option `AskUserQuestion`.
 - **Substantial** (new subsystem, multi-file, ambiguous requirements): full process below.
 
 Use judgment on which tier applies, with one hard rule: **anything that adds user-visible behavior is never trivial, and a new feature is substantial by default** — downgrade only with a stated reason the user can see. When requirements are ambiguous, that alone promotes it a tier — unexamined assumptions on "simple" work are where rework comes from.
@@ -36,7 +36,7 @@ Use judgment on which tier applies, with one hard rule: **anything that adds use
 
    Limits: at most 20 words per bullet; no tables; no file paths, identifiers, or code inside the brief.
 
-   **(b) The ask**: its own `AskUserQuestion` with exactly one question of at most 20 words and exactly two options, **Approve** and **Changes needed**. An approval with a note is Changes needed plus the note, or the user's free-text answer. Design variants never appear as approval options; an open variant is a design question, asked in an earlier round. Then **wait**.
+   **(b) The ask**: its own `AskUserQuestion` with exactly one question of at most 20 words and exactly two options, **Approve** and **Changes needed**. An approval with a note is Changes needed plus the note, or the user's free-text answer. After Changes needed, fold the note into the spec and repeat step 7 in full — a fresh brief and a fresh ask — before any implementation; proceed without re-asking only if the note itself says to go ahead unchanged. Design variants never appear as approval options; an open variant is a design question, asked in an earlier round. Then **wait**.
 
    Example, for a dismissible banner when a scan fails in a trading-scanner web app:
 

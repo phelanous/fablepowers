@@ -27,7 +27,7 @@ If the task is ambiguous, contradictory, or under-specified in a way that would 
 ## Report format
 
 - **Status:** DONE | BLOCKED | DONE_WITH_CONCERNS
-- **Test evidence:** counts read from the actual output, plus the mutation check results (what you broke, which test failed)
+- **Test evidence:** counts read from the actual output, plus the mutation check results (what you broke, which test failed); for a fix round, per-finding before/after evidence (the scenario's test failing before the fix, passing after)
 - **Files changed:** one line each on what it is
 - **Commit SHA:** (or a note that the controller commits)
 - **Deviations from the task:** every one, however small. An unreported deviation is a failure of the task.

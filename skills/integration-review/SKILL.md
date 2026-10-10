@@ -17,7 +17,9 @@ First build the review package. `<base-branch>` is the branch this work merges i
 bash "<this skill's base dir>/review-package" <plan-file> <base-branch>
 ```
 
-It diffs from `git merge-base <base-branch> HEAD`, not the bare base branch, so base-side commits made after the branch point don't show up as phantom deletions. It writes `<workspace>/review-<mb7>..<head7>.diff` (commit list, `--stat`, `-U10` diff) and prints `wrote <path>: <N> commit(s)`. Exit 2 means a bad argument, an unknown ref or a missing plan file; exit 3 means the range is empty or the refs share no history — check the base before dispatching.
+The first argument only names the workspace. Work with no plan file passes its spec file instead; work with neither (small or single-task work) passes `@<branch-name>`, which keys the workspace on the branch name with each `/` made a `-` (`@feat/x` → `.fablepowers/feat-x/`).
+
+It diffs from `git merge-base <base-branch> HEAD`, not the bare base branch, so base-side commits made after the branch point don't show up as phantom deletions. It writes `<workspace>/review-<mb7>..<head7>.diff` (commit list, `--stat`, `-U10` diff) and prints `wrote <path>: <N> commit(s)`. Exit 2 means a bad argument, an unknown ref, a missing plan file or a key whose name would be empty, `.` or `..`; exit 3 means the range is empty or the refs share no history — check the base before dispatching. Nothing is created on a non-zero exit.
 
 Give the reviewer:
 
@@ -25,6 +27,8 @@ Give the reviewer:
 - The review-package path, plus the repo path
 - How to run tests and how to run the app/feature
 - The report path: `<workspace>/reports/review-integration.md` (re-reviews: `reports/review-rereview-<k>.md`)
+
+When the reviewer returns, append its round to the ledger `<workspace>/progress.md` before acting on it: `review integration | <head7> | <verdict> | reports/review-integration.md`, or `review rereview-<k> | …` for a re-review. A resumed session reads these lines to know which round ran last and how much of the cap is used.
 - The mandate below
 
 **What the dispatch never carries:** a pre-rated severity ("probably minor"), an instruction to ignore, skip or not flag something, or the implementer's rationale for a choice ("kept simple on purpose"). Each one tilts the review toward what you already believe, and the reviewer is there because you can't see past that. If the plan itself mandates a defect, the reviewer still reports it, flagged plan-mandated — you take it to the user.
@@ -52,7 +56,7 @@ In the second audit, scoped re-reviews found a must-fix about 40% of the time, f
 
 ## After the review
 
-- **Must-fix findings:** dispatch the fix to a `fablepowers:implementer` (yourself only for a one-liner, and say so), passing the review report's path. For each must-fix finding, the dispatch lists the reviewer's failure scenario as a test obligation: a test that fails on the current code for that scenario and passes after the fix. The implementer reports that before/after evidence per finding. Should-fix items may share one obligation, or be exempted with a stated reason. Then re-dispatch a fresh `fablepowers:reviewer` scoped to the fixes + their blast radius — within the cap above. A re-review gets its own package covering only the fix range: pass the previously reviewed head SHA as `<base-branch>`.
+- **Must-fix findings:** dispatch the fix to a `fablepowers:implementer` (yourself only for a one-liner, and say so), passing the review report's path and the report path `<workspace>/reports/integration-fix<k>.md` — `k` is 1 for the fix after the integration review and `k+1` after re-review `k`. When it returns, append `fix integration-<k> | <sha7> | <status> | reports/integration-fix<k>.md` to the ledger. For each must-fix finding, the dispatch lists the reviewer's failure scenario as a test obligation: a test that fails on the current code for that scenario and passes after the fix. The implementer reports that before/after evidence per finding. Should-fix items may share one obligation, or be exempted with a stated reason. Then re-dispatch a fresh `fablepowers:reviewer` scoped to the fixes + their blast radius — within the cap above. A re-review gets its own package covering only the fix range: pass the previously reviewed head SHA as `<base-branch>`.
 - **Judgment-call findings:** decide explicitly and say why; surface disagreements to the user rather than silently dropping them.
 - **Declined to judge:** rule on each item the reviewer set aside — act on it, defer it, or take it to the user. None is dropped silently.
 - Then proceed to `fablepowers:verify-done` and `fablepowers:finishing-a-development-branch`.

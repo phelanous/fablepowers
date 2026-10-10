@@ -2,59 +2,87 @@
 # Per-plan workspace + review package for fablepowers reviews.
 #
 # Usage:
-#   review-package --init PLAN_FILE
-#       Create <toplevel>/.fablepowers/<plan-basename>/ (and
-#       <toplevel>/.fablepowers/.gitignore containing '*' if absent);
+#   review-package --init KEY
+#       Create <toplevel>/.fablepowers/<name>/ (and
+#       <toplevel>/.fablepowers/.gitignore containing '*' if absent), and the
+#       ledger <workspace>/progress.md holding "# Progress: KEY" if absent;
 #       print the workspace path.
-#   review-package PLAN_FILE BASE_BRANCH [HEAD]
-#       As --init, then write <workspace>/review-<mb7>..<head7>.diff with the
-#       commit list, --stat and -U10 diff of MB..HEAD, where
-#       MB = git merge-base BASE_BRANCH HEAD. Diffing from the merge-base (not
-#       the bare base branch) keeps base-side changes made after the branch
-#       point out of the package.
+#   review-package KEY BASE_BRANCH [HEAD]
+#       Validate the refs and the range, then as --init, then write
+#       <workspace>/review-<mb7>..<head7>.diff with the commit list, --stat and
+#       -U10 diff of MB..HEAD, where MB = git merge-base BASE_BRANCH HEAD.
+#       Diffing from the merge-base (not the bare base branch) keeps base-side
+#       changes made after the branch point out of the package.
+#
+# KEY names the workspace. Normally it is the plan file (PLAN_FILE): <name> is
+# its basename without .md. With no plan, pass the spec file; with neither, pass
+# @<name>, e.g. @<branch-name>: <name> is what follows the @, with each / made
+# a -. A name that comes out empty, . or .. is rejected.
 #
 # <toplevel> is the top level of the worktree the command runs in, not of the
 # plan file's location. Run it as `bash <dir>/review-package ...` so stripped
-# exec bits do not matter.
+# exec bits do not matter. Nothing is created when the command exits non-zero.
 #
-# Exit codes: 2 bad arguments / unknown ref / missing plan / not in a git repo;
-#             3 empty range or no common history between BASE_BRANCH and HEAD.
+# Exit codes: 2 bad arguments / bad key / unknown ref / missing plan / not in a
+#             git repo; 3 empty range or no common history between BASE_BRANCH
+#             and HEAD.
 set -euo pipefail
 
 usage() {
-  echo "usage: review-package --init PLAN_FILE" >&2
-  echo "       review-package PLAN_FILE BASE_BRANCH [HEAD]" >&2
+  echo "usage: review-package --init KEY" >&2
+  echo "       review-package KEY BASE_BRANCH [HEAD]" >&2
+  echo "KEY: the plan file, else the spec file, else @<name>" >&2
   exit 2
 }
 
-# init_workspace PLAN_FILE — sets $workspace; creates it and the ignore file.
-init_workspace() {
-  local plan=$1 toplevel name
-  [ -f "$plan" ] || { echo "no such plan file: $plan" >&2; exit 2; }
+# resolve_workspace KEY — validates KEY and the repo; sets $workspace and
+# $toplevel without creating anything.
+resolve_workspace() {
+  local key=$1 name
+  case "$key" in
+    @*)
+      name=${key#@}
+      name=${name//\//-}
+      ;;
+    *)
+      [ -f "$key" ] || { echo "no such plan file: $key" >&2; exit 2; }
+      name=$(basename "$key")
+      name=${name%.md}
+      ;;
+  esac
+  case "$name" in
+    ""|.|..) echo "workspace name from '$key' is empty, . or ..: rename it" >&2; exit 2 ;;
+  esac
   toplevel=$(git rev-parse --show-toplevel 2>/dev/null) \
     || { echo "not in a git repository" >&2; exit 2; }
-  name=$(basename "$plan")
-  name=${name%.md}
-  mkdir -p "$toplevel/.fablepowers/$name"
+  workspace="$toplevel/.fablepowers/$name"
+}
+
+# create_workspace KEY — creates $workspace, the ignore file and the ledger
+# header, each only when absent.
+create_workspace() {
+  mkdir -p "$workspace"
   # Only when absent: a repo may commit its own .fablepowers/.gitignore.
   [ -e "$toplevel/.fablepowers/.gitignore" ] \
     || printf '*\n' > "$toplevel/.fablepowers/.gitignore"
-  workspace="$toplevel/.fablepowers/$name"
+  [ -e "$workspace/progress.md" ] \
+    || printf '# Progress: %s\n' "$1" > "$workspace/progress.md"
 }
 
 if [ $# -ge 1 ] && [ "$1" = "--init" ]; then
   [ $# -eq 2 ] || usage
-  init_workspace "$2"
+  resolve_workspace "$2"
+  create_workspace "$2"
   echo "$workspace"
   exit 0
 fi
 
 [ $# -eq 2 ] || [ $# -eq 3 ] || usage
-plan=$1
+key=$1
 base=$2
 head=${3:-HEAD}
 
-init_workspace "$plan"
+resolve_workspace "$key"
 
 git rev-parse --verify --quiet "${base}^{commit}" >/dev/null \
   || { echo "unknown ref: $base" >&2; exit 2; }
@@ -66,6 +94,8 @@ mb=$(git merge-base "$base" "$head") \
 
 commits=$(git rev-list --count "${mb}..${head}")
 [ "$commits" -gt 0 ] || { echo "empty commit range: ${base}...${head}" >&2; exit 3; }
+
+create_workspace "$key"
 
 out="$workspace/review-$(git rev-parse --short=7 "$mb")..$(git rev-parse --short=7 "$head").diff"
 

@@ -16,7 +16,7 @@ Execute a plan by dispatching a fresh subagent per task. Context isolation is th
 | Orchestrator | the user's session | whatever the session runs | design dialogue, plan, dispatch, spot-check, fix-loop decisions, user communication. **Never implements a plan task.** |
 | Implementer | `fablepowers:implementer` | Opus | one plan task per dispatch, fresh context, behavioral tests with the mutation check, commit, report |
 | Strict implementer | `fablepowers:strict-implementer` | Sonnet | mechanical, fully specified tasks under the imperative red-green prompt; followed by a spec-check |
-| Reviewer | `fablepowers:reviewer` | Opus | plan review, integration review, spec-check; fresh context; never an agent that implemented anything in the feature |
+| Reviewer | `fablepowers:reviewer` | Opus | plan review, integration review, spec-check, builder check of a substantial spec; fresh context; never an agent that implemented anything in the feature |
 
 Skills are invoked with the Skill tool as `fablepowers:<skill>`; the three agents are dispatched with the Agent tool by passing `subagent_type: "fablepowers:<agent>"`, never the default general-purpose agent.
 
@@ -39,25 +39,33 @@ Handoff files live in a per-plan workspace, `<toplevel>/.fablepowers/<plan-basen
 bash "<this skill's base dir>/../integration-review/review-package" --init <plan-file>
 ```
 
-It prints the workspace path and writes `<toplevel>/.fablepowers/.gitignore` (containing `*`) only if absent, so the files stay out of `git status`. Two plans with the same basename in different directories share a workspace — a known limitation; rename one if both are in flight.
+It prints the workspace path and writes `<toplevel>/.fablepowers/.gitignore` (containing `*`) only if absent, so the files stay out of `git status`. Two plans with the same basename in different directories share a workspace — a known limitation; rename one if both are in flight. A spec and its plan usually share a basename, and so a workspace (the ledger header names whichever ran `--init` first); that is harmless, since their report names differ.
 
-**Report paths** (inside the workspace), named in every dispatch: implementer `reports/task-<n>.md`, fix rounds `reports/task-<n>-fix<k>.md`; spec-check `reports/spec-check-task-<n>.md`. The review paths are in `fablepowers:integration-review`.
+**Report paths** (inside the workspace), named in every dispatch: implementer `reports/task-<n>.md`, fix rounds `reports/task-<n>-fix<k>.md`; spec-check `reports/spec-check-task-<n>.md`; fixes for integration-review findings `reports/integration-fix<k>.md`. The review report paths are in the skills that dispatch them: plan review in `fablepowers:implementation-plan`, builder check in `fablepowers:design-spec`, integration review and re-reviews in `fablepowers:integration-review`.
 
-**Ledger** — `<workspace>/progress.md`, written only by you. Line 1 is `# Progress: <plan path>`; then one line per completed task, appended once its checks pass (your spot-check, or a COMPLIANT spec-check on the strict tier):
+**Ledger** — `<workspace>/progress.md`, written only by you. `--init` writes line 1, `# Progress: <plan path>`, if the file is absent. Then one line per completed task, appended once its checks pass (your spot-check, or a COMPLIANT spec-check on the strict tier), and one line per integration-review round and fix round as each comes back (see `fablepowers:integration-review`):
 
 ```
 task <n> | <sha7> | <status> | <report path>
+review integration | <head7> | <verdict> | reports/review-integration.md
+fix integration-<k> | <sha7> | <status> | reports/integration-fix<k>.md
+review rereview-<k> | <head7> | <verdict> | reports/review-rereview-<k>.md
 ```
 
-**On resume** — after compaction, in a new session, or whenever you're unsure what has run — read `progress.md` and `git log` before dispatching anything. A task whose commit is present is done: do not re-dispatch it. If a commit is present without a ledger line, read its report, then add the line; if the ledger names a SHA that `git log` doesn't have, the ledger is wrong — trust the log and ask the user if the gap is unclear.
+**On resume** — after compaction, in a new session, or whenever you're unsure what has run — read `progress.md` and `git log` before dispatching anything.
+
+- A task with a ledger line is done: do not re-dispatch it.
+- A commit without a ledger line means the task's checks are pending, not that it is done. Don't re-dispatch the implementer; read its report, run the checks it is owed — your spot-check, or the spec-check on the strict tier, with any fix loop that follows — and add the line only when they pass.
+- Review lines tell you where the review loop stands: the last `review` line is the latest round, the number of `review rereview-` lines is what the cap of two has used, and a `fix` line with no `review` line after it is a fix still owed its re-review.
+- If the ledger names a SHA that `git log` doesn't have, the ledger is wrong — trust the log and ask the user if the gap is unclear.
 
 ## Dispatch hygiene (both flows)
 
 - **Always pass the agent type explicitly**: `subagent_type: "fablepowers:implementer"` (or `strict-implementer`, `reviewer`) on the Agent tool. The default general-purpose agent inherits your model and effort — dispatching it is not a delegation, it is your own session in a second window.
-- **Dispatch by reference.** An implementer dispatch names the plan path, the task's heading and the spec path; the implementer reads its task, contracts, invariants and test obligations from the plan. The prompt carries only what the plan doesn't: how to run the tests, the commit convention, fix-round findings (or the path to the review report holding them), and the report path. Strict-tier dispatches keep their code-level prompt with the task text inline.
+- **Dispatch by reference.** An implementer dispatch names the plan path (absolute, and readable from the implementer's working directory — check it is there when the worktree was created after planning), the task's heading and the spec path; the implementer reads its task, contracts, invariants and test obligations from the plan. The prompt carries only what the plan doesn't: how to run the tests, the commit convention, fix-round findings (or the path to the review report holding them), and the report path. Strict-tier dispatches keep their code-level prompt with the task text inline.
 - **Short returns.** Every dispatch names its report path. Implementers return at most 15 lines — `Status`, `SHA`, `Tests` (one line), `Deviations: <count>` plus up to 3 one-line headlines, `Report: <path>`; reviewers return `Verdict`, one line per must-fix (`file:line — headline`), `Declined to judge: <count>`, `Report: <path>`. Keep the full reports in their files; pass a path to the next agent rather than pasting a report into its prompt.
 - **No coaching reviewers** — spec-checks included. A reviewer dispatch carries the task or spec, the range, the paths and how to run things; never a pre-rated severity, an instruction to ignore or go easy on something, or the implementer's rationale for a choice. A defect the plan itself mandates is still reported, flagged plan-mandated; take it to the user.
-- **Fix-round dispatches carry test obligations.** When an implementer is sent to fix review findings, pass the review report's path and list each must-fix finding's failure scenario as a test obligation — fails on the current code, passes after the fix — and expect before/after evidence per finding in the report (`reports/task-<n>-fix<k>.md`). The full rule is in `fablepowers:integration-review`.
+- **Fix-round dispatches carry test obligations.** When an implementer is sent to fix review findings, pass the review report's path and list each must-fix finding's failure scenario as a test obligation — fails on the current code, passes after the fix — and expect before/after evidence per finding in the report (`reports/task-<n>-fix<k>.md`; for integration-review findings, `reports/integration-fix<k>.md`). The full rule is in `fablepowers:integration-review`.
 - Implementers may ask questions before starting — answer, then re-dispatch.
 - One task in flight per dependency chain; independent tasks may run in parallel.
 - Track tasks in TodoWrite; mark complete only after the task's checks pass — the same moment the ledger line goes in.

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${BASH:-bash}\" \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start\"",
+            "command": "for b in \"${BASH:-}\" /bin/bash /usr/bin/bash /usr/local/bin/bash /opt/homebrew/bin/bash; do [ -x \"$b\" ] && exec \"$b\" \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start\"; done; exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start\"",
             "shell": "bash",
             "async": false
           }

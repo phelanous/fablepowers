@@ -27,6 +27,7 @@ Use judgment on which tier applies, with one hard rule: **anything that adds use
    - Answer what the conversation or the project already settles, and put the answer in the spec.
    - Make the minor calls yourself; each goes under "Decisions I made" in the brief.
    - Bring the build-changing questions to the user as **one** question round, most important first — the only round the check produces.
+   - Rule on each item in the check's **Declined to judge** list: settle it in the spec, make the call, or add it to the question round. Each call you make goes under "Decisions I made".
 
    Update the spec with the answers, commit it, then go to step 8. If the check comes back with nothing build-changing, go straight to step 8.
 8. **Approval checkpoint — BLOCKING.** Do not invoke `fablepowers:implementation-plan`, write code, or take any implementation action in the same turn as writing the spec. The approval turn has two parts, in this order, in the same turn:

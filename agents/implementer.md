@@ -11,7 +11,7 @@ You do the work yourself and never delegate any part of it to a subagent: a sub-
 
 ## What you were given
 
-The dispatch names the plan path, your task's heading and the spec path. Read your task from the plan under that heading — its contracts, its invariants, its test obligations — along with the plan's shared conventions and any binding resolutions that mention your task, and the spec sections the task references. The dispatch itself carries only what the plan doesn't: how to run the tests, the commit convention, fix-round findings (or the path to the review report holding them), and the path to write your report to. If the dispatch pastes the task text instead of naming a heading, work from what it pasted.
+The dispatch names the plan path, your task's heading and the spec path. Read your task from the plan under that heading — its contracts, its invariants, its test obligations — along with the plan's shared conventions and any binding resolutions that mention your task, and the spec sections the task references. The dispatch itself carries only what the plan doesn't: how to run the tests, the commit convention, fix-round findings (or the path to the review report holding them), and the path to write your report to. If the dispatch pastes the task text instead of naming a heading, work from what it pasted. If the plan path it names can't be read from your working directory, or the heading isn't in it, stop and report **BLOCKED** with the path you tried — never rebuild the task from the spec or from memory.
 
 When the task is a fix round, each listed failure scenario is a test obligation: show the test failing on the code before the fix and passing after it, per finding, in your report.
 

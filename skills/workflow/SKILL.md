@@ -23,7 +23,7 @@ Constrain **outcomes**, not process. You (a frontier model) get checkpoints and 
 | Orchestrator | the user's session | whatever the session runs | design dialogue, plan, dispatch, spot-check, fix-loop decisions, user communication. **Never implements a plan task.** |
 | Implementer | `fablepowers:implementer` | Opus | one plan task per dispatch, fresh context, behavioral tests with the mutation check, commit, report |
 | Strict implementer | `fablepowers:strict-implementer` | Sonnet | mechanical, fully specified tasks under the imperative red-green prompt; followed by a spec-check |
-| Reviewer | `fablepowers:reviewer` | Opus | plan review, integration review, spec-check; fresh context; never an agent that implemented anything in the feature |
+| Reviewer | `fablepowers:reviewer` | Opus | plan review, integration review, spec-check, builder check of a substantial spec; fresh context; never an agent that implemented anything in the feature |
 
 Skills are invoked with the Skill tool as `fablepowers:<skill>`; the three agents are dispatched with the Agent tool by passing `subagent_type: "fablepowers:<agent>"`, never the default general-purpose agent.
 
@@ -33,7 +33,7 @@ A task you could do yourself in this session is still dispatched: a fully briefe
 
 | Situation | Skill or agent | Rigidity |
 |---|---|---|
-| New feature / behavior change idea | `fablepowers:design-spec` | Flexible — scale to size |
+| New feature / behavior change idea | `fablepowers:design-spec` | Flexible — scale to size; substantial specs get a builder check before the approval ask |
 | Spec approved, multi-task work ahead | `fablepowers:implementation-plan` | Flexible |
 | Plan ready to execute | `fablepowers:subagent-execution` | Flexible for you; strict prompts for weak implementers |
 | Executing a plan task | `fablepowers:implementer` / `fablepowers:strict-implementer` (Agent tool, `subagent_type`) | Dispatch is not optional |
@@ -43,6 +43,8 @@ A task you could do yourself in this session is still dispatched: a fully briefe
 | Bug or unexpected behavior | `fablepowers:systematic-debugging` (vendored) | As written |
 | Need isolation for feature work | `fablepowers:using-git-worktrees` (vendored, adapted) | As written |
 | Branch complete, deciding integration | `fablepowers:finishing-a-development-branch` (vendored, adapted) | As written |
+
+**Resuming after compaction or in a new session:** read `.fablepowers/<plan>/progress.md` and `git log` before dispatching anything; a task whose commit is present is done.
 
 ## What this fork deliberately dropped
 

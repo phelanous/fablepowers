@@ -32,11 +32,11 @@ agents are dispatched with the Agent tool as `subagent_type: "fablepowers:<agent
 | | |
 |---|---|
 | `fablepowers:workflow` | The map. Start substantive dev work here; it routes to everything below. |
-| `fablepowers:design-spec` | Turn an idea into a written design through dialogue, scaled to the size of the work. Ends with a phone-readable design brief and a two-option approval ask — the user's explicit yes, never inferred from an answer to a design question. |
-| `fablepowers:implementation-plan` | Turn the approved spec into an interface-level plan: contracts, invariants, test obligations per task. No code in the plan. |
-| `fablepowers:subagent-execution` | Dispatch one fresh implementer agent per plan task. The orchestrator coordinates and spot-checks; it does not implement. |
+| `fablepowers:design-spec` | Turn an idea into a written design through dialogue, scaled to the size of the work. Asks which platform, language and library choices the user wants to own. Substantial specs get a **builder check** — a fresh reviewer lists what a builder would still have to guess, and the build-changing questions go to the user in one round. Ends with a phone-readable design brief and a two-option approval ask — the user's explicit yes, never inferred from an answer to a design question. |
+| `fablepowers:implementation-plan` | Turn the approved spec into an interface-level plan: contracts, invariants, test obligations per task. No code in the plan. A **Review Focus** section names up to five spec-implied inputs no task tests yet, each assigned to the task that owns the code; plan review checks it. |
+| `fablepowers:subagent-execution` | Dispatch one fresh implementer agent per plan task. The orchestrator coordinates and spot-checks; it does not implement. Dispatches name the plan path and task heading instead of pasting the task; agents write full reports to files and return at most 15 lines; a progress ledger lets a resumed session skip finished tasks. |
 | `fablepowers:behavioral-testing` | Every spec behavior gets a test, and you break the behavior to watch that test fail. Ordering is free; the mutation check is not. |
-| `fablepowers:integration-review` | **Rigid gate.** Before any merge, a fresh-context adversarial reviewer hunts the integration seams — inert knobs, migration/model parity, deployment config, contract drift. Capped at two re-reviews. |
+| `fablepowers:integration-review` | **Rigid gate.** Before any merge, a fresh-context adversarial reviewer hunts the integration seams — inert knobs, migration/model parity, deployment config, contract drift. It gets a review package diffed from the merge-base, ends its report with what it declined to judge, and the orchestrator closes with the **Rulings I made** on the user's behalf. Capped at two re-reviews. |
 | `fablepowers:verify-done` | **Rigid gate.** No "done", "fixed", or "passing" without running the command now and reading the output. |
 | `fablepowers:systematic-debugging` | Vendored from superpowers v7.0.0, unchanged in substance. |
 | `fablepowers:using-git-worktrees` | Vendored from superpowers v7.0.0. Adapted: an `implementation-plan` worktree request counts as consent; worktrees go under the project root. |
@@ -58,12 +58,24 @@ The usual path: `workflow` → `design-spec` (approval) → `implementation-plan
 | Orchestrator | the user's session | whatever the session runs | design dialogue, plan, dispatch, spot-check, fix-loop decisions, user communication. **Never implements a plan task.** |
 | Implementer | `fablepowers:implementer` | Opus | one plan task per dispatch, fresh context, behavioral tests with the mutation check, commit, report |
 | Strict implementer | `fablepowers:strict-implementer` | Sonnet | mechanical, fully specified tasks under the imperative red-green prompt; followed by a spec-check |
-| Reviewer | `fablepowers:reviewer` | Opus | plan review, integration review, spec-check; fresh context; never an agent that implemented anything in the feature |
+| Reviewer | `fablepowers:reviewer` | Opus | plan review, integration review, spec-check, builder check of a substantial spec; fresh context; never an agent that implemented anything in the feature |
 
 A fully briefed single-session task still dispatches implementers. The
 orchestrator's job is the plan, the dispatch and the judgment calls — the
 default general-purpose agent inherits the orchestrator's model and effort, so
-spawning one is not delegation.
+spawning one is not delegation. None of the three agents can spawn agents of
+its own (`disallowedTools: Agent`): a sub-spawn would run on the parent's
+inherited model.
+
+### Handoff files
+
+Execution and review hand work off through files in a per-plan workspace,
+`.fablepowers/<plan-basename>/` at the top level of the worktree doing the work:
+`progress.md` (the orchestrator's ledger), `reports/` (implementer and reviewer
+reports) and `review-*.diff` (integration-review packages). The directory
+ignores itself — `.fablepowers/.gitignore` containing `*` is written only if the
+repo doesn't already have one — so nothing shows up in `git status`. It is left
+in place after the feature and is safe to delete once the branch is merged.
 
 ## What changed from superpowers
 
@@ -87,10 +99,14 @@ cross-references retargeted, so superpowers does not need to be installed
 alongside this plugin. Two are adapted beyond that: `finishing-a-development-branch`
 names the `gh`, `fj` and `glab` PR commands and anchors worktree cleanup at the
 project root, and `using-git-worktrees` treats an `implementation-plan` worktree
-request as consent. The vendored `find-polluter.sh` has a test:
+request as consent.
+
+## Tests
 
 ```
-bash tests/systematic-debugging/test-find-polluter.sh
+bash tests/systematic-debugging/test-find-polluter.sh   # vendored find-polluter.sh
+bash tests/integration-review/test-review-package.sh    # workspace + review-package script
+bash tests/hooks/test-session-start.sh                  # SessionStart hook, incl. with a broken PATH
 ```
 
 ## Measuring it

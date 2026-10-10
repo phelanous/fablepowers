@@ -37,7 +37,7 @@ echo "MAIN_ROOT=$MAIN_ROOT"
 
 Shell variables do not persist between your shell calls; later steps use the **printed** paths as literals.
 
-`MAIN_ROOT` is the project root: the main checkout, taken from the first `worktree` entry of `git worktree list --porcelain`. That entry is right from the main checkout, a subdirectory, or a linked worktree; for a submodule (or a linked worktree of one) git lists the module's git dir instead, so the block resolves the submodule's checkout from `core.worktree`. If it prints empty (bare repo, separate git dir), stop and report instead of guessing a path.
+`MAIN_ROOT` is the project root: the main checkout, taken from the first `worktree` entry of `git worktree list --porcelain`. That entry is right from the main checkout, a subdirectory, or a linked worktree; for a submodule (or a linked worktree of one) git lists the module's git dir instead, so the block resolves the submodule's checkout from `core.worktree`. If it prints empty (bare repo, separate git dir), there is no project root to anchor a new worktree to: the already-isolated check below proceeds normally, but Step 1b creation stops and reports instead of guessing a path.
 
 **Submodules need no special case.** Inside a submodule's own checkout, `GIT_DIR` and `GIT_COMMON` are both the superproject's `.git/modules/<name>`, so they are equal and the checkout reads as a normal repo; inside a linked worktree of a submodule they differ, and it correctly reads as already isolated. (Upstream's `git rev-parse --show-superproject-working-tree` guard is dropped: it fires in any checkout the superproject tracks as a submodule path, so a linked worktree of a submodule placed at such a path is misclassified as a normal repo.)
 
@@ -75,7 +75,7 @@ Only proceed to Step 1b if you have no native worktree tool available.
 
 #### Directory Selection
 
-`$LOCATION` is always resolved against `MAIN_ROOT` (the printed project root from Step 0), never against the current directory. Follow this priority order. Explicit user preference always beats observed filesystem state.
+If Step 0 printed an empty `MAIN_ROOT`, stop here and report — do not create a worktree. Otherwise, `$LOCATION` is always resolved against `MAIN_ROOT` (the printed project root from Step 0), never against the current directory. Follow this priority order. Explicit user preference always beats observed filesystem state.
 
 1. **Check your instructions for a declared worktree directory preference.** If the user has already specified one, use it without asking (a relative path means relative to `MAIN_ROOT`).
 
@@ -93,13 +93,13 @@ Only proceed to Step 1b if you have no native worktree tool available.
 
 #### Safety Verification (directories inside the project)
 
-**MUST verify directory is ignored before creating worktree** (with `MAIN_ROOT` set to the printed literal; the trailing slash matters — without it, a `.worktrees/` pattern reads as not-ignored until the directory exists):
+**MUST verify the chosen directory is ignored before creating worktree** — check only the location you selected above, never "either one": a repo that ignores `worktrees/` says nothing about `.worktrees/`. Use the path relative to `MAIN_ROOT`, with a trailing slash (without it, a `.worktrees/` pattern reads as not-ignored until the directory exists):
 
 ```bash
-git -C "$MAIN_ROOT" check-ignore -q .worktrees/ 2>/dev/null || git -C "$MAIN_ROOT" check-ignore -q worktrees/ 2>/dev/null
+git -C "<MAIN_ROOT>" check-ignore -q .worktrees/   # or worktrees/, or the declared location relative to MAIN_ROOT
 ```
 
-For a declared location inside the project, check that directory (relative to `MAIN_ROOT`, with a trailing slash) instead. A location outside the project needs no check.
+Exit 0 means ignored. A location outside the project needs no check.
 
 **If NOT ignored:** Add to `$MAIN_ROOT/.gitignore`, commit the change, then proceed.
 

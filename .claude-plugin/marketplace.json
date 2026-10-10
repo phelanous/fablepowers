@@ -9,7 +9,7 @@
       "name": "fablepowers",
       "source": "./",
       "description": "Outcome-gated development workflow for frontier orchestrator models, with pinned-model implementer and reviewer agents; forked from superpowers.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "category": "development",
       "keywords": [
         "workflow",

@@ -44,7 +44,7 @@ A task you could do yourself in this session is still dispatched: a fully briefe
 | Need isolation for feature work | `fablepowers:using-git-worktrees` (vendored, adapted) | As written |
 | Branch complete, deciding integration | `fablepowers:finishing-a-development-branch` (vendored, adapted) | As written |
 
-**Resuming after compaction or in a new session:** invoke `fablepowers:subagent-execution` before dispatching anything and follow its resume rule — it reconciles `.fablepowers/<plan>/progress.md` with `git log`, and its dispatches name the plan path, task heading and report path. A task with a ledger line is done; a commit without one is owed its checks (spot-check or spec-check) before the line goes in.
+**Resuming after compaction or in a new session:** invoke `fablepowers:subagent-execution` before dispatching anything and follow its resume rule — it reconciles `.fablepowers/<plan>/progress.md` with `git log`, and its dispatches name the plan path, task heading and report path. A task with a ledger line is done; a commit without one is owed its checks (spot-check or spec-check) before the line goes in. A fix line with no review after it is owed its re-review, unless two re-reviews already ran — then it is owed verify-done.
 
 ## What this fork deliberately dropped
 

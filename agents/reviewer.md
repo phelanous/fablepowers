@@ -50,6 +50,8 @@ Report: <path>
 
 If the headlines would push past 15 lines, list the most severe and end the list with `+<n> more in report`. When the dispatch names no report path, return the full report instead.
 
+If the write to the named path is refused (the harness refuses subagent writes to generic basenames such as `report.md`), return the full report inline, as when no path is given, and say the write was refused. Do not route around the refusal through Bash.
+
 ## Rules
 
 - **Read-only**, except the report file the dispatch names (write it and keep it) and throwaway probes — a scratch script, a temporary print, a differential run. Delete the probes before you report.

@@ -267,6 +267,30 @@ assert_eq "$RP_OUT" "wrote $REPO/.fablepowers/feat-small/review-$(git -C "$REPO"
 run_rp "$REPO" @missing-file-is-fine main
 assert_eq "$RP_EXIT" "0" "@<name> needs no file of that name"
 
+echo "Test 12: an @<name> that would be a dotfile -> exit 2, nothing created"
+setup_repo t12
+for k in @.gitignore @.git @.hidden @./x; do
+  run_rp "$REPO" --init "$k"
+  assert_eq "$RP_EXIT:$([ -e "$REPO/.fablepowers" ] && echo created || echo none)" "2:none" "--init $k exits 2 and creates nothing"
+  assert_contains "$RP_OUT" "starts with ." "--init $k names the reason"
+  run_rp "$REPO" "$k" main
+  assert_eq "$RP_EXIT:$([ -e "$REPO/.fablepowers" ] && echo created || echo none)" "2:none" "packaging with $k exits 2 and creates nothing"
+done
+mkdir -p "$REPO/.fablepowers"
+run_rp "$REPO" --init @.gitignore
+assert_eq "$RP_EXIT:$([ -e "$REPO/.fablepowers/.gitignore" ] && echo created || echo none)" "2:none" "--init @.gitignore with an existing .fablepowers/ exits 2 and creates nothing"
+rm -rf "$REPO/.fablepowers"
+
+echo "Test 13: an @<name> ending in .md that is an existing file -> exit 2, suggests the plain path"
+setup_repo t13
+run_rp "$REPO" --init @docs/plan.md
+assert_eq "$RP_EXIT:$([ -e "$REPO/.fablepowers" ] && echo created || echo none)" "2:none" "--init @docs/plan.md (file exists) exits 2 and creates nothing"
+assert_contains "$RP_OUT" "pass docs/plan.md" "the message suggests the plain path"
+run_rp "$REPO" @docs/plan.md main
+assert_eq "$RP_EXIT:$([ -e "$REPO/.fablepowers" ] && echo created || echo none)" "2:none" "packaging with @docs/plan.md (file exists) exits 2 and creates nothing"
+run_rp "$REPO" --init @docs/absent.md
+assert_eq "$RP_EXIT:$RP_OUT" "0:$REPO/.fablepowers/docs-absent.md" "@<name>.md with no such file is a plain name"
+
 echo
 if [ "$FAILURES" -eq 0 ]; then
   echo "All review-package tests passed."

@@ -75,7 +75,8 @@ Execution and review hand work off through files in a per-plan workspace,
 integration review and fix round, so a resumed session knows what ran),
 `reports/` (implementer, reviewer and `integration-fix<k>` reports) and
 `review-*.diff` (integration-review packages). Work with no plan keys the
-workspace on its spec file, or on `@<branch-name>` when there is no spec either. The directory
+workspace on its spec file, or on `@<branch-name>` when there is no spec either (each `/`
+becomes `-`, so `@feat/x` and `@feat-x` share a workspace). The directory
 ignores itself — `.fablepowers/.gitignore` containing `*` is written only if the
 repo doesn't already have one — so nothing shows up in `git status`. It is left
 in place after the feature and is safe to delete once the branch is merged.

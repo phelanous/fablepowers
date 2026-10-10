@@ -1,14 +1,48 @@
 #!/usr/bin/env bash
 # SessionStart hook for the fablepowers plugin.
 # Injects the workflow map so a session knows the entry point before it starts work.
+#
+# Uses bash builtins only (no dirname, awk, cat ...), so it works with an empty
+# or broken PATH. hooks.json runs it as "${BASH:-bash}" <this file> under
+# "shell": "bash", so bash itself is never looked up on PATH either.
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Directory of this script, from $0 by parameter expansion. A $0 without a slash
+# means the script was run from its own directory.
+case "$0" in
+    */*) SCRIPT_DIR="${0%/*}"; SCRIPT_DIR="${SCRIPT_DIR:-/}" ;;
+    *) SCRIPT_DIR="." ;;
+esac
+SKILL_FILE="${SCRIPT_DIR}/../skills/workflow/SKILL.md"
 
-# Strip the YAML frontmatter block so the session gets the map body, not the metadata.
-workflow_content=$(awk 'NR==1 && $0 == "---" { fm = 1; next } fm && $0 == "---" { fm = 0; next } !fm' "${PLUGIN_ROOT}/skills/workflow/SKILL.md" 2>/dev/null || echo "Error reading the fablepowers:workflow skill")
+# Strip a leading YAML frontmatter block (first line exactly "---" up to the next
+# line exactly "---") so the session gets the map body, not the metadata. Only a
+# block starting on line 1 counts; an unclosed block drops the whole file.
+strip_frontmatter() {
+    local s="$1" rest after
+    if [[ "$s" != "---" && "$s" != "---"$'\n'* ]]; then
+        printf '%s' "$s"
+        return
+    fi
+    rest="${s#---}"
+    rest="${rest#$'\n'}"
+    # Bracket with newlines so the closing line is always "\n---\n"; the
+    # shortest-prefix removal finds the first one.
+    rest=$'\n'"${rest}"$'\n'
+    if [[ "$rest" == *$'\n---\n'* ]]; then
+        # The bracketing newline left at the end is dropped by the caller's
+        # command substitution, as awk's trailing newline was in 0.2.x.
+        after="${rest#*$'\n---\n'}"
+        printf '%s' "$after"
+    fi
+}
+
+if [[ -r "$SKILL_FILE" && -f "$SKILL_FILE" ]]; then
+    workflow_content="$(strip_frontmatter "$(<"$SKILL_FILE")")"
+else
+    workflow_content="Error reading the fablepowers:workflow skill"
+fi
 
 # Escape a string for embedding in a JSON string literal. Each ${s//old/new}
 # is a single C-level pass, so this stays fast on a whole SKILL.md.

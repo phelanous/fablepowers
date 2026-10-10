@@ -180,3 +180,45 @@ code for that scenario and passes after the fix, with before/after evidence per
 finding in the report — aimed at the regressions re-reviews keep finding in fix
 commits. Review cadence and the two-round re-review cap are unchanged: the
 yields above say the reviews earn their cost.
+
+## Decisions (2026-10-09): upstream adaptations
+
+Superpowers moved from v5.0.7 to v7.0.0 while this fork ran. Its release notes
+report evals and observed failures; this section takes the rules whose evidence
+fits ours and says why the rest stay out. **None of these decisions is measured
+yet in fablepowers' own logs** — they rest on upstream's evidence plus the cost
+finding above (main-loop cache writes+reads $1,280 vs output $574), and the
+next audit checks them.
+
+### Adopted
+
+| Rule (0.3.0) | Upstream evidence | Why here |
+|---|---|---|
+| Agents can't spawn agents (`disallowedTools: Agent`) | v6.3.0: implementers and reviewers spawning their own subagents "was producing duplicate reviews" | A sub-spawn runs the default agent on the inherited model — the defect the 2026-09-07 decisions fixed by pinning models. |
+| Dispatch by reference; reports to files; ≤15-line returns | v6.0.0: "a pasted diff parks itself permanently in the most expensive context"; task text and diffs moved to files | Our largest main-loop line item is context, not output. Pasted task bodies and full reports are context the orchestrator carries for the rest of the session. |
+| Per-plan workspace + progress ledger, reconciled with `git log` on resume | v6.0.0: a ledger "lets a controller that loses its context resume instead of redoing finished work"; v6.2.0: plan-scoped workspaces after cross-plan ledger contamination | Compaction re-injects only the workflow map, so the resume rule lives in the map. Plan-basename collisions share a workspace — accepted; upstream fixed it with ownership markers (v6.4.1), not worth the script surface here. |
+| Review package from the merge-base | v6.4.1: a bare `origin/main` "showed main's newer files as phantom deletions" | Same failure applies to any long branch; the script also refuses empty and unrelated ranges (v6.4.1's exit 3). |
+| No coaching reviewers; rationale never lowers severity; plan-mandated defects reported | v6.0.0: controllers coached reviewers to call a finding "Minor at most," "and the flaw shipped" | Our reviewers are the only fresh context in the loop; a tilted dispatch removes the reason they exist. |
+| Shared tree stays put (no checkout/reset/stash in the reviewed tree) | v6.0.0: "a reviewer running `git checkout` had been orphaning later commits" | Parallel implementers share one worktree here, and the stash stack is shared across worktrees. |
+| Declined to judge + Rulings I made | v6.4.1: the controller decides each declined item; v6.3.0: rulings "show up in the Finish report" | Judgment calls made on the user's behalf were invisible unless the user read transcripts; the list is phone-readable like the design brief. |
+| Reasonable-user standard; Review Focus section | v6.4.1: "every implementer shipped the same crash on an input the spec implied but never named" | Matches our seam-bug history: the spec's silence was read as permission. |
+| Who owns the how (design-spec) | v7.0.0: a session "designed an iOS app, never asked about platform, and built a web app" | Defaults the user never saw are exactly what "Decisions I made" exists to surface. |
+| Builder check, substantial tier only | v7.0.0: "a builder check replaces the spec-document reviewer" | Our self-review can't see gaps the author's context fills in. It adds one question round, not a second checkpoint; small and trivial work skips it. |
+| Three test anti-patterns (mirror, change detector, string-presence) | v6.2.0: `writing-good-tests.md` names the string-presence and change-detector traps | Our flagship bug passed tests that asserted structure; these are the same failure in other shapes. |
+| Hook survives a broken `PATH`; `shell: bash` | v7.0.0: hooks no longer look up `dirname`, `cat` or `bash` on `PATH` (anthropics/claude-code#43127); v6.2.0: `shell: "bash"` | Reproduced here: 0.2.x failed with `env: 'bash': No such file`, exit 127, and the map never loaded. |
+
+### Not adopted
+
+- **Native (inline) execution** (v6.4.1: the session implements every task itself, "the cheapest way to run a plan"). The first fork-era audit found the orchestrator's model producing 97% of output tokens once it implemented in-session, and cost moved to the main loop instead of falling. The orchestrator still never implements a plan task.
+- **Per-task review** (v6.0.0: one reviewer per task, two verdicts). Per-task spec review of frontier-model plans rubber-stamped ~90% of the time in the baseline logs; the review budget stays on the plan review and the integration gate, where must-fix yields are ~50% and ~35%.
+- **Reviewers re-reading evidence instead of re-running tests** (v6.3.0). Every integration review here executes (16–82 Bash calls per review), and ~10 of 18 first passes found a blocker — the seam bugs came from running things, not reading reports. The review package is a map; the reviewer still executes.
+- **User review of the saved plan** (v6.4.1: "you review the saved plan before anything runs"). The workflow keeps one user checkpoint, the design approval; a second checkpoint is a second place for approval fatigue, and the plan is checked by a fresh reviewer against the approved spec.
+- **Skip-the-questions offer** (v7.0.0: brainstorming's first message offers to skip the questions). The 2026-07-31 amendment exists because questions collapsed and approval was skipped under autonomy pressure; an advertised skip invites the same collapse. The user can still say "just build it".
+
+Also deferred, out of this release's scope: the controller as a nested subagent, batching same-shape tasks, and resuming the original implementer for fix rounds.
+
+### What to watch next audit
+
+1. **Main-loop cache cost** (writes+reads vs output) per execution session — the reason for file handoff and short returns. It should fall relative to the $1,280 vs $574 split.
+2. **Re-dispatch count after compaction** — committed tasks dispatched again. It should be zero where a ledger exists.
+3. **Builder-check yield** — build-changing questions per substantial spec, and whether the answers changed the spec. If it rarely finds one, it is ceremony; drop it.

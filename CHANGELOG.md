@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 — 2026-10-09
+
+Workflow ideas from superpowers v6–v7 that fit this plugin's evidence, adapted rather than vendored. Reasons, and the upstream ideas left out, in `docs/rationale.md`.
+
+- **Agents can't spawn agents.** `implementer`, `strict-implementer` and `reviewer` have `disallowedTools: Agent`; a sub-spawn would run on the parent's inherited model, the defect pinned agents exist to fix.
+- **Implementers are dispatched by reference.** The dispatch names the plan path, task heading and spec path; the implementer reads its task from the plan. Strict-tier dispatches still carry the task inline.
+- **Reports go to files; returns are short.** Implementers and reviewers write the full report to a path the dispatch names and return at most 15 lines. With no path given, the full report comes back inline as before.
+- **Handoff files live in `.fablepowers/<plan>/`.** A per-plan workspace at the worktree's top level holds reports, review packages and the ledger. It ignores itself, leaves a repo's own `.fablepowers/.gitignore` alone, and is safe to delete after merge.
+- **A progress ledger makes resume safe.** The orchestrator appends one line per finished task to `progress.md`; after compaction or in a new session it reconciles the ledger with `git log` and never re-dispatches a committed task. The workflow map carries this rule, since compaction re-injects only the map.
+- **Integration review diffs from the merge-base.** A new `review-package` script writes the commit list, `--stat` and diff from `git merge-base <base> HEAD`, so base-side commits no longer show up as phantom deletions. Empty ranges and unrelated histories exit 3.
+- **The orchestrator doesn't coach reviewers.** Dispatches never carry a pre-rated severity, an instruction to ignore something, or the implementer's rationale; a stated rationale never lowers a finding's severity, and a defect the plan mandates is still reported, flagged plan-mandated.
+- **Reviewers list what they declined to judge, and the orchestrator rules on each.** The final report to the user gains a phone-readable **Rulings I made** section: declined-to-judge items, capped re-review leftovers, plan conflicts resolved, plan-mandated defects kept.
+- **Reviewers judge spec silence by what a reasonable user would expect**, and never run `checkout`, `reset`, `stash` or similar in the shared tree; other revisions go in a throwaway worktree.
+- **Plans carry a Review Focus section**: up to five spec-implied inputs no task tests yet, each assigned to the owning task; plan review checks it.
+- **Design asks who owns the how.** `design-spec` asks which platform, language and library choices the user wants to make; defaults go under "Decisions I made".
+- **Substantial specs get a builder check.** A fresh reviewer reads the spec as its builder and lists what it would have to guess; the build-changing questions reach the user in one round before the approval brief.
+- **`behavioral-testing` names three more anti-patterns:** mirror assertions, change detectors, and the string-presence trap.
+- **The SessionStart hook works with a broken `PATH`.** `hooks.json` runs it as `"${BASH:-bash}"` under `"shell": "bash"`, and the script uses only bash builtins; 0.2.x failed with `env: 'bash': No such file`. Output is unchanged. The hook and `review-package` each ship a test suite.
+
 ## 0.2.1 — 2026-10-09
 
 The three vendored skills are re-based on superpowers v7.0.0, picking up fixes upstream had already made.

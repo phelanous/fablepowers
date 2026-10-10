@@ -45,7 +45,7 @@ Shell variables do not persist between your shell calls; later steps use the **p
 
 Report with branch state:
 - On a branch: "Already in isolated workspace at `<path>` on branch `<name>`."
-- Detached HEAD: "Already in isolated workspace at `<path>` (detached HEAD, externally managed). Branch creation needed at finish time."
+- Detached HEAD: "Already in isolated workspace at `<path>` (detached HEAD). Branch creation needed at finish time."
 
 **If `GIT_DIR == GIT_COMMON`:** You are in a normal repo checkout.
 
@@ -99,7 +99,7 @@ If Step 0 printed an empty `MAIN_ROOT`, stop here and report — do not create a
 git -C "<MAIN_ROOT>" check-ignore -q .worktrees/   # or worktrees/, or the declared location relative to MAIN_ROOT
 ```
 
-Exit 0 means ignored. A location outside the project needs no check.
+Exit 0 means ignored; exit 1 means not ignored (fix it below). Any other exit (128: `<MAIN_ROOT>` is not a repository, or a bad path) means the check itself failed — stop and report; do not create the worktree. A location outside the project needs no check.
 
 **If NOT ignored:** Add to `$MAIN_ROOT/.gitignore`, commit the change, then proceed.
 

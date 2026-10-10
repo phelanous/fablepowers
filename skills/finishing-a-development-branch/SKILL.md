@@ -46,7 +46,10 @@ if [ "$MAIN_ROOT" = "$GIT_COMMON" ] && WT=$(git config --get core.worktree); the
 [ -n "$MAIN_ROOT" ] && [ "$(git -C "$MAIN_ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$MAIN_ROOT" ] || MAIN_ROOT=""
 printf 'GIT_DIR=%s\nGIT_COMMON=%s\nWORKTREE_PATH=%s\nMAIN_ROOT=%s\nBRANCH=%s\n' \
   "$GIT_DIR" "$GIT_COMMON" "$WORKTREE_PATH" "$MAIN_ROOT" "$(git branch --show-current)"
-[ -n "$MAIN_ROOT" ] || echo "MAIN_ROOT is empty - Option 1 and discard unavailable; worktree is host-owned"
+if [ -z "$MAIN_ROOT" ]; then
+  echo "MAIN_ROOT is empty - Option 1 and discard need a BASE_WORKTREE (Step 3)"
+  [ "$GIT_DIR" = "$GIT_COMMON" ] || echo "This worktree is host-owned - Step 6 leaves it in place"
+fi
 ```
 
 **Shell variables do not survive between your shell calls; the working
@@ -55,9 +58,12 @@ printed literal paths — write them into the command in place of
 `<WORKTREE_PATH>`, `<MAIN_ROOT>`, etc. Never re-derive them after a `cd`:
 from the main checkout, `git rev-parse` describes the main checkout, not the
 worktree you are finishing. If `MAIN_ROOT` printed empty (bare repo,
-separate git dir), only the steps that use it are blocked: Option 1 and
-discard stop and report, and Step 6 treats the worktree as host-owned.
-Options 2 and 3 never use `MAIN_ROOT` and proceed normally. Never `cd ""`.
+separate git dir), only the `<MAIN_ROOT>` fallback is blocked: Option 1 and
+discard stop and report only when Step 3 also prints an empty
+`BASE_WORKTREE` (the base branch would have to be checked out in
+`<MAIN_ROOT>`). With a `BASE_WORKTREE` path they proceed there, and Step 6
+treats a linked worktree as host-owned. Options 2 and 3 never use
+`MAIN_ROOT` and proceed normally. Never `cd ""`.
 
 The printed values determine which menu to show and how cleanup works:
 
@@ -111,7 +117,7 @@ Which option?
 **Detached HEAD — present exactly these 2 options:**
 
 ```
-Implementation complete. You're on a detached HEAD (externally managed workspace).
+Implementation complete. You're on a detached HEAD.
 
 1. Push as new branch and create a Pull Request
 2. Keep as-is (I'll handle it later)
@@ -129,8 +135,10 @@ is theirs.
 
 ### Option 1: Merge Locally
 
-If `MAIN_ROOT` printed empty, stop and report: there is no project root to
-merge from or anchor cleanup to.
+If `<BASE_WORKTREE>` and `MAIN_ROOT` both printed empty, stop and report:
+there is nowhere to check `<base-branch>` out. An empty `MAIN_ROOT` blocks
+nothing else — with a `<BASE_WORKTREE>` path, merge there, and Step 6 treats
+the worktree as host-owned.
 
 The merge runs in the worktree where `<base-branch>` is checked out — never
 `git checkout <base-branch>` from inside the feature worktree (git refuses
@@ -186,19 +194,23 @@ pick by the remote's host:
 | Forge | Auth check | Create |
 |-------|-----------|--------|
 | GitHub | `gh auth status` | `gh pr create --base <base-branch> --head <branch> --title "<title>" --body-file <body.md>` |
-| Forgejo / Gitea family (incl. Codeberg) | `fj whoami` | `fj pr create "<title>" --base <base-branch> --head <branch> --body-file <body.md>` |
+| Forgejo / Gitea family (incl. Codeberg) | `fj -H <host> whoami` | `fj -H <host> pr create "<title>" --repo <owner>/<repo> --base <base-branch> --head <branch> --body-file <body.md>` |
 | GitLab | `glab auth status` | `glab mr create --target-branch <base-branch> --source-branch <branch> --title "<title>" --description-file <body.md> --yes` |
 
 - Run the auth check first; the CLI must be installed and authenticated for
-  the remote's host. `fj whoami` must name the forge host with no port — a
-  `host:port` means the remote URL carries the SSH port and `fj` will speak
-  HTTPS to it; report that instead of proceeding.
+  the remote's host. For `fj`, `<host>` is the remote URL's hostname with no
+  port and `<owner>/<repo>` its path without `.git`. Pass both: without
+  `-H`, `fj` derives the API host from the remote, so an SSH remote carrying
+  a port (`ssh://git@host:2222/...`) makes it speak HTTPS to the SSH port;
+  with `-H` alone it cannot map the remote and asks for `--repo`.
+  `fj -H <host> whoami` must name that host with no port; if it does not,
+  report that instead of proceeding.
 - Write the body to a file first (outside the repo). Follow the repo's
   PR/MR template and conventions if present. Each command above is fully
   non-interactive: title and body file given, plus `--yes` for glab — do not
   drop those flags, or the CLI opens an editor or prompt.
 - For a host the table does not name (self-hosted Forgejo, Gitea or
-  GitLab), probe with the auth checks — `fj whoami --host <host>` and
+  GitLab), probe with the auth checks — `fj -H <host> whoami` and
   `glab auth status --hostname <host>` — and treat whichever authenticates
   for that host as the forge.
 - If no matching CLI is installed and authenticated, use the creation URL
@@ -214,12 +226,14 @@ Report: "Keeping branch <name>. Worktree preserved at <path>."
 ### If your human partner asks to discard the work
 
 This path exists only as a response to an explicit request to throw the
-work away. If `MAIN_ROOT` printed empty, stop and report — there is no
-project root to leave the worktree for. Otherwise confirm first:
+work away. If `<BASE_WORKTREE>` and `MAIN_ROOT` both printed empty, stop
+and report — there is nowhere to step out of the worktree to. Otherwise
+confirm first (list the branch only when `BRANCH` printed one; a detached
+HEAD has none):
 
 ```
 This will permanently delete:
-- Branch <name>
+- Branch <name>          (omit on a detached HEAD)
 - All commits: <commit-list>
 - Worktree at <path>
 
@@ -229,12 +243,13 @@ Type 'discard' to confirm.
 Wait for that exact confirmation. When it arrives:
 
 ```bash
-cd "<MAIN_ROOT>"
+cd "<MAIN_ROOT>"   # or "<BASE_WORKTREE>" when MAIN_ROOT printed empty
 ```
 
 Then clean up the worktree (Step 6) and, if it was removed or there was
 none, force-delete the branch (from a normal repo, first check out
-`<base-branch>` in `<MAIN_ROOT>`):
+`<base-branch>` in `<MAIN_ROOT>`). On a detached HEAD there is no branch:
+skip this.
 
 ```bash
 git branch -D <feature-branch>
@@ -249,8 +264,8 @@ values, from before that directory change.
 
 **If `GIT_DIR == GIT_COMMON`:** Normal repo, no worktree to clean up. Done.
 
-**If `MAIN_ROOT` printed empty:** host-owned — leave it in place (see
-below).
+**If `MAIN_ROOT` printed empty:** host-owned — leave it in place and skip
+the branch deletion (see below).
 
 **Ownership is anchored at the project root.** This skill removes a worktree
 only when its path is under `<MAIN_ROOT>/.worktrees/` or
@@ -263,7 +278,7 @@ values:
 ```bash
 WORKTREE_PATH='<WORKTREE_PATH>'; MAIN_ROOT='<MAIN_ROOT>'
 case "$WORKTREE_PATH" in
-  "$MAIN_ROOT"/.worktrees/?*|"$MAIN_ROOT"/worktrees/?*) echo owned ;;
+  "$MAIN_ROOT"/.worktrees/?*|"$MAIN_ROOT"/worktrees/?*) [ -n "$MAIN_ROOT" ] && echo owned || echo host-owned ;;
   *) echo host-owned ;;
 esac
 ```

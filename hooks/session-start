@@ -3,8 +3,13 @@
 # Injects the workflow map so a session knows the entry point before it starts work.
 #
 # Uses bash builtins only (no dirname, awk, cat ...), so it works with an empty
-# or broken PATH. hooks.json runs it as "${BASH:-bash}" <this file> under
-# "shell": "bash", so bash itself is never looked up on PATH either.
+# or broken PATH. Claude Code runs the hooks.json command through /bin/sh -c
+# (BASH=/bin/sh was observed on Linux even with "shell": "bash"). That command
+# uses only sh builtins to pick a bash: $BASH if set, else the first executable
+# of /bin/bash, /usr/bin/bash, /usr/local/bin/bash, /opt/homebrew/bin/bash.
+# Only when none exists does it fall back to a PATH lookup of "bash".
+# tests/hooks/test-session-start.sh runs it via /bin/sh -c and /bin/bash -c, and
+# via a non-bash sh with BASH unset, each under a normal and an empty PATH.
 
 set -euo pipefail
 

@@ -2,14 +2,18 @@
 # Tests for hooks/session-start and the command hooks.json runs it with.
 #
 # Every hook run goes through the literal "command" string read from a
-# hooks.json, with CLAUDE_PLUGIN_ROOT set, exactly as Claude Code runs it under
-# "shell": "bash". The 0.2.x hook (BASELINE_REV) is the byte-for-byte reference;
-# old and new hooks always run against the same SKILL.md, in temp plugin trees.
+# hooks.json, with CLAUDE_PLUGIN_ROOT set, through "<shell> -c" the way Claude
+# Code runs it. The 0.2.x hook, vendored under fixtures/0.2.x/, is the
+# byte-for-byte reference; old and new hooks always run against the same
+# SKILL.md, in temp plugin trees.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-BASELINE_REV="839bb3a"   # fablepowers 0.2.1: awk/dirname hook, exec'd via its shebang
+BASELINE_DIR="$SCRIPT_DIR/fixtures/0.2.x"   # fablepowers 0.2.1: awk/dirname hook, exec'd via its shebang
+# HOOKS_JSON / SESSION_START override the files under test (mutation checks on a copy).
+HOOKS_JSON="${HOOKS_JSON:-$REPO_ROOT/hooks/hooks.json}"
+SESSION_START="${SESSION_START:-$REPO_ROOT/hooks/session-start}"
 SH="$BASH"               # absolute path of the bash running this test
 
 FAILURES=0
@@ -27,10 +31,10 @@ make_tree() {
   local dir="$1" gen="$2" skill="$3"
   mkdir -p "$dir/hooks"
   if [[ "$gen" == old ]]; then
-    git -C "$REPO_ROOT" show "$BASELINE_REV:hooks/session-start" > "$dir/hooks/session-start"
-    git -C "$REPO_ROOT" show "$BASELINE_REV:hooks/hooks.json" > "$dir/hooks/hooks.json"
+    cp "$BASELINE_DIR/session-start" "$BASELINE_DIR/hooks.json" "$dir/hooks/"
   else
-    cp "$REPO_ROOT/hooks/session-start" "$REPO_ROOT/hooks/hooks.json" "$dir/hooks/"
+    cp "$SESSION_START" "$dir/hooks/session-start"
+    cp "$HOOKS_JSON" "$dir/hooks/hooks.json"
   fi
   chmod +x "$dir/hooks/session-start"
   if [[ -n "$skill" ]]; then
@@ -44,16 +48,22 @@ hook_cmd() {
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["hooks"]["SessionStart"][0]["hooks"][0]["command"])' "$1/hooks/hooks.json"
 }
 
-# run_normal <tree> / run_broken <tree>: run the hooks.json command; stdout to
-# $OUT, exit status to $RC. "broken" = empty environment, PATH=/nonexistent.
-run_normal() {
+# run_with <normal|broken> <tree> <launcher words...>: run the tree's hooks.json
+# command as "<launcher> -c <command>"; stdout to $OUT, exit status to $RC.
+# normal = the test's environment minus BASH; broken = empty environment with
+# PATH=/nonexistent. Extra VAR=value pairs for the hook go in $HOOK_ENV.
+run_with() {
+  local mode="$1" tree="$2" cmd; shift 2
+  cmd="$(hook_cmd "$tree")"
   RC=0
-  OUT="$(cd "$TEST_ROOT" && CLAUDE_PLUGIN_ROOT="$1" "$SH" -c "$(hook_cmd "$1")" 2>"$TEST_ROOT/stderr")" || RC=$?
+  if [[ "$mode" == normal ]]; then
+    OUT="$(cd "$TEST_ROOT" && env -u BASH CLAUDE_PLUGIN_ROOT="$tree" ${HOOK_ENV:-} "$@" -c "$cmd" 2>"$TEST_ROOT/stderr")" || RC=$?
+  else
+    OUT="$(cd "$TEST_ROOT" && env -i PATH=/nonexistent CLAUDE_PLUGIN_ROOT="$tree" ${HOOK_ENV:-} "$@" -c "$cmd" 2>"$TEST_ROOT/stderr")" || RC=$?
+  fi
 }
-run_broken() {
-  RC=0
-  OUT="$(cd "$TEST_ROOT" && env -i PATH=/nonexistent CLAUDE_PLUGIN_ROOT="$1" "$SH" -c "$(hook_cmd "$1")" 2>"$TEST_ROOT/stderr")" || RC=$?
-}
+run_normal() { run_with normal "$1" "$SH"; }
+run_broken() { run_with broken "$1" "$SH"; }
 
 # context_of <json>: the additionalContext string, or exit 1 if not valid hook JSON.
 context_of() {
@@ -151,6 +161,77 @@ if [[ "$RC" != 0 ]] || ! context_of "$OUT" >/dev/null 2>&1; then
   pass "0.2.x hook fails the same run (rc $RC: $(head -c 80 "$TEST_ROOT/stderr" | tr '\n' ' '))"
 else
   fail "0.2.x hook unexpectedly succeeded under a broken PATH; the test does not reproduce the failure"
+fi
+
+# --- (e) launchers: sh and bash, BASH unset, normal and broken PATH -----------
+
+echo "Launchers: the literal command via <shell> -c, normal and broken PATH"
+
+run_normal "$TEST_ROOT/old-real"; reference="$OUT"
+
+# Claude Code runs the command through /bin/sh -c (observed: BASH=/bin/sh with
+# "shell": "bash" on Linux), so every launcher runs with BASH removed from the
+# environment. A bash launcher sets BASH itself; a non-bash sh (dash) does not,
+# which is the case where "${BASH:-bash}" fell back to a PATH lookup.
+LAUNCHERS=()
+[[ -x /bin/sh ]] && LAUNCHERS+=("/bin/sh")
+[[ -x /bin/bash ]] && LAUNCHERS+=("/bin/bash")
+NON_BASH=()   # launchers that are not bash, so BASH stays unset
+for c in dash busybox; do
+  p="$(command -v "$c" 2>/dev/null || true)"
+  if [[ -n "$p" ]]; then
+    [[ "$c" == busybox ]] && NON_BASH+=("$p sh") || NON_BASH+=("$p")
+  fi
+done
+if p="$(command -v zsh 2>/dev/null)"; then
+  # Simulated dash: zsh in sh emulation, no rc files. It never sets BASH.
+  NON_BASH+=("$p --emulate sh -f")
+fi
+if [[ ${#NON_BASH[@]} -eq 0 ]]; then
+  echo "  [SKIP] no dash, busybox or zsh: the BASH-unset case is not exercised"
+fi
+LAUNCHERS+=("${NON_BASH[@]}")
+
+for launcher in "${LAUNCHERS[@]}"; do
+  read -ra words <<< "$launcher"
+  for mode in normal broken; do
+    run_with "$mode" "$TEST_ROOT/new-real" "${words[@]}"
+    if [[ "$RC" == 0 && "$OUT" == "$reference" ]]; then
+      pass "$launcher -c, $mode PATH: rc 0, output equals the 0.2.x hook's"
+    else
+      fail "$launcher -c, $mode PATH: rc $RC; $(head -c 160 "$TEST_ROOT/stderr" | tr '\n' ' ')"
+    fi
+  done
+done
+
+# The non-bash launchers really reproduce the failure conditions: BASH unset
+# and no bash on PATH. Without this, a pass above could be vacuous.
+for launcher in "${NON_BASH[@]}"; do
+  read -ra words <<< "$launcher"
+  probe="$(env -i PATH=/nonexistent "${words[@]}" -c 'echo "BASH=${BASH-unset}"; command -v bash >/dev/null 2>&1 && echo found || echo missing' 2>/dev/null || true)"
+  if [[ "$probe" == $'BASH=unset\nmissing' ]]; then
+    pass "$launcher, broken PATH: BASH unset and bash not on PATH (the dash failure conditions)"
+  else
+    fail "$launcher, broken PATH: probe gave '$probe', not the dash failure conditions"
+  fi
+done
+
+# A BASH inherited from the environment is preferred over the fixed locations
+# (only observable from a launcher that does not overwrite BASH itself).
+if [[ ${#NON_BASH[@]} -gt 0 ]]; then
+  read -ra words <<< "${NON_BASH[0]}"
+  marker="$TEST_ROOT/fakebash.ran"
+  printf '#!%s\nprintf ran > %q\nexec %q "$@"\n' "$SH" "$marker" "$SH" > "$TEST_ROOT/fakebash"
+  chmod +x "$TEST_ROOT/fakebash"
+  for mode in normal broken; do
+    rm -f "$marker"
+    HOOK_ENV="BASH=$TEST_ROOT/fakebash" run_with "$mode" "$TEST_ROOT/new-real" "${words[@]}"
+    if [[ "$RC" == 0 && "$OUT" == "$reference" && -e "$marker" ]]; then
+      pass "${NON_BASH[0]}, $mode PATH: an inherited BASH is the bash that runs the hook"
+    else
+      fail "${NON_BASH[0]}, $mode PATH: inherited BASH not used (rc $RC, marker $([[ -e "$marker" ]] && echo present || echo absent))"
+    fi
+  done
 fi
 
 # --- (c) relative, no-slash and absolute invocation ---------------------------

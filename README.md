@@ -71,8 +71,11 @@ inherited model.
 
 Execution and review hand work off through files in a per-plan workspace,
 `.fablepowers/<plan-basename>/` at the top level of the worktree doing the work:
-`progress.md` (the orchestrator's ledger), `reports/` (implementer and reviewer
-reports) and `review-*.diff` (integration-review packages). The directory
+`progress.md` (the orchestrator's ledger: one line per checked task and per
+integration review and fix round, so a resumed session knows what ran),
+`reports/` (implementer, reviewer and `integration-fix<k>` reports) and
+`review-*.diff` (integration-review packages). Work with no plan keys the
+workspace on its spec file, or on `@<branch-name>` when there is no spec either. The directory
 ignores itself — `.fablepowers/.gitignore` containing `*` is written only if the
 repo doesn't already have one — so nothing shows up in `git status`. It is left
 in place after the feature and is safe to delete once the branch is merged.

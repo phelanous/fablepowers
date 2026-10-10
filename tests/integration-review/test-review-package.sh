@@ -213,6 +213,60 @@ assert_eq "$RP_EXIT" "0" "packaging with a plan outside any repo exits 0"
 assert_contains "$RP_OUT" "wrote $WT/.fablepowers/other-plan/review-" "package lands under the worktree's workspace"
 assert_eq "$(git -C "$WT" status --porcelain)" "" "worktree git status stays clean"
 
+echo "Test 8: --init creates the ledger header only when progress.md is absent"
+setup_repo t8
+run_rp "$REPO" --init docs/plan.md
+assert_eq "$(cat "$REPO/.fablepowers/plan/progress.md" 2>/dev/null || echo MISSING)" "# Progress: docs/plan.md" "--init creates progress.md with '# Progress: <plan path>'"
+printf '# Progress: docs/plan.md\ntask 1 | abc1234 | DONE | reports/task-1.md\n' > "$REPO/.fablepowers/plan/progress.md"
+cp "$REPO/.fablepowers/plan/progress.md" "$TEST_ROOT/progress.orig"
+run_rp "$REPO" --init "$REPO/docs/plan.md"
+cmp -s "$TEST_ROOT/progress.orig" "$REPO/.fablepowers/plan/progress.md" \
+  && pass "--init leaves an existing ledger byte-identical" \
+  || fail "--init leaves an existing ledger byte-identical"
+run_rp "$REPO" docs/plan.md main
+cmp -s "$TEST_ROOT/progress.orig" "$REPO/.fablepowers/plan/progress.md" \
+  && pass "packaging leaves an existing ledger byte-identical" \
+  || fail "packaging leaves an existing ledger byte-identical"
+
+echo "Test 9: failed packaging creates no workspace"
+setup_repo t9
+run_rp "$REPO" docs/plan.md no-such-branch
+assert_eq "$RP_EXIT:$([ -e "$REPO/.fablepowers" ] && echo created || echo none)" "2:none" "unknown base ref exits 2 and creates nothing"
+run_rp "$REPO" docs/plan.md main no-such-head
+assert_eq "$RP_EXIT:$([ -e "$REPO/.fablepowers" ] && echo created || echo none)" "2:none" "unknown head ref exits 2 and creates nothing"
+run_rp "$REPO" docs/plan.md feature
+assert_eq "$RP_EXIT:$([ -e "$REPO/.fablepowers" ] && echo created || echo none)" "3:none" "empty range exits 3 and creates nothing"
+git -C "$REPO" checkout -q --orphan lonely
+git -C "$REPO" rm -rq --cached . >/dev/null
+echo z > "$REPO/z.txt"
+git -C "$REPO" add z.txt
+git -C "$REPO" commit -q -m lonely
+run_rp "$REPO" "$REPO/docs/plan.md" main lonely
+assert_eq "$RP_EXIT:$([ -e "$REPO/.fablepowers" ] && echo created || echo none)" "3:none" "unrelated histories exit 3 and create nothing"
+
+echo "Test 10: a key whose workspace name would be empty, . or .. -> exit 2"
+setup_repo t10
+echo "# p" > "$REPO/docs/.md"
+echo "# p" > "$REPO/docs/..md"
+for k in docs/.md docs/..md @ @. @..; do
+  run_rp "$REPO" --init "$k"
+  assert_eq "$RP_EXIT:$([ -e "$REPO/.fablepowers" ] && echo created || echo none)" "2:none" "--init $k exits 2 and creates nothing"
+done
+
+echo "Test 11: no plan file -> spec file or @<name> keys the workspace"
+setup_repo t11
+mkdir -p "$REPO/docs/specs"
+echo "# spec" > "$REPO/docs/specs/small-thing.md"
+run_rp "$REPO" --init docs/specs/small-thing.md
+assert_eq "$RP_EXIT:$RP_OUT" "0:$REPO/.fablepowers/small-thing" "a spec file keys the workspace on its basename"
+run_rp "$REPO" --init @feat/small
+assert_eq "$RP_EXIT:$RP_OUT" "0:$REPO/.fablepowers/feat-small" "@feat/small keys the workspace 'feat-small' (slashes become dashes)"
+assert_eq "$(cat "$REPO/.fablepowers/feat-small/progress.md" 2>/dev/null || echo MISSING)" "# Progress: @feat/small" "@<name> ledger header names the key"
+run_rp "$REPO" @feat/small main
+assert_eq "$RP_OUT" "wrote $REPO/.fablepowers/feat-small/review-$(git -C "$REPO" rev-parse --short=7 "$(git -C "$REPO" merge-base main feature)")..$(git -C "$REPO" rev-parse --short=7 HEAD).diff: 1 commit(s)" "packaging with @<name> writes into that workspace"
+run_rp "$REPO" @missing-file-is-fine main
+assert_eq "$RP_EXIT" "0" "@<name> needs no file of that name"
+
 echo
 if [ "$FAILURES" -eq 0 ]; then
   echo "All review-package tests passed."

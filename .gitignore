@@ -3,3 +3,7 @@ __pycache__/
 .venv/
 *.pyc
 .DS_Store
+
+# local-only workflow artifacts (kept out of the public repo)
+docs/specs/
+docs/plans/

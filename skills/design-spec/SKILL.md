@@ -10,7 +10,7 @@ Turn an idea into a design the user has agreed to, through dialogue — before a
 ## Scale to the work
 
 - **Trivial** (rename, config tweak, obvious one-liner): no spec doc. State your understanding in one sentence and proceed unless the user objects.
-- **Small** (single-file feature, clear scope): no spec file. The brief from step 7 is the design summary: same headings, shorter, with "Open the spec if" replaced by "Ask me if" (what the user might want to weigh in on) and "Verified by" describing the tests directly. The ask is the same two-option `AskUserQuestion`.
+- **Small** (single-file feature, clear scope): no spec file. The brief from step 8 is the design summary: same headings, shorter, with "Open the spec if" replaced by "Ask me if" (what the user might want to weigh in on) and "Verified by" describing the tests directly. The ask is the same two-option `AskUserQuestion`.
 - **Substantial** (new subsystem, multi-file, ambiguous requirements): full process below.
 
 Use judgment on which tier applies, with one hard rule: **anything that adds user-visible behavior is never trivial, and a new feature is substantial by default** — downgrade only with a stated reason the user can see. When requirements are ambiguous, that alone promotes it a tier — unexamined assumptions on "simple" work are where rework comes from.
@@ -18,12 +18,18 @@ Use judgment on which tier applies, with one hard rule: **anything that adds use
 ## Process (substantial work)
 
 1. **Explore context first** — relevant files, docs, recent commits. Ground questions in what exists.
-2. **Ask clarifying questions in rounds** — one message per round, and let each answer shape the next question; the dialogue is the design tool, not a form to fill. Bundling several questions into one `AskUserQuestion` call is allowed only for independent cosmetic/presentation choices — never for requirements discovery, where the interesting question only becomes visible after the previous answer. For substantial work expect 3–6 rounds; stop when no remaining guess would change the design, not when you've exhausted question categories.
+2. **Ask clarifying questions in rounds** — one message per round, and let each answer shape the next question; the dialogue is the design tool, not a form to fill. Bundling several questions into one `AskUserQuestion` call is allowed only for independent cosmetic/presentation choices — never for requirements discovery, where the interesting question only becomes visible after the previous answer. For substantial work expect 3–6 rounds; stop when no remaining guess would change the design, not when you've exhausted question categories. One of the rounds asks **who owns the how**: which platform, language, library, or medium choices the user wants to make themselves. Whatever you default — including when the user hands every choice to you — goes under "Decisions I made" in the brief. (Upstream evidence: a session asked for an iOS app built a web app, and nobody had asked.)
 3. **Propose 2–3 approaches** with trade-offs and a recommendation. If one approach is clearly right, say so and present it — don't manufacture alternatives.
 4. **Present the design in sections** scaled to complexity; confirm direction as you go.
 5. **Write the spec** to `docs/specs/YYYY-MM-DD-<topic>.md` (or the project's convention) and commit it. The spec states: goal, chosen approach, key contracts/behaviors, what's out of scope, and **how we'll know it works** (observable behaviors — these become the test obligations in `fablepowers:behavioral-testing`).
 6. **Self-review the spec** for placeholders, contradictions, ambiguity, and scope creep. Fix before showing.
-7. **Approval checkpoint — BLOCKING.** Do not invoke `fablepowers:implementation-plan`, write code, or take any implementation action in the same turn as writing the spec. The approval turn has two parts, in this order, in the same turn:
+7. **Builder check** — substantial tier only; small and trivial work skips it. Your self-review can't see the gaps your own context fills in; someone who has only the spec can. Create the design-phase workspace with `bash "<design-spec base dir>/../integration-review/review-package" --init <spec>` (it prints the path, named after the spec), then dispatch a fresh `fablepowers:reviewer` for the **builder check** job with the spec path and the report path `<workspace>/reports/review-builder-check.md`. It reads the spec as the person who will build it and lists what they would still have to guess, each tagged *changes what gets built* or *minor*. Then:
+   - Answer what the conversation or the project already settles, and put the answer in the spec.
+   - Make the minor calls yourself; each goes under "Decisions I made" in the brief.
+   - Bring the build-changing questions to the user as **one** question round, most important first — the only round the check produces.
+
+   Update the spec with the answers, commit it, then go to step 8. If the check comes back with nothing build-changing, go straight to step 8.
+8. **Approval checkpoint — BLOCKING.** Do not invoke `fablepowers:implementation-plan`, write code, or take any implementation action in the same turn as writing the spec. The approval turn has two parts, in this order, in the same turn:
 
    **(a) The brief**, in your message, immediately before the ask. Write it for someone reading on a phone who may not open the spec. Link the spec file path once, before the brief. Then six headings, in order:
 
@@ -36,7 +42,7 @@ Use judgment on which tier applies, with one hard rule: **anything that adds use
 
    Limits: at most 20 words per bullet; no tables; no file paths, identifiers, or code inside the brief.
 
-   **(b) The ask**: its own `AskUserQuestion` with exactly one question of at most 20 words and exactly two options, **Approve** and **Changes needed**. An approval with a note is Changes needed plus the note, or the user's free-text answer. After Changes needed, fold the note into the spec and repeat step 7 in full — a fresh brief and a fresh ask — before any implementation; proceed without re-asking only if the note itself says to go ahead unchanged. Design variants never appear as approval options; an open variant is a design question, asked in an earlier round. Then **wait**.
+   **(b) The ask**: its own `AskUserQuestion` with exactly one question of at most 20 words and exactly two options, **Approve** and **Changes needed**. An approval with a note is Changes needed plus the note, or the user's free-text answer. After Changes needed, fold the note into the spec and repeat step 8 in full — a fresh brief and a fresh ask — before any implementation; proceed without re-asking only if the note itself says to go ahead unchanged. Design variants never appear as approval options; an open variant is a design question, asked in an earlier round. Then **wait**.
 
    Example, for a dismissible banner when a scan fails in a trading-scanner web app:
 

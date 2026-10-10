@@ -31,6 +31,9 @@ Past-session evidence: strict TDD produced ritual compliance (RED via `ModuleNot
 - **Structure-asserting tests:** checking shape/keys/types of output without checking values respond to inputs. The inert-knob failure mode.
 - **Config knobs without a differential test:** any parameter that claims to change behavior needs a test asserting two different values produce different results.
 - **Mock-echo tests:** asserting a mock was called with the arguments you just wrote. Test the seam's observable effect where possible.
+- **Mirror assertions:** an expected value computed by the code under test (or its helpers) — both sides move together, so the test can't fail. Derive expectations by hand: a literal or a hand-checked fixture.
+- **Change detectors:** asserting a constant equals itself, exact wording, private structure. They fail on intentional redesign and sleep through bugs. Test the behavior that depends on the decision: not `MAX_RETRIES == 5` but "a failing call is retried 5 times, never a 6th".
+- **The string-presence trap:** grepping a script's, prompt's, or skill's text instead of running it proves only that the source is the source. Run the script against controlled inputs and assert its effects; for prose, the observable is the behavior it produces in the agent that reads it.
 - **Testing the plan, not the spec:** if a plan detail and a spec behavior conflict, the spec wins; test the behavior.
 
 ## Bug fixes

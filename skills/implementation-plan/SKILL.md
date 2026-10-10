@@ -30,9 +30,13 @@ One task = one coherent, independently-testable, committable change (roughly one
 
 Before tasks, map the files involved and their responsibilities — this locks in decomposition. Prefer small focused files; follow existing codebase patterns.
 
+## Review Focus section
+
+After the tasks, a **Review Focus** section: up to five inputs or failure modes the spec implies but no task's test obligations exercise — empty input, a concurrent call, missing config, a path outside the repo — most likely to bite a user first, one line each naming the condition and what a reasonable user would expect. The spec says what the software must do, not everything it will meet; its silence on an input is not permission for that input to break the program. Each line is then added as a test obligation to the task that owns the code, so it gets built and mutation-checked like any other. An empty section means you looked and found none, not that you skipped looking.
+
 ## Plan review (cheap, catches design bugs early)
 
-Before executing, dispatch **one `fablepowers:reviewer`** (fresh context) to review the plan against the spec: contradictions, missing behaviors, contract mismatches between tasks, test obligations that don't actually pin the spec's behaviors. Fix findings, then proceed to `fablepowers:subagent-execution`. This replaces per-task spec review — do it once, up front, where it's cheap.
+Before executing, dispatch **one `fablepowers:reviewer`** (fresh context) to review the plan against the spec: contradictions, missing behaviors, contract mismatches between tasks, test obligations that don't actually pin the spec's behaviors, and whether the Review Focus section holds the spec-implied inputs most likely to bite — each assigned to an owning task. Name the report path `<workspace>/reports/review-plan.md` in the dispatch (workspace: `<toplevel>/.fablepowers/<plan-basename-without-.md>/`, created by `bash "<implementation-plan base dir>/../integration-review/review-package" --init <plan>`). Fix findings, then proceed to `fablepowers:subagent-execution`. This replaces per-task spec review — do it once, up front, where it's cheap.
 
 ## Header
 

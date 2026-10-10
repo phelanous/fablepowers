@@ -9,11 +9,27 @@ description: Use when feature work is complete and before any merge or PR - RIGI
 
 ## The reviewer
 
-Dispatch **one `fablepowers:reviewer`** (Opus, fresh context — never yourself, never an agent that implemented anything in this feature). It inherits nothing from your session. Give it:
+Dispatch **one `fablepowers:reviewer`** (Opus, fresh context — never yourself, never an agent that implemented anything in this feature). It inherits nothing from your session.
+
+First build the review package. `<base-branch>` is the branch this work merges into — for a stacked branch that's the parent feature branch, not `main`:
+
+```bash
+bash "<this skill's base dir>/review-package" <plan-file> <base-branch>
+```
+
+It diffs from `git merge-base <base-branch> HEAD`, not the bare base branch, so base-side commits made after the branch point don't show up as phantom deletions. It writes `<workspace>/review-<mb7>..<head7>.diff` (commit list, `--stat`, `-U10` diff) and prints `wrote <path>: <N> commit(s)`. Exit 2 means a bad argument, an unknown ref or a missing plan file; exit 3 means the range is empty or the refs share no history — check the base before dispatching.
+
+Give the reviewer:
 
 - The spec and plan file paths
-- The full diff range (`BASE_SHA..HEAD_SHA`) and repo path
+- The review-package path, plus the repo path
 - How to run tests and how to run the app/feature
+- The report path: `<workspace>/reports/review-integration.md` (re-reviews: `reports/review-rereview-<k>.md`)
+- The mandate below
+
+**What the dispatch never carries:** a pre-rated severity ("probably minor"), an instruction to ignore, skip or not flag something, or the implementer's rationale for a choice ("kept simple on purpose"). Each one tilts the review toward what you already believe, and the reviewer is there because you can't see past that. If the plan itself mandates a defect, the reviewer still reports it, flagged plan-mandated — you take it to the user.
+
+The reviewer writes its full report to the path you named and returns a short form: `Verdict`, one line per must-fix (`file:line — headline`), `Declined to judge: <count>`, `Report: <path>`. Read the full report before deciding anything the short form leaves open, and pass its path — not a pasted copy — to a fixer.
 
 ## The mandate (include in the dispatch prompt)
 
@@ -24,7 +40,9 @@ You are an adversarial reviewer. Your job is to find what's wrong, not to apprec
 3. **Parity checks:** migrations vs. models (test harnesses using `create_all` mask migration gaps — check the migration itself), schema vs. API contract, docs vs. behavior, deployment config (Dockerfiles, compose, env vars) vs. what the code actually reads.
 4. **Contract trace:** pick the feature's main data flow and trace it end-to-end across component boundaries; verify each producer's output shape is what the consumer reads.
 5. **Spec behaviors:** every success criterion in the spec — observed working, not inferred from code.
-6. **Report:** findings ranked by severity, each with file:line and a concrete failure scenario. State explicitly what you executed vs. only read. If you found nothing, say what you tried that failed to break it — "no findings" without evidence of attack is a failed review.
+6. **Report:** findings ranked by severity, each with file:line and a concrete failure scenario. State explicitly what you executed vs. only read. If you found nothing, say what you tried that failed to break it — "no findings" without evidence of attack is a failed review. End with **Declined to judge**: what you saw but chose not to rule on, and why.
+
+The review package is a map of the change, not evidence: read it first, then still run everything above.
 
 ## Re-review cap
 
@@ -34,6 +52,18 @@ In the second audit, scoped re-reviews found a must-fix about 40% of the time, f
 
 ## After the review
 
-- **Must-fix findings:** dispatch the fix to a `fablepowers:implementer` (yourself only for a one-liner, and say so). For each must-fix finding, the dispatch lists the reviewer's failure scenario as a test obligation: a test that fails on the current code for that scenario and passes after the fix. The implementer reports that before/after evidence per finding. Should-fix items may share one obligation, or be exempted with a stated reason. Then re-dispatch a fresh `fablepowers:reviewer` scoped to the fixes + their blast radius — within the cap above.
+- **Must-fix findings:** dispatch the fix to a `fablepowers:implementer` (yourself only for a one-liner, and say so), passing the review report's path. For each must-fix finding, the dispatch lists the reviewer's failure scenario as a test obligation: a test that fails on the current code for that scenario and passes after the fix. The implementer reports that before/after evidence per finding. Should-fix items may share one obligation, or be exempted with a stated reason. Then re-dispatch a fresh `fablepowers:reviewer` scoped to the fixes + their blast radius — within the cap above. A re-review gets its own package covering only the fix range: pass the previously reviewed head SHA as `<base-branch>`.
 - **Judgment-call findings:** decide explicitly and say why; surface disagreements to the user rather than silently dropping them.
+- **Declined to judge:** rule on each item the reviewer set aside — act on it, defer it, or take it to the user. None is dropped silently.
 - Then proceed to `fablepowers:verify-done` and `fablepowers:finishing-a-development-branch`.
+
+## Rulings I made
+
+Your final report to the user, before `fablepowers:finishing-a-development-branch`, includes a **Rulings I made** section: every judgment call you made on the user's behalf during execution and review —
+
+- each declined-to-judge item and what you decided,
+- must-fix items left over when the re-review cap stopped the loop,
+- plan conflicts you resolved,
+- plan-mandated defects you kept rather than fixed.
+
+One bullet each, naming the call and what it costs if it's wrong. Write it for a phone: at most 20 words per bullet, no tables, no file paths or code. If you made no such calls, say so in one line.

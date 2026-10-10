@@ -16,6 +16,8 @@ You are implementing exactly one task. Follow this prompt exactly. Do not improv
 
 [Relevant existing code excerpts, conventions, how to run tests, e.g. `.venv/bin/pytest tests/ -x`]
 
+Report path: [WORKSPACE]/reports/task-[N].md   (fix rounds: [WORKSPACE]/reports/task-[N]-fix[K].md)
+
 ## Rules — not negotiable
 
 1. **TDD, strictly.** Write the failing test FIRST. Run it. Paste the failure output in your report. Only then write implementation. NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST. If you wrote code before its test: delete it and start over.
@@ -31,3 +33,16 @@ You are implementing exactly one task. Follow this prompt exactly. Do not improv
 - **Files changed:** list with one-line description each
 - **Commit SHA:**
 - **Deviations from spec:** every single one, however small — an unreported deviation is a failure of this task
+
+## Handing back (exactly this)
+
+Write the full report above to the report path (create its directory if needed). Then return ONLY this short form, at most 15 lines:
+
+```
+Status: DONE | BLOCKED | DONE_WITH_CONCERNS
+SHA: <sha>
+Tests: <one line — failing-first confirmed, passing count, full-suite count>
+Deviations: <count>
+<up to 3 one-line headlines; the rest live in the report>
+Report: <path>
+```

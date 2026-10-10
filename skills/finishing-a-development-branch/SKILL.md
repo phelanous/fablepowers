@@ -46,7 +46,7 @@ if [ "$MAIN_ROOT" = "$GIT_COMMON" ] && WT=$(git config --get core.worktree); the
 [ -n "$MAIN_ROOT" ] && [ "$(git -C "$MAIN_ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$MAIN_ROOT" ] || MAIN_ROOT=""
 printf 'GIT_DIR=%s\nGIT_COMMON=%s\nWORKTREE_PATH=%s\nMAIN_ROOT=%s\nBRANCH=%s\n' \
   "$GIT_DIR" "$GIT_COMMON" "$WORKTREE_PATH" "$MAIN_ROOT" "$(git branch --show-current)"
-[ -n "$MAIN_ROOT" ] || echo "MAIN_ROOT is empty - stop and report"
+[ -n "$MAIN_ROOT" ] || echo "MAIN_ROOT is empty - Option 1 and discard unavailable; worktree is host-owned"
 ```
 
 **Shell variables do not survive between your shell calls; the working
@@ -54,8 +54,10 @@ directory does.** Note the printed values. Every later step uses those
 printed literal paths — write them into the command in place of
 `<WORKTREE_PATH>`, `<MAIN_ROOT>`, etc. Never re-derive them after a `cd`:
 from the main checkout, `git rev-parse` describes the main checkout, not the
-worktree you are finishing. If `MAIN_ROOT` printed empty, stop and report —
-never `cd ""`.
+worktree you are finishing. If `MAIN_ROOT` printed empty (bare repo,
+separate git dir), only the steps that use it are blocked: Option 1 and
+discard stop and report, and Step 6 treats the worktree as host-owned.
+Options 2 and 3 never use `MAIN_ROOT` and proceed normally. Never `cd ""`.
 
 The printed values determine which menu to show and how cleanup works:
 
@@ -63,7 +65,7 @@ The printed values determine which menu to show and how cleanup works:
 |-------|------|---------|
 | `GIT_DIR == GIT_COMMON` (normal repo) | Standard 3 options | No worktree to clean up |
 | `GIT_DIR != GIT_COMMON`, named branch | Standard 3 options | Provenance-based (see Step 6) |
-| `GIT_DIR != GIT_COMMON`, detached HEAD (empty `BRANCH`) | Reduced 2 options (no merge) | Externally managed — leave in place |
+| `GIT_DIR != GIT_COMMON`, detached HEAD (empty `BRANCH`) | Reduced 2 options (no merge) | Provenance-based (see Step 6) — reached only on a confirmed discard |
 
 (The `GIT_DIR`/`GIT_COMMON` comparison is also correct inside a submodule:
 its checkout reports the same directory for both; a linked worktree of it
@@ -126,6 +128,9 @@ is theirs.
 ## Step 5: Execute Choice
 
 ### Option 1: Merge Locally
+
+If `MAIN_ROOT` printed empty, stop and report: there is no project root to
+merge from or anchor cleanup to.
 
 The merge runs in the worktree where `<base-branch>` is checked out — never
 `git checkout <base-branch>` from inside the feature worktree (git refuses
@@ -192,6 +197,10 @@ pick by the remote's host:
   PR/MR template and conventions if present. Each command above is fully
   non-interactive: title and body file given, plus `--yes` for glab — do not
   drop those flags, or the CLI opens an editor or prompt.
+- For a host the table does not name (self-hosted Forgejo, Gitea or
+  GitLab), probe with the auth checks — `fj whoami --host <host>` and
+  `glab auth status --hostname <host>` — and treat whichever authenticates
+  for that host as the forge.
 - If no matching CLI is installed and authenticated, use the creation URL
   the forge printed on push.
 - Report the PR/MR URL to your human partner.
@@ -205,7 +214,8 @@ Report: "Keeping branch <name>. Worktree preserved at <path>."
 ### If your human partner asks to discard the work
 
 This path exists only as a response to an explicit request to throw the
-work away. Confirm first:
+work away. If `MAIN_ROOT` printed empty, stop and report — there is no
+project root to leave the worktree for. Otherwise confirm first:
 
 ```
 This will permanently delete:
@@ -238,6 +248,9 @@ the worktree — removal must run from outside it — and use the printed Step 2
 values, from before that directory change.
 
 **If `GIT_DIR == GIT_COMMON`:** Normal repo, no worktree to clean up. Done.
+
+**If `MAIN_ROOT` printed empty:** host-owned — leave it in place (see
+below).
 
 **Ownership is anchored at the project root.** This skill removes a worktree
 only when its path is under `<MAIN_ROOT>/.worktrees/` or

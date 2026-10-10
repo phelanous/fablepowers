@@ -40,7 +40,7 @@ A task you could do yourself in this session is still dispatched: a fully briefe
 | Writing tests for any change | `fablepowers:behavioral-testing` | Outcome is rigid, ordering is free |
 | Work complete, pre-merge | `fablepowers:integration-review` | **RIGID** |
 | About to say "done" / "fixed" / "passing" | `fablepowers:verify-done` | **RIGID** |
-| Bug or unexpected behavior | `fablepowers:systematic-debugging` (vendored, adapted) | As written |
+| Bug or unexpected behavior | `fablepowers:systematic-debugging` (vendored) | As written |
 | Need isolation for feature work | `fablepowers:using-git-worktrees` (vendored, adapted) | As written |
 | Branch complete, deciding integration | `fablepowers:finishing-a-development-branch` (vendored, adapted) | As written |
 

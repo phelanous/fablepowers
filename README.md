@@ -38,9 +38,9 @@ agents are dispatched with the Agent tool as `subagent_type: "fablepowers:<agent
 | `fablepowers:behavioral-testing` | Every spec behavior gets a test, and you break the behavior to watch that test fail. Ordering is free; the mutation check is not. |
 | `fablepowers:integration-review` | **Rigid gate.** Before any merge, a fresh-context adversarial reviewer hunts the integration seams — inert knobs, migration/model parity, deployment config, contract drift. Capped at two re-reviews. |
 | `fablepowers:verify-done` | **Rigid gate.** No "done", "fixed", or "passing" without running the command now and reading the output. |
-| `fablepowers:systematic-debugging` | Vendored from superpowers, unchanged in substance. |
-| `fablepowers:using-git-worktrees` | Vendored from superpowers, unchanged in substance. |
-| `fablepowers:finishing-a-development-branch` | Vendored from superpowers, unchanged in substance. |
+| `fablepowers:systematic-debugging` | Vendored from superpowers v7.0.0, unchanged in substance. |
+| `fablepowers:using-git-worktrees` | Vendored from superpowers v7.0.0. Adapted: an `implementation-plan` worktree request counts as consent; worktrees go under the project root. |
+| `fablepowers:finishing-a-development-branch` | Vendored from superpowers v7.0.0. Adapted: PRs via `gh`, `fj` (Forgejo) or `glab`; cleanup only removes worktrees under the project root's `.worktrees/` or `worktrees/`, never host-owned ones. |
 
 The approval ask is preceded by a short plain-language brief — what changes,
 the decisions made, the risk, and when the spec is worth opening — so it can be
@@ -82,9 +82,16 @@ Dropped on purpose: per-task spec-compliance review of a frontier-model plan
 TDD as an Iron Law; coercive framing; and the orchestrator as implementer.
 
 `systematic-debugging`, `using-git-worktrees` and
-`finishing-a-development-branch` are vendored from superpowers 5.0.7 with their
+`finishing-a-development-branch` are vendored from superpowers v7.0.0 with their
 cross-references retargeted, so superpowers does not need to be installed
-alongside this plugin.
+alongside this plugin. Two are adapted beyond that: `finishing-a-development-branch`
+names the `gh`, `fj` and `glab` PR commands and anchors worktree cleanup at the
+project root, and `using-git-worktrees` treats an `implementation-plan` worktree
+request as consent. The vendored `find-polluter.sh` has a test:
+
+```
+bash tests/systematic-debugging/test-find-polluter.sh
+```
 
 ## Measuring it
 
@@ -132,8 +139,8 @@ that content.
 ## Credits and license
 
 The workflow this forks is [superpowers](https://github.com/obra/superpowers) by
-Jesse Vincent, MIT licensed. Three of its skills are vendored here essentially
-unchanged; the rest of the skills are rewrites informed by it. See
+Jesse Vincent, MIT licensed. Three of its skills are vendored here from v7.0.0,
+two of them lightly adapted; the rest of the skills are rewrites informed by it. See
 [`NOTICE`](NOTICE) for the attribution and the upstream license text.
 
 This repository is MIT licensed — see [`LICENSE`](LICENSE).

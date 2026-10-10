@@ -5,16 +5,23 @@ Third-party attribution
 -----------------------
 
 Three skills shipped by this plugin are derived from superpowers
-(https://github.com/obra/superpowers) v5.0.7 by Jesse Vincent, used under the
+(https://github.com/obra/superpowers) v7.0.0 by Jesse Vincent, used under the
 MIT license:
 
   skills/systematic-debugging/
   skills/using-git-worktrees/
   skills/finishing-a-development-branch/
 
+along with the test for the vendored bisection script:
+
+  tests/systematic-debugging/test-find-polluter.sh
+
 They are vendored substantially as published, with cross-references retargeted
 to the skills this plugin ships and unreferenced skill-authoring artifacts
-removed. Each SKILL.md carries an attribution line under its frontmatter.
+removed. using-git-worktrees and finishing-a-development-branch are also
+adapted (consent from a plan's worktree request; worktree location and cleanup
+anchored at the project root; PR creation via gh, fj or glab). Each SKILL.md
+carries an attribution line under its frontmatter saying what was adapted.
 
 The rest of this repository — every other skill, the agents, the hook, the
 scripts and the docs — is original work licensed under this repository's

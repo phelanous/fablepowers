@@ -17,7 +17,10 @@
 # KEY names the workspace. Normally it is the plan file (PLAN_FILE): <name> is
 # its basename without .md. With no plan, pass the spec file; with neither, pass
 # @<name>, e.g. @<branch-name>: <name> is what follows the @, with each / made
-# a -. A name that comes out empty, . or .. is rejected.
+# a -, so @feat/x and @feat-x share the workspace feat-x. @ is only for keys
+# with no file: an @<name> ending in .md that names an existing file is
+# rejected (pass the plain path). A name that comes out empty, . or .., or that
+# starts with . (@.git, @.gitignore), is rejected.
 #
 # <toplevel> is the top level of the worktree the command runs in, not of the
 # plan file's location. Run it as `bash <dir>/review-package ...` so stripped
@@ -42,6 +45,9 @@ resolve_workspace() {
   case "$key" in
     @*)
       name=${key#@}
+      case "$name" in
+        *.md) [ -f "$name" ] && { echo "'$key' names an existing file: pass $name, not @$name" >&2; exit 2; } ;;
+      esac
       name=${name//\//-}
       ;;
     *)
@@ -52,6 +58,7 @@ resolve_workspace() {
   esac
   case "$name" in
     ""|.|..) echo "workspace name from '$key' is empty, . or ..: rename it" >&2; exit 2 ;;
+    .*) echo "workspace name from '$key' starts with .: rename it" >&2; exit 2 ;;
   esac
   toplevel=$(git rev-parse --show-toplevel 2>/dev/null) \
     || { echo "not in a git repository" >&2; exit 2; }

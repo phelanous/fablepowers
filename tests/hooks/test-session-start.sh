@@ -232,6 +232,17 @@ if [[ ${#NON_BASH[@]} -gt 0 ]]; then
       fail "${NON_BASH[0]}, $mode PATH: inherited BASH not used (rc $RC, marker $([[ -e "$marker" ]] && echo present || echo absent))"
     fi
   done
+  # An inherited BASH naming a directory ([ -x ] is true for one) is skipped
+  # and the launcher falls through to an absolute bash.
+  mkdir -p "$TEST_ROOT/bash-is-a-dir"
+  for mode in normal broken; do
+    HOOK_ENV="BASH=$TEST_ROOT/bash-is-a-dir" run_with "$mode" "$TEST_ROOT/new-real" "${words[@]}"
+    if [[ "$RC" == 0 && "$OUT" == "$reference" ]]; then
+      pass "${NON_BASH[0]}, $mode PATH: an inherited BASH naming a directory falls through to an absolute bash"
+    else
+      fail "${NON_BASH[0]}, $mode PATH: inherited BASH naming a directory: rc $RC; $(head -c 160 "$TEST_ROOT/stderr" | tr '\n' ' ')"
+    fi
+  done
 fi
 
 # --- (c) relative, no-slash and absolute invocation ---------------------------

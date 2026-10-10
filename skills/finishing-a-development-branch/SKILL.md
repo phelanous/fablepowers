@@ -194,25 +194,29 @@ pick by the remote's host:
 | Forge | Auth check | Create |
 |-------|-----------|--------|
 | GitHub | `gh auth status` | `gh pr create --base <base-branch> --head <branch> --title "<title>" --body-file <body.md>` |
-| Forgejo / Gitea family (incl. Codeberg) | `fj -H <host> whoami` | `fj -H <host> pr create "<title>" --repo <owner>/<repo> --base <base-branch> --head <branch> --body-file <body.md>` |
+| Forgejo / Gitea family (incl. Codeberg) | `fj auth list \| grep -qxF '<host>'`, then `fj -H <host> repo view <owner>/<repo>` | `fj -H <host> pr create "<title>" --repo <owner>/<repo> --base <base-branch> --head <branch> --body-file <body.md>` |
 | GitLab | `glab auth status` | `glab mr create --target-branch <base-branch> --source-branch <branch> --title "<title>" --description-file <body.md> --yes` |
 
 - Run the auth check first; the CLI must be installed and authenticated for
   the remote's host. For `fj`, `<host>` is the remote URL's hostname with no
-  port and `<owner>/<repo>` its path without `.git`. Pass both: without
-  `-H`, `fj` derives the API host from the remote, so an SSH remote carrying
-  a port (`ssh://git@host:2222/...`) makes it speak HTTPS to the SSH port;
-  with `-H` alone it cannot map the remote and asks for `--repo`.
-  `fj -H <host> whoami` must name that host with no port; if it does not,
-  report that instead of proceeding.
+  port and `<owner>/<repo>` its path without `.git`. `fj auth list` prints
+  one logged-in host per line; the `repo view` probe confirms the host and
+  repo resolve. Do not gate on `fj whoami`: it needs the `read:user` scope,
+  which a least-privilege repo/PR token lacks. Passing `-H <host>` is why an
+  SSH remote carrying a port (`ssh://git@host:2222/...`) no longer matters;
+  with `-H` set, also pass `--repo`.
+- Read-only probes cannot prove write scope (a public repo answers
+  anonymously). If the create command itself fails, fall back to the
+  creation URL the forge printed on push and report the CLI's error.
 - Write the body to a file first (outside the repo). Follow the repo's
   PR/MR template and conventions if present. Each command above is fully
   non-interactive: title and body file given, plus `--yes` for glab — do not
   drop those flags, or the CLI opens an editor or prompt.
 - For a host the table does not name (self-hosted Forgejo, Gitea or
-  GitLab), probe with the auth checks — `fj -H <host> whoami` and
-  `glab auth status --hostname <host>` — and treat whichever authenticates
-  for that host as the forge.
+  GitLab), probe with the auth checks — `fj auth list | grep -qxF '<host>'`
+  followed by `fj -H <host> repo view <owner>/<repo>`, and
+  `glab auth status --hostname <host>` — and treat whichever succeeds for
+  that host as the forge.
 - If no matching CLI is installed and authenticated, use the creation URL
   the forge printed on push.
 - Report the PR/MR URL to your human partner.
@@ -227,15 +231,42 @@ Report: "Keeping branch <name>. Worktree preserved at <path>."
 
 This path exists only as a response to an explicit request to throw the
 work away. If `<BASE_WORKTREE>` and `MAIN_ROOT` both printed empty, stop
-and report — there is nowhere to step out of the worktree to. Otherwise
-confirm first (list the branch only when `BRANCH` printed one; a detached
-HEAD has none):
+and report — there is nowhere to step out of the worktree to.
+
+First work out what will actually be deleted, from the printed Step 2
+values and the Step 6 ownership check (run it now; it needs no `cd`):
+
+- **Normal repo** (`GIT_DIR == GIT_COMMON`): the branch and its commits.
+  There is no worktree to delete.
+- **Owned worktree** (check prints `owned`): the worktree, then the branch
+  and its commits.
+- **Host-owned worktree** (check prints `host-owned` — every linked
+  worktree when `MAIN_ROOT` printed empty, and Claude Code's
+  `.claude/worktrees/…`): Step 6 never removes it, so its branch stays
+  checked out there and cannot be deleted. Nothing is deleted — unless the
+  harness's workspace-exit tool created this worktree in this session and
+  its **remove** action is usable; then that action deletes the worktree
+  and its branch.
+
+**When nothing will be deleted** (host-owned, no usable exit tool), do not
+ask for confirmation — delete nothing and report:
+
+```
+<WORKTREE_PATH> is host-owned, so I will not remove it. Branch <name>
+stays checked out there with all its commits (on a detached HEAD: the
+commits stay reachable from that worktree's HEAD). Nothing was deleted.
+To finish the discard, remove the worktree with the tool that created it,
+then run `git branch -D <name>`.
+```
+
+**Otherwise** confirm first, listing only what will be deleted (list the
+branch only when `BRANCH` printed one; a detached HEAD has none):
 
 ```
 This will permanently delete:
+- Worktree at <path>     (omit in a normal repo)
 - Branch <name>          (omit on a detached HEAD)
 - All commits: <commit-list>
-- Worktree at <path>
 
 Type 'discard' to confirm.
 ```
@@ -246,10 +277,17 @@ Wait for that exact confirmation. When it arrives:
 cd "<MAIN_ROOT>"   # or "<BASE_WORKTREE>" when MAIN_ROOT printed empty
 ```
 
-Then clean up the worktree (Step 6) and, if it was removed or there was
-none, force-delete the branch (from a normal repo, first check out
-`<base-branch>` in `<MAIN_ROOT>`). On a detached HEAD there is no branch:
-skip this.
+Then:
+
+- **Normal repo:** check out `<base-branch>` in `<MAIN_ROOT>`, then
+  force-delete the branch (below).
+- **Owned worktree:** clean it up (Step 6); once it is removed,
+  force-delete the branch (below). If removal stays refused, stop: the
+  branch is still checked out there.
+- **Host-owned with the exit tool:** use its **remove** action (Step 6); it
+  deletes the branch too, so skip `git branch -D`.
+
+On a detached HEAD there is no branch: skip the branch deletion.
 
 ```bash
 git branch -D <feature-branch>

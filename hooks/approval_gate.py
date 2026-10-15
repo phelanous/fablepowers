@@ -42,28 +42,35 @@ logic above, unchanged. Same markers, states and rules:
       while pending, Codex config (`.codex/config.toml`, `.codex/rules/`,
       `.codex/agents/`, `.codex/hooks*`, anywhere, and $CODEX_HOME/config.toml)
       denied, and repo paths outside the allowlist denied; one bad path denies
-      the whole patch. Patch lines are trimmed (whitespace, CR) before header
-      matching, as Codex's own parser accepts indented headers. A patch the
-      gate cannot parse is denied while pending (fail closed), else allowed and
-      logged; so is a header path holding a control character or one that
-      cannot be resolved, and such a path is denied always when it could name a
-      marker (`.fablepowers` and `pending`/`approved` in it), so it never masks
-      the other paths of the patch.
+      the whole patch. The patch is split into lines on "\n" only and each
+      line is trimmed before header matching, as Codex's own parser does (it
+      accepts indented headers and CRLF); a header path is taken as Codex takes
+      it (see parse_patch). A patch the gate cannot parse is denied while
+      pending (fail closed), else allowed and logged; so is a header path
+      holding a control character (C0, DEL, C1, U+2028, U+2029: \v, \f and
+      \x1c-\x1e included) or one that cannot be resolved, and such a path is
+      denied always when it could name a marker (`.fablepowers` and
+      `pending`/`approved` in it, with or without its control characters, or
+      resolving to a marker through a symlink), so it never masks the other
+      paths of the patch.
   PreToolUse collaborationspawn_agent | spawn_agent   while pending, allowed only
       for a reviewer: v2 task_name `fablepowers_reviewer` or
       `fablepowers_reviewer_*`; v1 message whose first line is
       `fablepowers-seat: reviewer`. Every other spawn is denied.
   PostToolUse apply_patch   an `*** Add File:` of docs/specs/<name>.md that the
-      tool response confirms (`A <path>` line), from the main session (no
-      agent_id) -> pending. Add File also overwrites, so rewriting a spec that
-      has no markers re-pends it (Claude Code's Write update does not); an
-      already approved or pending key is left alone, as on Claude Code.
+      tool response confirms (`A <path>` line), or an `*** Update File:` with
+      `*** Move to:` docs/specs/<name>.md confirmed by `M <destination>`, from
+      the main session (no agent_id) -> pending. Add File also overwrites, so
+      rewriting a spec that has no markers re-pends it (Claude Code's Write
+      update does not); an already approved or pending key is left alone, as
+      on Claude Code.
   UserPromptSubmit (turn_id, no agent_id)   the whole prompt matching
       `$fablepowers:approve|withdraw [key]` approves / withdraws. On Codex a
       block reason never reaches the model or an exec user, so every answer is
       additionalContext; several pending without a key records nothing.
 Codex deny messages name `$fablepowers:approve [key]` (no question path) and
-end with the recovery line (trust the hooks in /hooks, or FABLEPOWERS_GATE=off).
+end with the recovery line (trust the hooks in /hooks, or FABLEPOWERS_GATE=off),
+with no final period since Codex appends ". Tool: <name>".
 
 FABLEPOWERS_GATE=off: never deny; would-be denials go to .fablepowers/gate.log.
 Malformed payloads and internal errors allow (fail open) and are logged there.
@@ -97,13 +104,20 @@ PATCH_HEADER = re.compile(r"\*\*\*[ \t]*(add file|update file|delete file|move t
                           re.IGNORECASE)
 REVIEWER_TASK = "fablepowers_reviewer"
 REVIEWER_SEAT_LINE = re.compile(r"fablepowers-seat:[ \t]*reviewer")
-CODEX_COMMAND = re.compile(r"[ \t]*\$fablepowers:(approve|withdraw)(?:[ \t]+(\S+))?[ \t]*")
+# One trailing newline (LF or CRLF) is accepted, in case a client submits it.
+CODEX_COMMAND = re.compile(r"[ \t]*\$fablepowers:(approve|withdraw)(?:[ \t]+(\S+))?[ \t]*(?:\r?\n)?")
 CODEX_CONFIG_DIRS = ("rules", "agents")
 CODEX_RECOVERY = ("If the user's approval does not register, the fablepowers hooks may be "
-                  "untrusted: trust them in `/hooks`, or set `FABLEPOWERS_GATE=off` to turn the gate off.")
-# A header path holding one of these (C0/C1 controls, DEL) is not checked as a path:
-# it fails closed (denied while pending, and always when it looks like a marker).
-PATH_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+                  "untrusted: trust them in `/hooks`, or set `FABLEPOWERS_GATE=off` to turn the gate off")
+# No final period: Codex appends ". Tool: <name>" to a PreToolUse deny reason.
+# A header path holding one of these (C0/C1 controls, DEL, U+2028, U+2029) is not
+# checked as a path: it fails closed (denied while pending, and always when it
+# looks like a marker or resolves to one).
+PATH_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+# The characters Rust's str::trim removes (Unicode White_Space). Codex trims each
+# patch line with it; Python's str.strip also removes \x1c-\x1f.
+RUST_WS = ("\t\n\x0b\x0c\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007"
+           "\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000")
 CODEX_HOW = ("type it as a message (or pick it from the `$` menu in the CLI); in the Codex app, "
              "type it as text")
 
@@ -562,16 +576,28 @@ def codex_patch_text(ti):
 
 
 def parse_patch(text):
-    """[(op, path)] for every file-operation header in the patch, each line and
-    path trimmed first (Codex accepts indented headers, CRLF and trailing
-    spaces); None when there is no header or a header has an empty path."""
+    """[(op, path)] for every file-operation header in the patch; None when there
+    is no header or a header has an empty path.
+
+    Lines are split on "\n" only, as Codex splits them (str.splitlines would also
+    split on \v, \f, \x1c-\x1e, \x85, U+2028 and U+2029, hiding the rest of a
+    header path from the gate). A header is recognised on the line trimmed with
+    str.strip (a superset of Codex's trim, so indented and CRLF headers count).
+    The path is taken as Codex 0.162.1 takes it (checked against its parser):
+    everything after the header's ": " up to the end of the line trimmed of
+    Unicode whitespace, untrimmed at its start, so `*** Add File:   x` names
+    `  x` and a trailing \x1c stays part of the name."""
     ops = []
-    for line in text.splitlines():
+    for line in text.split("\n"):
+        if line.endswith("\r"):
+            line = line[:-1]
         m = PATCH_HEADER.fullmatch(line.strip())
         if not m:
             continue
-        path = m.group(2).strip()
-        if not path:
+        tail = line.rstrip(RUST_WS)
+        tail = tail[tail.index(":") + 1:]
+        path = tail[1:] if tail.startswith(" ") else tail
+        if not path.strip():
             return None
         ops.append((m.group(1).lower(), path))
     return ops or None
@@ -613,6 +639,23 @@ def shown_path(p):
     return "".join(out)
 
 
+def unchecked_marker(p, cwd):
+    """For a header path the gate does not check as a path (a control character):
+    True when it could name a marker, judged by substrings of the path as given
+    and with its control characters removed, or by the marker check on those two
+    paths resolved (a symlink whose name holds a control character can lead into
+    .fablepowers/<key>/)."""
+    if is_marker_like(p):
+        return True
+    for v in (p, PATH_CONTROL.sub("", p)):
+        try:
+            if is_marker_path(os.path.normpath(os.path.join(cwd, v))) or is_marker_path(resolve(v, cwd)):
+                return True
+        except (ValueError, OSError, TypeError):
+            continue
+    return False
+
+
 def is_marker_like(p):
     """For a header path the gate cannot resolve: True when it could name a marker,
     as given or with its control characters removed, judged by substrings
@@ -651,7 +694,7 @@ def codex_pre_apply_patch(top, payload, cwd):
                    "not create, change or delete them (`%s`). Ask the user to send `$fablepowers:approve` "
                    "or `$fablepowers:withdraw`: %s. Do not retry this call. %s")
     for p, _ in unchecked:
-        if is_marker_like(p):
+        if unchecked_marker(p, cwd):
             deny(top, payload, marker_deny % (shown_path(p), CODEX_HOW, CODEX_RECOVERY))
             return
     for p, lexical, real in paths:
@@ -721,10 +764,12 @@ def codex_post_apply_patch(top, payload, cwd):
     if not isinstance(tr, str):
         log(top, "PostToolUse Codex apply_patch with a non-string tool_response; no spec marked pending")
         return
-    applied = {line.strip() for line in tr.splitlines()}
+    applied = {line.strip(RUST_WS) for line in tr.split("\n")}
     made = []
     for op, p in ops:
-        if op != "add file" or ("A " + p) not in applied:
+        # An Add shows `A <path>`; a Move shows `M <destination>` (Update + Move to).
+        if not ((op == "add file" and ("A " + p).strip(RUST_WS) in applied)
+                or (op == "move to" and ("M " + p).strip(RUST_WS) in applied)):
             continue
         m = mark_pending(top, resolve(p, cwd))
         if m:

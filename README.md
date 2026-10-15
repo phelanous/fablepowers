@@ -53,16 +53,25 @@ there is no workflow map and no approval gate. Trust is kept per hook entry, so
 trust again after an update that changes `hooks/hooks.json`. Upgrading from
 0.4.0 keeps the eight entries you already trusted and adds three new ones (the
 two spawn tools and `UserPromptSubmit`) to trust. For headless runs,
-`scripts/codex-hook-trust.sh` prints a one-run override instead:
-`codex -c "$(scripts/codex-hook-trust.sh)" exec …` (read-only; it never writes
-your config).
+`scripts/codex-hook-trust.sh` prints a one-run override instead (read-only; it
+never writes your config). On any error it prints nothing on stdout and exits
+1, so check its status rather than passing an empty `-c ""`:
+
+```
+trust="$(scripts/codex-hook-trust.sh fablepowers@fablepowers)" || exit 1
+codex -c "$trust" exec …
+```
 
 **Let agents commit (optional).** Under Codex's `workspace-write` sandbox `.git`
 is read-only, so each `git add` and `git commit` asks for approval. Copy
 [`codex/rules/fablepowers.rules`](codex/rules/fablepowers.rules) to your
-project's `.codex/rules/` (the project must be trusted) or to `~/.codex/rules/`
-to allow plain `git add`, `git commit` and `git worktree add`. `git push`,
-`git -c … commit` and other git commands still ask.
+project's `.codex/rules/` or to `~/.codex/rules/` to allow plain `git add`,
+`git commit` and `git worktree add`. `git push`, `git -c … commit` and other git
+commands still ask. Project rules apply only when the project is trusted in
+`~/.codex/config.toml`; Codex adds that entry on the first trusted session
+there. A `-c projects."<path>".trust_level="trusted"` override is not honoured
+for project rules on `codex exec resume`, so for headless runs trust the
+project once (or use `~/.codex/rules/`).
 
 **Seat models (optional).** By default the implementer and reviewer run on
 `gpt-6.1-sol` (effort high) and the strict implementer on `gpt-5.6-terra`

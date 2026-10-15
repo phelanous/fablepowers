@@ -324,9 +324,15 @@ comparing the trust keys and hashes of a 0.4.0 and a 0.5.0 install: the eight
 
 Codex passes its launcher's environment to hooks (a run started from Claude Code
 carried `CLAUDECODE=1`), and sets `CLAUDE_PLUGIN_ROOT` as well as its own
-`PLUGIN_ROOT`. The payload is reliable: Codex's SessionStart carries
-`permission_mode` and `model` (Claude Code's has neither) and a
-`rollout-*.jsonl` transcript; its tool and prompt events carry `turn_id`. The
+`PLUGIN_ROOT`. The payload is reliable, but not every key in it: Codex's
+SessionStart carries `permission_mode` and `model`, and so can Claude Code's
+(its compact SessionStart sends `model`, captured live on 2.1.299, and its
+shared hook-input builder has a `permission_mode` field). The transcript path
+tells them apart: Codex's is a `rollout-*.jsonl` under `~/.codex/sessions/`,
+Claude Code's a `<uuid>.jsonl` under `~/.claude/projects/`. The first release
+keyed on `model` from a single Claude startup capture, so every compaction gave
+a Claude Code session the Codex preamble; the integration review caught it.
+Codex's tool and prompt events carry `turn_id`. The
 gate keys on Codex-only tool names (`apply_patch`, `collaborationspawn_agent`,
 `spawn_agent`) and on `turn_id` for `UserPromptSubmit`; everything else takes
 the 0.4.0 code.

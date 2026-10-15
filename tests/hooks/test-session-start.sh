@@ -74,7 +74,7 @@ run_with() {
   cmd="$(hook_cmd "$tree")"
   RC=0
   if [[ "$mode" == normal ]]; then
-    OUT="$(cd "$TEST_ROOT" && env -u BASH -u PLUGIN_ROOT XDG_CONFIG_HOME="$TEST_ROOT/xdg-empty" CLAUDE_PLUGIN_ROOT="$tree" ${HOOK_ENV:-} "$@" -c "$cmd" <"${HOOK_STDIN:-/dev/null}" 2>"$TEST_ROOT/stderr")" || RC=$?
+    OUT="$(cd "$TEST_ROOT" && env -u BASH -u PLUGIN_ROOT -u CODEX_HOME XDG_CONFIG_HOME="$TEST_ROOT/xdg-empty" CLAUDE_PLUGIN_ROOT="$tree" ${HOOK_ENV:-} "$@" -c "$cmd" <"${HOOK_STDIN:-/dev/null}" 2>"$TEST_ROOT/stderr")" || RC=$?
   else
     OUT="$(cd "$TEST_ROOT" && env -i PATH=/nonexistent CLAUDE_PLUGIN_ROOT="$tree" ${HOOK_ENV:-} "$@" -c "$cmd" <"${HOOK_STDIN:-/dev/null}" 2>"$TEST_ROOT/stderr")" || RC=$?
   fi
@@ -435,13 +435,16 @@ for fx in "$SS_FIX"/codex-sessionstart-*.json; do
   fi
 done
 
-# Raw stdout bytes for the real Claude Code payload equal the empty-stdin bytes.
-(cd "$TEST_ROOT" && env -u PLUGIN_ROOT CLAUDE_PLUGIN_ROOT="$T" "$SH" -c "$(hook_cmd "$T")" <"$CLAUDE_PAYLOAD") > "$TEST_ROOT/claude-payload.bytes"
-if cmp -s "$TEST_ROOT/new.bytes" "$TEST_ROOT/claude-payload.bytes"; then
-  pass "Claude Code payload: raw stdout bytes identical to the empty-stdin run"
-else
-  fail "Claude Code payload: raw stdout bytes differ from the empty-stdin run"
-fi
+# Raw stdout bytes for each real Claude Code payload (startup, resume, and the
+# compact one, which carries "model") equal the empty-stdin bytes.
+for fx in "$SS_FIX"/claude-sessionstart-*.json; do
+  (cd "$TEST_ROOT" && env -u PLUGIN_ROOT -u CODEX_HOME CLAUDE_PLUGIN_ROOT="$T" "$SH" -c "$(hook_cmd "$T")" <"$fx") > "$TEST_ROOT/claude-payload.bytes"
+  if cmp -s "$TEST_ROOT/new.bytes" "$TEST_ROOT/claude-payload.bytes"; then
+    pass "$(basename "$fx"): raw stdout bytes identical to the empty-stdin run"
+  else
+    fail "$(basename "$fx"): raw stdout bytes differ from the empty-stdin run"
+  fi
+done
 
 # detect <label> <codex|claude> <payload text> [VAR=value ...]: run with that
 # payload (and extra env) and check the harness the output shows.
@@ -459,18 +462,24 @@ detect() {
     fail "$label: expected $want"
   fi
 }
-detect "permission_mode key only" codex '{"hook_event_name":"SessionStart","permission_mode":"default"}'
-detect "model key only" codex '{"hook_event_name":"SessionStart","model":"gpt-6-luna"}'
-detect "model key with spaces before the colon" codex '{"model" : "x"}'
+# Neither "model" nor "permission_mode" means Codex: Claude Code's compact
+# SessionStart carries "model" (claude-sessionstart-compact.json).
+detect "permission_mode key only" claude '{"hook_event_name":"SessionStart","permission_mode":"default"}'
+detect "model key only" claude '{"hook_event_name":"SessionStart","model":"gpt-6-luna"}'
+detect "Claude Code compact payload with model and a <uuid>.jsonl transcript" claude '{"transcript_path":"/h/.claude/projects/p/80425774-bd1b-4e39-bc07-2acaa47d81fe.jsonl","hook_event_name":"SessionStart","source":"compact","model":"claude-opus-5-5","permission_mode":"default"}'
 detect "transcript_path basename rollout-*.jsonl only" codex '{"transcript_path":"/h/.codex/sessions/2026/10/15/rollout-2026-a.jsonl"}'
+detect "transcript_path rollout-*.jsonl outside any .codex dir" codex '{"transcript_path":"/x/y/rollout-2026-a.jsonl"}'
 detect "transcript_path with escaped slashes" codex '{"transcript_path":"\/h\/.codex\/sessions\/rollout-x.jsonl"}'
-detect "transcript_path rollout-*.json (not .jsonl)" claude '{"transcript_path":"/h/.codex/sessions/rollout-x.json"}'
+detect "transcript_path under .codex/sessions/ (other basename)" codex '{"transcript_path":"/h/.codex/sessions/2026/10/15/abc.jsonl"}'
+detect "transcript_path under .codex/sessions/, escaped slashes" codex '{"transcript_path":"\/h\/.codex\/sessions\/abc.jsonl"}'
+detect "transcript_path under \$CODEX_HOME/sessions/" codex '{"transcript_path":"/srv/cx/sessions/2026/abc.jsonl"}' "CODEX_HOME=/srv/cx/"
+detect "transcript_path under a CODEX_HOME-like dir, CODEX_HOME unset" claude '{"transcript_path":"/srv/cx/sessions/2026/abc.jsonl"}'
+detect "transcript_path under .codex/ but not sessions/" claude '{"transcript_path":"/h/.codex/other/abc.jsonl"}'
+detect "transcript_path rollout-*.json (not .jsonl)" claude '{"transcript_path":"/h/.codex/other/rollout-x.json"}'
 detect "transcript_path basename myrollout-*.jsonl" claude '{"transcript_path":"/h/myrollout-x.jsonl"}'
 detect "rollout- only in a directory name" claude '{"transcript_path":"/h/rollout-dir/abc.jsonl"}'
 detect "transcript_path key spelled differently" claude '{"transcript":"/h/rollout-x.jsonl"}'
-detect "\"model\" escaped inside a string value" claude '{"cwd":"/a/\"model\": x","transcript_path":"/h/.claude/projects/p/u.jsonl"}'
-detect "\"permission_mode\" escaped inside a string value" claude '{"cwd":"/a/\"permission_mode\":1"}'
-detect "a key ending in model" claude '{"default_model":"x","model_id":"y"}'
+detect "\"transcript_path\" escaped inside a string value" claude '{"cwd":"/a/\"transcript_path\": \"/h/rollout-x.jsonl\""}'
 detect "PLUGIN_ROOT equal to CLAUDE_PLUGIN_ROOT, empty payload" codex '' "PLUGIN_ROOT=$T"
 detect "PLUGIN_ROOT equal to CLAUDE_PLUGIN_ROOT, Claude Code payload" codex "$(<"$CLAUDE_PAYLOAD")" "PLUGIN_ROOT=$T"
 detect "PLUGIN_ROOT set to another directory" claude "$(<"$CLAUDE_PAYLOAD")" "PLUGIN_ROOT=$TEST_ROOT/elsewhere"

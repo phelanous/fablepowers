@@ -22,6 +22,7 @@ HOOKS_JSON="${HOOKS_JSON:-$REPO_ROOT/hooks/hooks.json}"
 GATE_LAUNCHER="${GATE_LAUNCHER:-$REPO_ROOT/hooks/approval-gate}"
 GATE_PY="${GATE_PY:-$REPO_ROOT/hooks/approval_gate.py}"
 SKILLS_DIR="${SKILLS_DIR:-$REPO_ROOT/skills}"
+TRUST_SH="${TRUST_SH:-$REPO_ROOT/scripts/codex-hook-trust.sh}"
 SH="$BASH"
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
@@ -955,6 +956,24 @@ printf '{"spec": "docs/specs/done.md", "approved_at": "2026-01-01T00:00:00+00:00
 cpost "$R" "$(patch_of $'*** Add File: docs/specs/done.md\n+# again')" "$(resp_of "A docs/specs/done.md")"
 check "Add of an already approved key does not re-pend" test ! -e "$R/.fablepowers/done/pending"
 
+# S2: a spec created by moving a file into docs/specs/ (Update File + Move to)
+# from the main session pends, confirmed by the `M <destination>` line.
+R="$TEST_ROOT/c1mv"; new_repo "$R"; printf '# x\n' > "$R/docs/specs/x.md"
+cpost "$R" "$(patch_of $'*** Update File: docs/plans/x.md\n*** Move to: docs/specs/x.md\n@@\n-# x\n+# x')" "$(resp_of "M docs/specs/x.md")"
+expect "S2: Update docs/plans/x.md + Move to docs/specs/x.md" context
+check "  x pending" test -f "$R/.fablepowers/x/pending"
+check "  context names the design and \$fablepowers:approve" bash -c '[[ "$1" == *docs/specs/x.md* && "$1" == *'\''$fablepowers:approve'\''* ]]' _ "$(text_of)"
+printf '# y\n' > "$R/docs/specs/y.md"
+cpost "$R" "$(patch_of $'*** Update File: docs/plans/y.md\n*** Move to: docs/specs/y.md\n@@\n-# y\n+# y')" "Exit code: 1"
+check "S2: Move without an 'M <dest>' line (failed): no pending" test ! -e "$R/.fablepowers/y"
+cpost "$R" "$(patch_of $'*** Update File: docs/plans/y.md\n*** Move to: docs/specs/y.md\n@@\n-# y\n+# y')" "$(resp_of "M docs/specs/y.md")" "$R" codex-post-apply_patch-subagent
+check "S2: Move into docs/specs from a subagent: no pending" test ! -e "$R/.fablepowers/y"
+cpost "$R" "$(patch_of $'*** Update File: docs/specs/y.md\n*** Move to: docs/plans/y.md\n@@\n-# y\n+# y')" "$(resp_of "M docs/plans/y.md")"
+check "S2: Move out of docs/specs (source is the spec): no pending" test ! -e "$R/.fablepowers/y"
+mkdir -p "$R/sub"
+cpost "$R" "$(patch_of $'*** Update File: ../docs/plans/y.md\n*** Move to: ../docs/specs/y.md\n@@\n-# y\n+# y')" "$(resp_of "M ../docs/specs/y.md")" "$R/sub"
+check "S2: Move into ../docs/specs from a subdirectory cwd pends" test -f "$R/.fablepowers/y/pending"
+
 echo "13. Codex: apply_patch marker writes denied always"
 
 R="$TEST_ROOT/c2"; new_repo "$R"
@@ -1064,6 +1083,7 @@ cpatch_esc() {
   input="$(payload codex-pre-apply_patch CWD="${3:-$1}" PATCH="$2")"
   input="${input//@NUL@/\\u0000}"; input="${input//@SOH@/\\u0001}"
   input="${input//@DEL@/\\u007f}"; input="${input//@SUR@/\\ud800}"
+  input="$(printf '%s' "$input" | sed -E 's/@u([0-9a-f]{4})@/\\u\1/g')"   # @uXXXX@ -> \uXXXX
   run_gate_json PreToolUse Write "$input"; note_deny; verdict
 }
 R="$TEST_ROOT/c3c"; new_repo "$R"
@@ -1082,6 +1102,16 @@ check "no pending: control-character path under .fablepowers, no marker name, al
   test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: .fablepowers/k/report@NUL@.md\n+x')")" == allow
 check "  logged as a path the gate cannot check" grep -q 'cannot check' "$R/.fablepowers/gate.log"
 check "  no internal error logged" bash -c '! grep -q "internal error" "$1"' _ "$R/.fablepowers/gate.log"
+# A symlink whose name holds a control character, leading into .fablepowers/<key>/:
+# the path has no `.fablepowers` in it, so only resolving it shows the marker.
+mkdir -p "$R/.fablepowers/k"; ln -s ../../.fablepowers/k "$R/docs/plans/l"$'\x01'; ln -s ../../.fablepowers/k "$R/docs/plans/lk"
+check "no pending: 'docs/plans/l<SOH>/approved' (symlink into .fablepowers/k) denied" \
+  test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: docs/plans/l@SOH@/approved\n+x')")" == deny
+check "no pending: 'docs/plans/l<SOH>k/pending' (control-stripped: symlink lk) denied" \
+  test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: docs/plans/l@SOH@k/pending\n+x')")" == deny
+check "no pending: 'docs/plans/l<SOH>/notes.md' (symlink, not a marker) allowed" \
+  test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: docs/plans/l@SOH@/notes.md\n+x')")" == allow
+rm "$R/docs/plans/l"$'\x01' "$R/docs/plans/lk"; rmdir "$R/.fablepowers/k"
 ccreate "$R" docs/specs/ctl.md
 check "pending: allowed + NUL path + disallowed path denied" \
   test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: docs/plans/ok.md\n+ok\n*** Add File: docs/plans/n@NUL@.md\n+n\n*** Add File: src/evil.py\n+e')")" == deny
@@ -1090,6 +1120,32 @@ for p in "docs/plans/a@NUL@.md" "docs/plans/a@SOH@.md" "docs/plans/a@DEL@.md" "d
 done
 check "pending: tab inside a path (docs/plans/a<TAB>b.md) denied" \
   test "$(cpatch "$R" "$(patch_of $'*** Add File: docs/plans/a\tb.md\n+x')")" == deny
+# M1: Codex splits patch lines on "\n" only. Before the fix the gate split with
+# str.splitlines, so each of these characters cut the header path short at
+# `docs/specs/a.md` (allowed) while Codex wrote src/evil.py.
+for c in 000b 000c 001c 001d 001e 0085 2028 2029 000d; do
+  check "pending: 'docs/specs/a.md<U+$c>/../../../src/evil.py' denied" \
+    test "$(cpatch_esc "$R" "$(patch_of "*** Add File: docs/specs/a.md@u$c@/../../../src/evil.py"$'\n+x')")" == deny
+  check "pending: 'Move to: docs/specs/a.md<U+$c>/../../../src/evil.py' denied" \
+    test "$(cpatch_esc "$R" "$(patch_of "*** Update File: docs/plans/a.md"$'\n'"*** Move to: docs/specs/a.md@u$c@/../../../src/evil.py"$'\n@@\n-a\n+a')")" == deny
+  check "pending: 'docs/plans/a<U+$c>.md' (inside the allowlist) denied: the control check fails closed" \
+    test "$(cpatch_esc "$R" "$(patch_of "*** Add File: docs/plans/a@u$c@.md"$'\n+x')")" == deny
+done
+cpatch_esc "$R" "$(patch_of $'*** Add File: docs/specs/a.md@u2028@/../../../src/evil.py\n+x')" >/dev/null
+check "  the reason shows the separator escaped and says the gate fails closed" \
+  bash -c '[[ "$1" == *'\''docs/specs/a.md\u2028/'\''* && "$1" == *"fails closed"* ]]' _ "$(text_of)"
+# The header path is taken as Codex takes it: untrimmed after ": ", so extra
+# leading blanks or a leading \x1c name a different file (outside the allowlist).
+check "pending: 'Add File:   docs/plans/s.md' (Codex writes '  docs/plans/s.md') denied" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File:   docs/plans/s.md\n+x')")" == deny
+check "pending: 'Add File: <U+001c>docs/plans/x.md' denied" \
+  test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: @u001c@docs/plans/x.md\n+x')")" == deny
+check "pending: 'Add File: docs/plans<U+001c>' (trailing, kept by Codex) denied" \
+  test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: docs/plans@u001c@\n+x')")" == deny
+check "pending: 'Add File: docs/plans/ok.md' + trailing U+3000 (trimmed by Codex) allowed" \
+  test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: docs/plans/ok.md@u3000@\n+x')")" == allow
+check "pending: header indented with U+3000 (Codex trims it) still checked: src/x.py denied" \
+  test "$(cpatch_esc "$R" "$(patch_of $'@u3000@*** Add File: src/x.py\n+x')")" == deny
 cpatch_esc "$R" "$(patch_of $'*** Add File: docs/plans/a@NUL@.md\n+x')" >/dev/null
 check "  the reason shows the path escaped and says the gate fails closed" \
   bash -c '[[ "$1" == *'\''docs/plans/a\x00.md'\''* && "$1" == *"fails closed"* && "$1" == *'\''$fablepowers:approve ctl'\''* ]]' _ "$(text_of)"
@@ -1165,10 +1221,12 @@ check "  says so" bash -c '[[ "$1" == *"nothing is pending"* ]]' _ "$(text_of)"
 check "  no marker" test ! -e "$R/.fablepowers"
 ccreate "$R" docs/specs/one.md
 for p in '$fablepowers:approve a b' 'please $fablepowers:approve' $'$fablepowers:approve\nyes' \
-         $'$fablepowers:approve\n' '$fablepowers:approvex' '/fablepowers:approve' '$fablepowers:Approve' 'fablepowers:approve' \
+         $'$fablepowers:approve\n\n' $'$fablepowers:approve\r\n\r\n' $'$fablepowers:approve\n ' $'\n$fablepowers:approve' \
+         $'$fablepowers:approve\r' '$fablepowers:approvex' '/fablepowers:approve' '$fablepowers:Approve' 'fablepowers:approve' \
          '$fablepowers:approve one two' ''; do
   cups "$R" "$p"
-  check "not an approval: '${p//$'\n'/\\n}' (allowed, nothing recorded)" test "$(verdict)" == allow -a ! -e "$R/.fablepowers/one/approved"
+  q="${p//$'\r'/\\r}"
+  check "not an approval: '${q//$'\n'/\\n}' (allowed, nothing recorded)" test "$(verdict)" == allow -a ! -e "$R/.fablepowers/one/approved"
 done
 # One trailing word is the key argument: one that names no pending design records nothing.
 for p in '$fablepowers:approve please' '$fablepowers:approve one.'; do
@@ -1194,6 +1252,15 @@ check "  approved unchanged" cmp -s "$A" "$TEST_ROOT/c6-approved"
 check "approved: v2 implementer spawn allowed" test "$(cspawn2 "$R" fablepowers_implementer_t1)" == allow
 check "approved: v1 implementer spawn allowed" test "$(cspawn1 "$R" $'fablepowers-seat: implementer\nGo.')" == allow
 check "approved: code patch allowed" test "$(cpatch "$R" "$(patch_of $'*** Add File: src/x.py\n+x')")" == allow
+
+# N2: one trailing newline (LF or CRLF) after the command still approves.
+for nl in LF CRLF; do
+  R="$TEST_ROOT/c6nl-$nl"; new_repo "$R"
+  ccreate "$R" docs/specs/nl.md
+  if [[ "$nl" == LF ]]; then cups "$R" $'$fablepowers:approve nl\n'; else cups "$R" $'$fablepowers:approve nl\r\n'; fi
+  check "one trailing $nl after the command: approved" \
+    bash -c '[[ "$1" == context && -f "$2" ]]' _ "$(verdict)" "$R/.fablepowers/nl/approved"
+done
 
 R="$TEST_ROOT/c6b"; new_repo "$R"
 ccreate "$R" docs/specs/a.md
@@ -1253,6 +1320,19 @@ check "UserPromptSubmit with \$fablepowers: starts python" test -e "$TEST_ROOT/p
 GATE_ENV=()
 
 CWARNED="$GATE_TMP/fablepowers-gate-warned-$UID-01a1408b-1e59-7092-843b-bc23a311d75f"
+# S1: on Codex Post apply_patch and UserPromptSubmit the warning also goes out as
+# additionalContext, since Codex shows a systemMessage to neither the model nor
+# an exec user.
+cwarning() {  # cwarning <hookEventName>: the exact no-python output for that Codex event
+  printf '{"systemMessage":"fablepowers approval gate disabled: python3 not found","hookSpecificOutput":{"hookEventName":"%s","additionalContext":"fablepowers approval gate disabled: python3 not found. The design-approval gate is not running in this session: no design is marked pending and `$fablepowers:approve` records nothing. Tell the user this now, so they can install Python 3.8+ (or set FABLEPOWERS_PYTHON) and restart the session."}}' "$1"
+}
+# codex_warned <event>: $OUT is that output, valid JSON, its context names the gate.
+codex_warned() {
+  [[ "$RC" == 0 && "$OUT" == "$(cwarning "$1")" ]] && printf '%s' "$OUT" | python3 -c '
+import json, sys
+d = json.load(sys.stdin); h = d["hookSpecificOutput"]
+assert h["hookEventName"] == sys.argv[1] and "gate disabled" in h["additionalContext"]' "$1"
+}
 cnopy() {  # cnopy <label> <repo>: no-python checks for Codex payloads (repo without .fablepowers/)
   local L="$1" R="$2"
   reset_warned
@@ -1272,19 +1352,24 @@ cnopy() {  # cnopy <label> <repo>: no-python checks for Codex payloads (repo wit
   expect "no python, $L: spawn silent" allow
   check "  $L: no warn-once marker yet" test ! -e "$CWARNED"
   cpost "$R" "$(patch_of $'*** Add File: src/x.py\n+x\n  *** Add File: docs/specs/a.md   \n+x')" "$(resp_of)"
-  expect "no python, $L: Post apply_patch adding a spec (second, indented op) warns" warning
-  check "  $L: warning text" test "$OUT" == "$WARNING"
+  check "no python, $L: Post apply_patch adding a spec (second, indented op) warns with PostToolUse context" codex_warned PostToolUse
   check "  $L: warn-once marker" test -f "$CWARNED"
   cpost "$R" "$(patch_of $'*** Add File: docs/specs/b.md\n+x')" "$(resp_of "A docs/specs/b.md")"
   expect "no python, $L: second spec Add in the session silent" allow
   reset_warned
   cups "$R" '$fablepowers:approve'
-  expect "no python, $L: \$fablepowers:approve warns" warning
+  check "no python, $L: \$fablepowers:approve warns with UserPromptSubmit context" codex_warned UserPromptSubmit
   cups "$R" '$fablepowers:withdraw'
   expect "no python, $L: \$fablepowers:withdraw once per session" allow
   reset_warned
   cups "$R" 'run $fablepowers:withdraw please'
-  expect "no python, $L: prompt holding \$fablepowers: warns" warning
+  check "no python, $L: prompt holding \$fablepowers: warns with UserPromptSubmit context" codex_warned UserPromptSubmit
+  reset_warned
+  cpost "$R" "$(patch_of $'*** Update File: docs/plans/m.md\n*** Move to: docs/specs/m.md\n@@\n-a\n+a')" "$(resp_of "M docs/specs/m.md")"
+  check "no python, $L: Post apply_patch moving a file into docs/specs warns with PostToolUse context" codex_warned PostToolUse
+  reset_warned
+  cpost "$R" "$(patch_of $'*** Update File: docs/specs/m.md\n*** Move to: docs/plans/m.md\n@@\n-a\n+a')" "$(resp_of "M docs/plans/m.md")"
+  expect "no python, $L: moving a spec out of docs/specs silent" allow
   check "  $L: no .fablepowers/ created" test ! -e "$R/.fablepowers"
 }
 GATE_ENV=("FABLEPOWERS_PYTHON=/nonexistent")
@@ -1300,6 +1385,10 @@ cups "$RQ" 'Reply OK.'
 expect "no python, repo with .fablepowers/: prompt without \$fablepowers: silent (fast path)" allow
 run_gate PreToolUse collaborationspawn_agent codex-v2-pre-spawn CWD="$RQ" TASK=fablepowers_implementer_t1
 expect "no python, repo with .fablepowers/: spawn warns" warning
+check "  PreToolUse: systemMessage only" test "$OUT" == "$WARNING"
+reset_warned
+cpost "$RQ" "$(patch_of $'*** Add File: src/x.py\n+x')" "$(resp_of "A src/x.py")"
+check "no python, repo with .fablepowers/: any Codex Post apply_patch warns with PostToolUse context" codex_warned PostToolUse
 GATE_ENV=()
 reset_warned
 
@@ -1309,8 +1398,55 @@ n="$(grep -c . "$CODEX_DENIES" || true)"
 check "Codex deny messages collected ($n)" test "$n" -ge 40
 check "every Codex deny message has the /hooks trust + FABLEPOWERS_GATE=off recovery line" \
   bash -c '! grep -v -F "trust them in \`/hooks\`, or set \`FABLEPOWERS_GATE=off\`" "$1" | grep -q .' _ "$CODEX_DENIES"
+# N1: Codex appends ". Tool: <name>" to a deny reason, so none may end with a period.
+check "no Codex deny message ends with a period (no '..' once Codex appends '. Tool: …')" \
+  bash -c '! grep -E "\.[[:space:]]*$" "$1" | grep -q .' _ "$CODEX_DENIES"
 check "no Codex deny message points at the Claude Code command or question" \
   bash -c '! grep -E "/fablepowers:(approve|withdraw)|answer Approve" "$1" | grep -q .' _ "$CODEX_DENIES"
+
+echo "20. scripts/codex-hook-trust.sh: nothing on stdout unless it succeeds"
+
+# A stub `codex app-server` speaking just enough JSON-RPC: STUB_MODE=ok lists one
+# fablepowers hook, other lists only another plugin's, die exits at once, garbage
+# answers hooks/list with a non-JSON-RPC line and then exits.
+STUB="$TEST_ROOT/stub-codex"; mkdir -p "$STUB"
+cat > "$STUB/codex" <<'EOF2'
+#!/usr/bin/env python3
+import json, os, sys
+mode = os.environ.get("STUB_MODE", "ok")
+if mode == "die":
+    sys.exit(3)
+for line in sys.stdin:
+    req = json.loads(line)
+    if req.get("id") == 0:
+        print(json.dumps({"id": 0, "result": {}}), flush=True)
+    elif req.get("id") == 1:
+        if mode == "garbage":
+            print("not json", flush=True); sys.exit(0)
+        pid = "fablepowers@fablepowers" if mode == "ok" else "other@x"
+        print(json.dumps({"id": 1, "result": {"data": [{"hooks": [
+            {"pluginId": pid, "key": pid + ":hooks/hooks.json:pre_tool_use:0:0", "currentHash": "abc"}]}]}}), flush=True)
+EOF2
+chmod +x "$STUB/codex"
+trust_run() {  # trust_run <mode> [PATH]: stdout -> $TOUT, stderr -> $TERR, exit -> $TRC
+  TRC=0
+  TOUT="$(STUB_MODE="$1" PATH="${2:-$STUB:$PATH}" "$BASH" "$TRUST_SH" fablepowers@fablepowers "$TEST_ROOT" 2>"$TEST_ROOT/trust-err")" || TRC=$?
+  TERR="$(cat "$TEST_ROOT/trust-err")"
+}
+trust_run ok
+check "plugin listed: exit 0, one hooks.state override on stdout" \
+  test "$TRC:$TOUT" == '0:hooks.state={"fablepowers@fablepowers:hooks/hooks.json:pre_tool_use:0:0"={trusted_hash="abc"}}'
+for m in other die garbage; do
+  trust_run "$m"
+  check "stub mode $m: non-zero exit, empty stdout, a message on stderr" \
+    bash -c '[[ "$1" != 0 && -z "$2" && "$3" == *codex-hook-trust* ]]' _ "$TRC" "$TOUT" "$TERR"
+done
+mkdir -p "$TEST_ROOT/py-only"; ln -sf "$(command -v python3)" "$TEST_ROOT/py-only/python3"
+trust_run ok "$TEST_ROOT/py-only"
+check "codex not on PATH: non-zero exit, empty stdout" bash -c '[[ "$1" != 0 && -z "$2" && "$3" == *"codex not found"* ]]' _ "$TRC" "$TOUT" "$TERR"
+# The documented headless usage stops instead of running `codex -c ""`.
+out="$(STUB_MODE=die PATH="$STUB:$PATH" bash -c 'trust="$(bash "$1" fablepowers@fablepowers)" || exit 1; echo "ran codex with: $trust"' _ "$TRUST_SH" 2>/dev/null)" && rc=0 || rc=$?
+check "documented usage: helper error stops before codex runs" test "$rc:$out" == "1:"
 
 echo
 if [[ "$FAILURES" -eq 0 ]]; then

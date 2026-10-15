@@ -3,7 +3,11 @@
 #
 # Prints a one-run Codex config override that trusts one plugin's hooks:
 #
-#   codex -c "$(scripts/codex-hook-trust.sh fablepowers@fablepowers)" exec ...
+#   trust="$(scripts/codex-hook-trust.sh fablepowers@fablepowers)" || exit 1
+#   codex -c "$trust" exec ...
+#
+# Check the exit status as above: on an error it prints nothing on stdout, so an
+# unchecked `codex -c "$(...)"` would run with an empty override (hooks untrusted).
 #
 # Codex runs a plugin's hooks only once each handler is trusted (interactively in
 # `/hooks`). For headless runs and tests this asks `codex app-server` for
@@ -14,7 +18,8 @@
 # handlers as listed right now (hooks.json entries), not the scripts they run.
 #
 # Defaults: plugin fablepowers@fablepowers, cwd $PWD. Needs codex and python3.
-# Exit 1 when the app-server fails or the plugin has no hooks listed.
+# Exit 1, with a message on stderr and nothing on stdout, when codex or python3
+# is missing, the app-server fails or the plugin has no hooks listed.
 set -euo pipefail
 plugin_id="${1:-fablepowers@fablepowers}"
 cwd="${2:-$PWD}"

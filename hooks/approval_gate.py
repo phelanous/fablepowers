@@ -45,7 +45,10 @@ logic above, unchanged. Same markers, states and rules:
       the whole patch. Patch lines are trimmed (whitespace, CR) before header
       matching, as Codex's own parser accepts indented headers. A patch the
       gate cannot parse is denied while pending (fail closed), else allowed and
-      logged.
+      logged; so is a header path holding a control character or one that
+      cannot be resolved, and such a path is denied always when it could name a
+      marker (`.fablepowers` and `pending`/`approved` in it), so it never masks
+      the other paths of the patch.
   PreToolUse collaborationspawn_agent | spawn_agent   while pending, allowed only
       for a reviewer: v2 task_name `fablepowers_reviewer` or
       `fablepowers_reviewer_*`; v1 message whose first line is
@@ -98,6 +101,9 @@ CODEX_COMMAND = re.compile(r"[ \t]*\$fablepowers:(approve|withdraw)(?:[ \t]+(\S+
 CODEX_CONFIG_DIRS = ("rules", "agents")
 CODEX_RECOVERY = ("If the user's approval does not register, the fablepowers hooks may be "
                   "untrusted: trust them in `/hooks`, or set `FABLEPOWERS_GATE=off` to turn the gate off.")
+# A header path holding one of these (C0/C1 controls, DEL) is not checked as a path:
+# it fails closed (denied while pending, and always when it looks like a marker).
+PATH_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 CODEX_HOW = ("type it as a message (or pick it from the `$` menu in the CLI); in the Codex app, "
              "type it as text")
 
@@ -592,6 +598,32 @@ def is_codex_config_path(path):
     return False
 
 
+def shown_path(p):
+    """A header path for a message or the log: control characters and anything
+    not ASCII shown as backslash escapes (a NUL or lone surrogate must not reach
+    the JSON output or the log file as itself)."""
+    out = []
+    for c in p:
+        if " " <= c <= "~":
+            out.append(c)
+        elif ord(c) <= 0xff:
+            out.append("\\x%02x" % ord(c))
+        else:
+            out.append(c.encode("ascii", "backslashreplace").decode("ascii"))
+    return "".join(out)
+
+
+def is_marker_like(p):
+    """For a header path the gate cannot resolve: True when it could name a marker,
+    as given or with its control characters removed, judged by substrings
+    (casefolded `.fablepowers` and `pending` or `approved`), so it errs on denying."""
+    for v in (p, PATH_CONTROL.sub("", p)):
+        v = v.casefold()
+        if ".fablepowers" in v and any(m in v for m in MARKER_NAMES):
+            return True
+    return False
+
+
 def codex_pre_apply_patch(top, payload, cwd):
     text = codex_patch_text(payload.get("tool_input"))
     ops = parse_patch(text) if text is not None else None
@@ -605,19 +637,38 @@ def codex_pre_apply_patch(top, payload, cwd):
         else:
             log(top, "Codex apply_patch without a parseable patch (%s); allowed" % why)
         return
-    paths = []
+    paths, unchecked = [], []
     for _, p in ops:
-        lexical = os.path.normpath(os.path.join(cwd, p))
-        paths.append((p, lexical, resolve(p, cwd)))
+        if PATH_CONTROL.search(p):
+            unchecked.append((p, "it holds a control character"))
+            continue
+        try:
+            paths.append((p, os.path.normpath(os.path.join(cwd, p)), resolve(p, cwd)))
+        except (ValueError, OSError, TypeError):
+            unchecked.append((p, "it cannot be resolved"))
+    marker_deny = ("Approval markers (.fablepowers/**/pending, .fablepowers/**/approved) "
+                   "are written only by the fablepowers approval gate on a user action; apply_patch may "
+                   "not create, change or delete them (`%s`). Ask the user to send `$fablepowers:approve` "
+                   "or `$fablepowers:withdraw`: %s. Do not retry this call. %s")
+    for p, _ in unchecked:
+        if is_marker_like(p):
+            deny(top, payload, marker_deny % (shown_path(p), CODEX_HOW, CODEX_RECOVERY))
+            return
     for p, lexical, real in paths:
         if is_marker_path(lexical) or is_marker_path(real):
-            deny(top, payload, "Approval markers (.fablepowers/**/pending, .fablepowers/**/approved) "
-                 "are written only by the fablepowers approval gate on a user action; apply_patch may "
-                 "not create, change or delete them (`%s`). Ask the user to send `$fablepowers:approve` "
-                 "or `$fablepowers:withdraw`: %s. Do not retry this call. %s" % (p, CODEX_HOW, CODEX_RECOVERY))
+            deny(top, payload, marker_deny % (p, CODEX_HOW, CODEX_RECOVERY))
             return
     pending = pending_designs(top)
     if not pending:
+        for p, why in unchecked:
+            log(top, "Codex apply_patch header path `%s` the gate cannot check (%s); allowed, nothing "
+                "pending" % (shown_path(p), why))
+        return
+    if unchecked:
+        p, why = unchecked[0]
+        deny(top, payload, codex_pending_reason(
+            pending, "this patch (the gate cannot check its path `%s`: %s, so it fails closed)"
+            % (shown_path(p), why)))
         return
     for p, lexical, real in paths:
         if is_codex_config_path(lexical) or is_codex_config_path(real):

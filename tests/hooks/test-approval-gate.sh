@@ -1053,6 +1053,49 @@ R="$TEST_ROOT/c3n"; new_repo "$R"
 check "no pending: patch with no file operation allowed" test "$(cpatch "$R" $'*** Begin Patch\n*** End Patch')" == allow
 check "  logged" grep -q 'Codex apply_patch without a parseable patch' "$R/.fablepowers/gate.log"
 
+echo "14b. Codex: header paths with control characters or that cannot be resolved"
+
+# cpatch_esc <repo> <patch> [cwd]: as cpatch, with @NUL@, @SOH@, @DEL@ and @SUR@ in
+# the patch sent as the JSON escapes \u0000, \u0001, \u007f and \ud800 (a lone
+# surrogate: no control character, but resolving it raises). Bash strings cannot
+# carry NUL, so the escapes are put into the JSON text.
+cpatch_esc() {
+  local input
+  input="$(payload codex-pre-apply_patch CWD="${3:-$1}" PATCH="$2")"
+  input="${input//@NUL@/\\u0000}"; input="${input//@SOH@/\\u0001}"
+  input="${input//@DEL@/\\u007f}"; input="${input//@SUR@/\\ud800}"
+  run_gate_json PreToolUse Write "$input"; note_deny; verdict
+}
+R="$TEST_ROOT/c3c"; new_repo "$R"
+# Before the fix, a NUL in any header path made resolution raise and the whole
+# patch fell through to the outer "internal error, allowed" (fail open).
+check "no pending: NUL path does not mask a marker in the same patch (denied)" \
+  test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: docs/plans/n@NUL@.md\n+n\n*** Add File: .fablepowers/k/approved\n+x')")" == deny
+check "no pending: unresolvable (surrogate) path does not mask a marker (denied)" \
+  test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: docs/plans/n@SUR@.md\n+n\n*** Add File: .fablepowers/k/approved\n+x')")" == deny
+for p in ".fablepowers/k/approved@NUL@" ".fablepowers/k/pend@SOH@ing" ".FablePowers/k/Approved@DEL@" ".fablepowers/k/approved@SUR@"; do
+  check "no pending: marker-like path '$p' denied" test "$(cpatch_esc "$R" "$(patch_of "*** Add File: $p"$'\n+x')")" == deny
+done
+check "no pending: control-character path not marker-like allowed" \
+  test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: src/a@NUL@.py\n+x')")" == allow
+check "no pending: control-character path under .fablepowers, no marker name, allowed" \
+  test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: .fablepowers/k/report@NUL@.md\n+x')")" == allow
+check "  logged as a path the gate cannot check" grep -q 'cannot check' "$R/.fablepowers/gate.log"
+check "  no internal error logged" bash -c '! grep -q "internal error" "$1"' _ "$R/.fablepowers/gate.log"
+ccreate "$R" docs/specs/ctl.md
+check "pending: allowed + NUL path + disallowed path denied" \
+  test "$(cpatch_esc "$R" "$(patch_of $'*** Add File: docs/plans/ok.md\n+ok\n*** Add File: docs/plans/n@NUL@.md\n+n\n*** Add File: src/evil.py\n+e')")" == deny
+for p in "docs/plans/a@NUL@.md" "docs/plans/a@SOH@.md" "docs/plans/a@DEL@.md" "docs/plans/a@SUR@.md"; do
+  check "pending: '$p' alone denied (fails closed)" test "$(cpatch_esc "$R" "$(patch_of "*** Add File: $p"$'\n+x')")" == deny
+done
+check "pending: tab inside a path (docs/plans/a<TAB>b.md) denied" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: docs/plans/a\tb.md\n+x')")" == deny
+cpatch_esc "$R" "$(patch_of $'*** Add File: docs/plans/a@NUL@.md\n+x')" >/dev/null
+check "  the reason shows the path escaped and says the gate fails closed" \
+  bash -c '[[ "$1" == *'\''docs/plans/a\x00.md'\''* && "$1" == *"fails closed"* && "$1" == *'\''$fablepowers:approve ctl'\''* ]]' _ "$(text_of)"
+check "pending: non-ASCII path inside the allowlist (docs/plans/é.md) still allowed" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: docs/plans/\xc3\xa9.md\n+x')")" == allow
+
 echo "15. Codex: config files while pending"
 
 R="$TEST_ROOT/c4"; new_repo "$R"

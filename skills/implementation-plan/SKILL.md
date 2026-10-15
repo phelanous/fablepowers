@@ -20,7 +20,7 @@ Past-session evidence: code-level plans made implementers transcriptionists and 
 - **Test obligations:** the observable behaviors that must have a test which fails when the behavior is broken (from the spec's "how we'll know it works")
 - Dependencies on other tasks
 
-**Do not include** full function bodies or verbatim code blocks — in any task. Code-level detail belongs only in the **dispatch prompt** of a `sonnet-strict` task (see `fablepowers:subagent-execution`), never in the plan document.
+**Do not include** full function bodies or verbatim code blocks — in any task. Code-level detail belongs only in the **dispatch prompt** of a `strict-implementer` task (see `fablepowers:subagent-execution`), never in the plan document.
 
 ## Task granularity
 
@@ -46,5 +46,5 @@ Before executing, dispatch **one `fablepowers:reviewer`** (fresh context) to rev
 **Spec:** docs/specs/<file>.md
 **Goal:** one sentence
 **Architecture:** 2–3 sentences
-**Implementer:** opus | sonnet-strict (default for tasks; a task may override with "Implementer: sonnet-strict")
+**Implementer:** implementer | strict-implementer (default for tasks; a task may override with "Implementer: strict-implementer"; older plans' `opus` / `sonnet-strict` mean the same seats)
 ```

@@ -50,4 +50,4 @@ Report: <path>
 
 The orchestrator reads the full report only when it needs to, so everything a reviewer or fixer would need belongs in the file, not the return. When the dispatch names no report path, return the full report instead.
 
-If the write to the named path is refused (the harness refuses subagent writes to generic basenames such as `report.md`), return the full report inline, as when no path is given, and say the write was refused. Do not route around the refusal through Bash.
+If the write to the named path is refused (a harness may refuse subagent writes to generic basenames such as `report.md`), return the full report inline, as when no path is given, and say the write was refused. Do not route around the refusal through a shell command.

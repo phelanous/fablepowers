@@ -9,7 +9,7 @@ description: Use when feature work is complete and before any merge or PR - RIGI
 
 ## The reviewer
 
-Dispatch **one `fablepowers:reviewer`** (Opus, fresh context — never yourself, never an agent that implemented anything in this feature). It inherits nothing from your session.
+Dispatch **one `fablepowers:reviewer`** (frontier tier, fresh context — never yourself, never an agent that implemented anything in this feature). It inherits nothing from your session.
 
 First build the review package. `<base-branch>` is the branch this work merges into — for a stacked branch that's the parent feature branch, not `main`:
 
@@ -26,7 +26,7 @@ Give the reviewer:
 - The spec and plan file paths
 - The review-package path, plus the repo path
 - How to run tests and how to run the app/feature
-- The report path: `<workspace>/reports/review-integration.md` (re-reviews: `reports/review-rereview-<k>.md`) — these names exactly; the harness refuses subagent writes to generic names such as `report.md`
+- The report path: `<workspace>/reports/review-integration.md` (re-reviews: `reports/review-rereview-<k>.md`) — these names exactly; a harness may refuse subagent writes to generic names such as `report.md` (see the harness reference)
 - The mandate below
 
 When the reviewer returns, append its round to the ledger `<workspace>/progress.md` before acting on it: `review integration | <head7> | <verdict> | reports/review-integration.md`, or `review rereview-<k> | …` for a re-review. A resumed session reads these lines to know which round ran last and how much of the cap is used.

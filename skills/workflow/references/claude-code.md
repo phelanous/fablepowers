@@ -65,9 +65,7 @@ Claude Code refuses a subagent's write to a file whose basename is a generic rep
 
 Transcripts are JSONL files under `~/.claude/projects/<cwd>/`, where `<cwd>` is the session's working directory with every `/` and `.` replaced by `-`. The main session is `<session-id>.jsonl`; subagents dispatched from it are `<session-id>/subagents/agent-<id>.jsonl` (with a `.meta.json` beside each). Agents run with worktree isolation start with `cwd` under `<repo>/.claude/worktrees/agent-<id>`.
 
-## Other harnesses (planned)
+## Other harnesses
 
-Not supported yet; defaults recorded for the phases that add them:
-
-- **Codex (0.5.0):** implementer Sol, strict implementer Terra, reviewer Sol. Exact model ids are confirmed in 0.5.0, and a per-user override is required, since not every account has Sol.
-- **OpenCode (0.6.0)** and **Pi (0.7.0):** each gets its own design and reference file.
+- **Codex (0.5.0):** supported; see `codex.md` beside this file (seats Sol / Terra / Sol by default, overridable per user in `models.toml`).
+- **OpenCode (0.6.0)** and **Pi (0.7.0):** planned; each gets its own design and reference file.

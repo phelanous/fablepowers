@@ -1,0 +1,25 @@
+# fablepowers: let the session and its seats stage, commit and create worktrees
+# inside Codex's workspace-write sandbox, where .git is read-only and every git
+# write otherwise asks for approval (or fails in `codex exec`).
+#
+# Opt-in. Copy this file to <project>/.codex/rules/ (the project must be
+# trusted) or to ~/.codex/rules/. Only plain `git add`, `git commit` and
+# `git worktree add` invocations match: `git -c ... commit`, `git push` and
+# every other git command keep Codex's normal approval.
+# Check: codex execpolicy check -r fablepowers.rules git commit -m x
+
+prefix_rule(
+    pattern = ["git", ["add", "commit"]],
+    decision = "allow",
+    justification = "fablepowers agents stage and commit their own work",
+    match = [["git", "add", "-A"], ["git", "commit", "-m", "x"]],
+    not_match = [["git", "push"], ["git", "-c", "user.name=x", "commit", "-m", "x"]],
+)
+
+prefix_rule(
+    pattern = ["git", "worktree", "add"],
+    decision = "allow",
+    justification = "fablepowers creates isolated worktrees under the project root",
+    match = [["git", "worktree", "add", "../wt", "-b", "feat"]],
+    not_match = [["git", "worktree", "remove", "../wt"]],
+)

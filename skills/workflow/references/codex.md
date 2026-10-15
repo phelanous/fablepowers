@@ -71,13 +71,13 @@ The first line is how the approval gate recognises a v1 reviewer (v2 reviewers b
 
 ## Bootstrap
 
-`hooks/hooks.json` registers the same SessionStart hook as on Claude Code (matcher `startup|clear|compact`). The hook tells Codex from Claude Code by the payload: Codex's SessionStart carries `permission_mode` and `model`, else its `transcript_path` is a `rollout-*.jsonl`, else `PLUGIN_ROOT` is set and equals `CLAUDE_PLUGIN_ROOT`; Claude Code has none of these. On Codex it injects a short preamble (harness, a pointer to this file, the plugin root), the seat table with any `models.toml` warnings, and the workflow map, at most 8,000 characters. A resumed session (`source: "resume"`) is not re-injected; its restored history already holds the earlier injection. The hooks run only once trusted (see [Hook trust](#hook-trust)).
+`hooks/hooks.json` registers the same SessionStart hook as on Claude Code (matcher `startup|clear|compact`). The hook tells Codex from Claude Code by the payload's `transcript_path`: Codex's is a `rollout-*.jsonl` under `~/.codex/sessions/` (or `$CODEX_HOME/sessions/`), Claude Code's a `<uuid>.jsonl` under `~/.claude/projects/`. Failing that, `PLUGIN_ROOT` set and equal to `CLAUDE_PLUGIN_ROOT` means Codex (Claude Code sets only `CLAUDE_PLUGIN_ROOT`). The `model` and `permission_mode` keys decide nothing: Codex's SessionStart carries both, but Claude Code's compact SessionStart carries `model` too, and its hook input can carry `permission_mode`. On Codex it injects a short preamble (harness, a pointer to this file, the plugin root), the seat table with any `models.toml` warnings, and the workflow map, at most 8,000 characters. A resumed session (`source: "resume"`) is not re-injected; its restored history already holds the earlier injection. The hooks run only once trusted (see [Hook trust](#hook-trust)).
 
 ## Approval mechanism
 
 Same markers, states and rules as on Claude Code (`.fablepowers/<key>/pending` and `approved`, written only by the hook; see `claude-code.md`), enforced by the same `hooks/approval-gate` and `hooks/approval_gate.py`, which take a Codex branch for Codex's tool names and for a `UserPromptSubmit` with `turn_id`. Python 3.8+ is needed, as on Claude Code.
 
-**Pending.** A PostToolUse `apply_patch` from the main session (no `agent_id`) whose `*** Add File:` creates `docs/specs/<name>.md`, confirmed by the tool response's `A <path>` line. Patch paths are relative to the session's working directory, not the repository root: from a subdirectory, `docs/specs/x.md` lands in `<subdir>/docs/specs/` and is not gated, so give the path from where the session runs (e.g. `../docs/specs/x.md`). Unlike Claude Code, an `Add File` over an existing spec with no markers pends it again; an approved or pending key is left alone. Write the spec with `apply_patch`, never through the shell.
+**Pending.** A PostToolUse `apply_patch` from the main session (no `agent_id`) whose `*** Add File:` creates `docs/specs/<name>.md`, confirmed by the tool response's `A <path>` line, or whose `*** Update File:` with `*** Move to:` moves a file to `docs/specs/<name>.md`, confirmed by `M <destination>`. Patch paths are relative to the session's working directory, not the repository root: from a subdirectory, `docs/specs/x.md` lands in `<subdir>/docs/specs/` and is not gated, so give the path from where the session runs (e.g. `../docs/specs/x.md`). Unlike Claude Code, an `Add File` over an existing spec with no markers pends it again; an approved or pending key is left alone. Write the spec with `apply_patch`, never through the shell.
 
 **What it blocks** (PreToolUse, `permissionDecision: "deny"`):
 
@@ -85,11 +85,12 @@ Same markers, states and rules as on Claude Code (`.fablepowers/<key>/pending` a
 - While any design is pending: an `apply_patch` with any Add, Update, Delete or Move path inside the repository outside `docs/specs/`, `docs/plans/` and `.fablepowers/`. One such path denies the whole patch. Paths outside the repository stay allowed.
 - While any design is pending: an `apply_patch` touching Codex configuration anywhere: `.codex/config.toml`, `.codex/rules/`, `.codex/agents/`, `.codex/hooks*`, and `$CODEX_HOME/config.toml`.
 - Always: an `apply_patch` creating, changing, deleting or moving a marker, names compared as on Claude Code (case-insensitive, NTFS variants).
-- Fails closed: a patch the gate cannot parse, or a header path holding a control character or one that cannot be resolved, is denied while a design is pending, and always when it could name a marker.
+- Paths as Codex reads them: the patch is split into lines on `\n` only, as Codex splits it, and a header path is everything after `: ` to the end of the trimmed line, so `*** Add File:   x` names `  x`, not `x`.
+- Fails closed: a patch the gate cannot parse, or a header path holding a control character (C0, DEL, C1, U+2028 or U+2029, which includes `\v`, `\f` and `\x1c`–`\x1e`) or one that cannot be resolved, is denied while a design is pending, and always when it could name a marker, judged by its text with and without the control characters and by where it resolves (a symlink into `.fablepowers/`).
 
 Codex shows a deny reason to the model, which must relay it. A hook's `systemMessage` and a block reason never reach the model or a `codex exec` user, so everything the gate says goes in `additionalContext` or the deny reason.
 
-**Approving.** Only the user's own message approves: `$fablepowers:approve [key]` as the whole message (the key is the spec's file name, with or without `.md`; one pending design needs none). The user types it, or completes it from the `$` menu in the CLI, which inserts the same text; in the Codex app they type it as text, since a skill picked from the app's menu reaches the hook as an empty prompt. Trailing words, a second argument, text before it, the `/fablepowers:approve` form, a "yes" or "Approve" in chat: none of these approve. Subagent prompts (with `agent_id`) never approve. With several designs pending and no key, or an unknown key, the hook records nothing and its context lists the keys; tell the user and ask them to resend with one. The answer arrives as context on the user's turn and is recorded with `via: "command"`.
+**Approving.** Only the user's own message approves: `$fablepowers:approve [key]` as the whole message (the key is the spec's file name, with or without `.md`; one pending design needs none). The user types it, or completes it from the `$` menu in the CLI, which inserts the same text; in the Codex app they type it as text, since a skill picked from the app's menu reaches the hook as an empty prompt. Blanks around it and one trailing newline are ignored; trailing words, a second argument, text before it, the `/fablepowers:approve` form, a "yes" or "Approve" in chat: none of these approve. Subagent prompts (with `agent_id`) never approve. With several designs pending and no key, or an unknown key, the hook records nothing and its context lists the keys; tell the user and ask them to resend with one. The answer arrives as context on the user's turn and is recorded with `via: "command"`.
 
 **Withdrawing.** `$fablepowers:withdraw [key]`, same rules; the spec file stays.
 
@@ -124,7 +125,14 @@ Under `workspace-write`, `.git` is read-only, so every `git add` and `git commit
 
 Codex runs a plugin's hooks only after the user trusts them in `/hooks`. Trust is kept per handler, keyed by position (`<plugin>@<marketplace>:hooks/hooks.json:<event>:<group>:<handler>`) with a hash of the handler's entry. An update that changes `hooks.json` needs trusting again: 0.5.0 appends three handlers (the two spawn tools and `UserPromptSubmit`), so a 0.4.0 install keeps its eight trusted handlers and the user trusts the three new ones. The hash covers the `hooks.json` entry, not the script it runs. Until they are trusted they do not run: no workflow map, no gate.
 
-For headless runs, `scripts/codex-hook-trust.sh [plugin@marketplace] [cwd]` prints a one-run override, `codex -c "$(scripts/codex-hook-trust.sh)" exec …`; it reads `hooks/list` from `codex app-server` and never writes config.
+For headless runs, `scripts/codex-hook-trust.sh [plugin@marketplace] [cwd]` prints a one-run override; it reads `hooks/list` from `codex app-server` and never writes config. On any error (no `codex`, app-server failure, plugin not listed) it prints nothing on stdout, explains on stderr and exits 1, so check its status before running Codex; `codex -c "" exec` would run with the hooks untrusted:
+
+```
+trust="$(scripts/codex-hook-trust.sh fablepowers@fablepowers)" || exit 1
+codex -c "$trust" exec …
+```
+
+The project must be trusted in `~/.codex/config.toml` too (`[projects."<path>"] trust_level = "trusted"`) for its `.codex/rules/` to apply. Codex writes that entry itself on the first trusted session there. A `-c projects."<path>".trust_level="trusted"` override works for a fresh `codex exec` but is not honoured for project rules on `codex exec resume`: a resumed run without the persisted entry gets no project rules, so `git commit` fails on the read-only `.git`.
 
 ## Accepted gaps
 
@@ -135,7 +143,7 @@ The gate stops a session rolling past approval; it is not a sandbox. Not covered
 - **Re-tasking an allowed agent** through follow-up or send-message tools while a design is pending.
 - **Codex home and the plugin cache.** The config guard covers only the config paths listed above, not all of `~/.codex` (or `$CODEX_HOME`) or the installed plugin under `~/.codex/plugins/cache/`. An `apply_patch` to the gate's own scripts there is not blocked, and Codex's hook trust does not notice it (the hash covers `hooks.json` entries only). `$CODEX_HOME/rules`, `agents` and `hooks*` are guarded only when that directory is named `.codex`.
 - **App skill items.** An approve picked from the Codex app's skill menu is invisible to the hook; it must be typed as text.
-- **Project trust.** Codex records `[projects."<path>"] trust_level = "trusted"` in `~/.codex/config.toml` on its own during normal sessions; the rules file relies on that trust.
+- **Project trust.** Codex records `[projects."<path>"] trust_level = "trusted"` in `~/.codex/config.toml` on its own on the first trusted session in a project; the rules file in `.codex/rules/` relies on that entry (a `-c` trust override is not honoured for project rules on `exec resume`; see [Hook trust](#hook-trust)).
 
 ## Session logs
 

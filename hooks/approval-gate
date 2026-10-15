@@ -21,9 +21,12 @@
 # bash pattern matches on the raw payload. Once per session means a marker
 # file ${TMPDIR:-/tmp}/fablepowers-gate-warned-<uid>-<session_id>, created with
 # noclobber; a payload with no session_id warns on every qualifying call.
-# Codex: a PostToolUse apply_patch whose patch has an `*** Add File:` of a
-# docs/specs/*.md, and a UserPromptSubmit carrying turn_id whose prompt holds
-# `$fablepowers:`, are gate events too.
+# Codex: a PostToolUse apply_patch whose patch has an `*** Add File:` or a
+# `*** Move to:` of a docs/specs/*.md, and a UserPromptSubmit carrying turn_id
+# whose prompt holds `$fablepowers:`, are gate events too. A systemMessage
+# reaches neither the model nor a `codex exec` user, so on those two Codex
+# events the warning also goes out as hookSpecificOutput.additionalContext
+# (the model relays it).
 #
 # Fast path: run with the argument `ups` (the UserPromptSubmit group), the
 # launcher reads the payload itself and exits 0 before looking for python unless
@@ -110,12 +113,13 @@ elif [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"PostToolUse\" \
     esac
 elif [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"PostToolUse\" \
         && "$payload" =~ \"tool_name\"$ws:$ws\"apply_patch\" ]]; then
-    # Every `*** Add File: <path>` in the JSON-encoded patch (a path ends at the
-    # `\n` escape or the closing quote); trailing blanks trimmed.
-    re_add='\*\*\*[[:blank:]]*Add File:[[:blank:]]*([^\"]*)'
+    # Every `*** Add File: <path>` and `*** Move to: <path>` in the JSON-encoded
+    # patch (a path ends at the `\n` escape or the closing quote); trailing
+    # blanks trimmed.
+    re_add='\*\*\*[[:blank:]]*(Add File|Move to):[[:blank:]]*([^\"]*)'
     rest="$payload"
     while [[ "$rest" =~ $re_add ]]; do
-        p="${BASH_REMATCH[1]}"
+        p="${BASH_REMATCH[2]}"
         rest="${rest#*"${BASH_REMATCH[0]}"}"
         p="${p%"${p##*[![:blank:]]}"}"
         case "$p" in
@@ -136,5 +140,17 @@ if [[ -n "$sid" ]]; then
     ( set -C; : > "$marker" ) 2>/dev/null || true
 fi
 
-printf '%s\n' "$warning"
+codex_event=""
+if [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"PostToolUse\" \
+        && "$payload" =~ \"tool_name\"$ws:$ws\"apply_patch\" ]]; then
+    codex_event=PostToolUse
+elif [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"UserPromptSubmit\" \
+        && "$payload" =~ \"turn_id\"$ws: ]]; then
+    codex_event=UserPromptSubmit
+fi
+if [[ -n "$codex_event" ]]; then
+    printf '%s\n' '{"systemMessage":"fablepowers approval gate disabled: python3 not found","hookSpecificOutput":{"hookEventName":"'"$codex_event"'","additionalContext":"fablepowers approval gate disabled: python3 not found. The design-approval gate is not running in this session: no design is marked pending and `$fablepowers:approve` records nothing. Tell the user this now, so they can install Python 3.8+ (or set FABLEPOWERS_PYTHON) and restart the session."}}'
+else
+    printf '%s\n' "$warning"
+fi
 exit 0

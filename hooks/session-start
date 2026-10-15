@@ -78,22 +78,27 @@ if [[ ! -t 0 ]]; then
     IFS= read -r -t 1 -d '' payload 2>/dev/null || true
 fi
 
-# Codex iff, in order: the payload has a "permission_mode" or "model" key
-# (Codex's SessionStart has both, Claude Code's neither); else the
-# transcript_path basename is rollout-*.jsonl (Codex's session logs); else
-# PLUGIN_ROOT is set and equals CLAUDE_PLUGIN_ROOT (Codex sets both, Claude Code
-# only CLAUDE_PLUGIN_ROOT). Otherwise Claude Code. Keys are matched with their
-# closing quote, so an escaped \"model\" inside a string value does not count.
+# Codex iff, in order: the transcript_path basename is rollout-*.jsonl (Codex's
+# session logs; Claude Code's are <uuid>.jsonl); else transcript_path lies under
+# a .codex/sessions/ directory or $CODEX_HOME/sessions/; else PLUGIN_ROOT is set
+# and equals CLAUDE_PLUGIN_ROOT (Codex sets both, Claude Code only
+# CLAUDE_PLUGIN_ROOT). Otherwise Claude Code. The "model" and "permission_mode"
+# keys are not used: Claude Code sends "model" on compact (captured live, Claude
+# Code 2.1.299) and its shared hook-input builder carries permission_mode.
 detect_harness() {
-    local re_key='"(permission_mode|model)"[[:space:]]*:'
     local re_tp='"transcript_path"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
-    local tp
+    local tp home
     harness="claude-code"
-    if [[ "$payload" =~ $re_key ]]; then
-        harness="codex"
-    elif [[ "$payload" =~ $re_tp ]]; then
+    if [[ "$payload" =~ $re_tp ]]; then
         tp="${BASH_REMATCH[1]}"
+        tp="${tp//\\\//\/}"
+        home="${CODEX_HOME:-}"
+        home="${home%/}"
         if [[ "${tp##*/}" == rollout-*.jsonl ]]; then
+            harness="codex"
+        elif [[ "$tp" == */.codex/sessions/* ]]; then
+            harness="codex"
+        elif [[ -n "$home" && "$tp" == "$home"/sessions/* ]]; then
             harness="codex"
         fi
     fi

@@ -24,15 +24,29 @@ here came out of a log audit — see [`docs/rationale.md`](docs/rationale.md).
 Nothing else to configure. A SessionStart hook loads the workflow map into every
 new session, so the model knows the entry point without any CLAUDE.md edits.
 
+**Requirements:** Claude Code 2.1.299 or later (the version the approval gate is
+tested with; the approve and withdraw commands rely on its `UserPromptExpansion`
+hook event), and Python 3.8+ for the approval gate. Without a usable `python3`
+the gate turns itself off with a visible warning and everything else still works.
+
 ## How it works
 
-Ten skills, invoked through the Skill tool as `fablepowers:<name>`. The three
-agents are dispatched with the Agent tool as `subagent_type: "fablepowers:<agent>"`.
+Ten workflow skills, invoked through the Skill tool as `fablepowers:<name>`, plus
+two user-only commands, `/fablepowers:approve` and `/fablepowers:withdraw` (see
+[The approval gate](#the-approval-gate)). The three agents are dispatched with the
+Agent tool as `subagent_type: "fablepowers:<agent>"`.
+
+The skills and agent bodies are written in harness-neutral terms ("dispatch the
+implementer seat", "ask the user a two-option question"). What those resolve to
+on Claude Code — tools, models, hooks, the approval mechanism, where session
+logs live — is in
+[`skills/workflow/references/claude-code.md`](skills/workflow/references/claude-code.md).
+Other harnesses get a sibling reference when their support lands.
 
 | | |
 |---|---|
 | `fablepowers:workflow` | The map. Start substantive dev work here; it routes to everything below. |
-| `fablepowers:design-spec` | Turn an idea into a written design through dialogue, scaled to the size of the work. Asks which platform, language and library choices the user wants to own. Substantial specs get a **builder check** — a fresh reviewer lists what a builder would still have to guess, and the build-changing questions go to the user in one round. Ends with a phone-readable design brief and a two-option approval ask — the user's explicit yes, never inferred from an answer to a design question. |
+| `fablepowers:design-spec` | Turn an idea into a written design through dialogue, scaled to the size of the work. Asks which platform, language and library choices the user wants to own. Substantial specs get a **builder check** — a fresh reviewer lists what a builder would still have to guess, and the build-changing questions go to the user in one round. Ends with a phone-readable design brief and a two-option approval ask — the user's explicit yes, never inferred from an answer to a design question, and enforced by the approval gate. |
 | `fablepowers:implementation-plan` | Turn the approved spec into an interface-level plan: contracts, invariants, test obligations per task. No code in the plan. A **Review Focus** section names up to five spec-implied inputs no task tests yet, each assigned to the task that owns the code; plan review checks it. |
 | `fablepowers:subagent-execution` | Dispatch one fresh implementer agent per plan task. The orchestrator coordinates and spot-checks; it does not implement. Dispatches name the plan path and task heading instead of pasting the task; agents write full reports to files and return at most 15 lines; a progress ledger lets a resumed session skip finished tasks. |
 | `fablepowers:behavioral-testing` | Every spec behavior gets a test, and you break the behavior to watch that test fail. Ordering is free; the mutation check is not. |
@@ -45,6 +59,42 @@ agents are dispatched with the Agent tool as `subagent_type: "fablepowers:<agent
 The approval ask is preceded by a short plain-language brief — what changes,
 the decisions made, the risk, and when the spec is worth opening — so it can be
 judged from a phone.
+
+### The approval gate
+
+The design-approval checkpoint is enforced by a hook, not just asked for in the
+skill text. When the session creates a new spec file under `docs/specs/` (small
+designs write a short one too), the hook marks that design **pending**. While
+any design is pending, dispatching `fablepowers:implementer` or
+`fablepowers:strict-implementer` and editing files outside `docs/specs/`,
+`docs/plans/` and `.fablepowers/` are blocked, and the block message tells the
+model to stop and ask the user. Reviewer dispatch, spec and plan edits, and
+files outside the repository stay open.
+
+Only a user action lifts it:
+
+- **Answer Approve** to the design question (exactly the options Approve and
+  Changes needed, with one design pending), or
+- **Run `/fablepowers:approve`** — with no argument when one design is pending,
+  or `/fablepowers:approve <key>` (the spec's file name, with or without `.md`)
+  when several are. This is the path in headless runs.
+
+Changes needed leaves the design pending. `/fablepowers:withdraw [key]` drops an
+abandoned design (the spec file stays). Both commands are user-only: the model
+cannot invoke them. Markers live in `.fablepowers/<key>/` (`pending`,
+`approved`), are written only by the hook, and the model's edit tools may not
+touch them. Once a design is approved the gate is quiet for it, so spec and plan
+amendments during implementation are never blocked. Repositories with no pending
+design (and specs kept outside `docs/specs/`) are never gated.
+
+`FABLEPOWERS_GATE=off` in the environment turns blocking off (for emergencies
+or CI); what would have been blocked is logged to `.fablepowers/gate.log`.
+
+The gate stops a session that rolls past approval; it is not a sandbox. It
+watches the edit tools and the agent dispatch, not shell commands, so a model
+writing through the shell could still forge or delete a marker or install a
+settings hook that answers the question for the user. Details:
+[`skills/workflow/references/claude-code.md`](skills/workflow/references/claude-code.md#approval-mechanism).
 
 The usual path: `workflow` → `design-spec` (approval) → `implementation-plan`
 (plan review) → `subagent-execution` (implementers, one per task) →
@@ -70,7 +120,8 @@ inherited model.
 ### Handoff files
 
 Execution and review hand work off through files in a per-plan workspace,
-`.fablepowers/<plan-basename>/` at the top level of the worktree doing the work:
+`.fablepowers/<plan-basename>/` at the top level of the worktree doing the work
+(the approval gate's markers share the directory, keyed on the spec name):
 `progress.md` (the orchestrator's ledger: one line per checked task and per
 integration review and fix round, so a resumed session knows what ran),
 `reports/` (implementer, reviewer and `integration-fix<k>` reports) and
@@ -86,7 +137,7 @@ in place after the feature and is safe to delete once the branch is merged.
 | Skill | Replaces | What changed |
 |---|---|---|
 | `workflow` | using-superpowers | A map plus the philosophy and the gates. No "1% rule", no mandatory-invocation preamble. Adds the who-does-what table above. |
-| `design-spec` | brainstorming | Same dialogue, tiered by size (user-visible behavior is never trivial). No HARD-GATE theater; instead one blocking user checkpoint, and the approval ask is preceded by a design brief and offers only Approve or Changes needed. |
+| `design-spec` | brainstorming | Same dialogue, tiered by size (user-visible behavior is never trivial). No HARD-GATE theater; instead one blocking user checkpoint, enforced by a hook rather than by wording, and the approval ask is preceded by a design brief and offers only Approve or Changes needed. |
 | `implementation-plan` | writing-plans | Interface level — contracts, invariants, test obligations, PR-sized tasks — and **no code in the plan**. Adds an up-front plan review. The header names the implementing agent, not a "tier". |
 | `subagent-execution` | subagent-driven-development, executing-plans | Fresh implementer per task kept. Per-task spec review only for the strict tier. Every dispatch names an agent type; the orchestrator never implements a plan task. |
 | `behavioral-testing` | test-driven-development | TDD-as-ritual replaced by a rigid outcome plus a mutation check. Ordering free for frontier models; strict red-green retained for weak subagents and for bug fixes, where the failing test is the reproduction. |
@@ -111,6 +162,7 @@ request as consent.
 bash tests/systematic-debugging/test-find-polluter.sh   # vendored find-polluter.sh
 bash tests/integration-review/test-review-package.sh    # workspace + review-package script
 bash tests/hooks/test-session-start.sh                  # SessionStart hook, incl. with a broken PATH
+bash tests/hooks/test-approval-gate.sh                  # approval gate hook, launcher and hooks.json wiring
 ```
 
 ## Measuring it

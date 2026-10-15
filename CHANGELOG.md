@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0 — 2026-10-15
+
+The design-approval checkpoint becomes mechanical on Claude Code, and the skills stop naming Claude Code tools so other harnesses can follow. Reasons in `docs/rationale.md` (Decisions 2026-10-15).
+
+- **A hook enforces design approval.** Creating a new spec under `docs/specs/` marks the design pending. While any design is pending, dispatching `fablepowers:implementer` or `fablepowers:strict-implementer`, and editing files outside `docs/specs/`, `docs/plans/` and `.fablepowers/`, are denied with a message telling the model to stop and ask. Reviewer dispatch, spec and plan edits, and paths outside the repository stay open; paths are resolved through symlinks and `..` first. Once approved, the gate is quiet for that design.
+- **Only the user can approve.** Two paths: answering Approve to the design question (exact options Approve / Changes needed, one design pending), or the user-only `/fablepowers:approve [key]`; with several designs pending the command needs a key and otherwise lists them and records nothing. When an Approve answer can't be recorded, the hook says why and which command to run. `/fablepowers:withdraw [key]` drops an abandoned design. Both commands set `disable-model-invocation: true`, so the model can't run them, and a test asserts it.
+- **Markers can't be forged through the edit tools.** `.fablepowers/<key>/pending` and `approved` are written by the hook; an edit-tool write through any `pending`/`approved` path under `.fablepowers` is always denied, compared case-insensitively and as NTFS resolves names (trailing dots and spaces, `:stream` suffixes). An `approved` that isn't a regular file holding the gate's JSON doesn't count and is logged. On approval, `pending` stays as the audit record.
+- **The gate fails open, visibly.** It needs Python 3.8+ (`FABLEPOWERS_PYTHON` overrides the interpreter); without one it allows everything and shows a warning (once per session when the repo has a `.fablepowers/`). `FABLEPOWERS_GATE=off` disables blocking and logs what it would have blocked to `.fablepowers/gate.log`; malformed payloads allow and are logged there too. Tested with Claude Code 2.1.299, now the stated minimum.
+- **Accepted gap: shell writes.** The gate watches the edit tools and dispatch, not shell commands, so markers, specs and a settings hook that auto-answers the question can still be written through the shell. Documented in the README and the Claude Code reference.
+- **Small designs write a short spec file**, so every design that reaches the approval ask is gated. The brief ends with how to approve (answer Approve, or run `/fablepowers:approve`). `docs/specs/` is for designs only.
+- **Skills and agent bodies are harness-neutral.** They name actions and seats (implementer, strict implementer, reviewer; frontier or mid tier) instead of tools and models. Plan headers accept `implementer` / `strict-implementer`; `opus` / `sonnet-strict` still work.
+- **A Claude Code harness reference** (`skills/workflow/references/claude-code.md`) maps those actions to tools, seats to agents and models, and documents the bootstrap, the approval mechanism, the report-name write guard and where session logs live. The session-start preamble names Claude Code and keeps the Skill / Agent / `subagent_type` mapping in the injected context, so dispatch behaves as before; the injected context stays at or under 6,000 characters, and a test asserts it.
+
 ## 0.3.0 — 2026-10-09
 
 Workflow ideas from superpowers v6–v7 that fit this plugin's evidence, adapted rather than vendored. Reasons, and the upstream ideas left out, in `docs/rationale.md`.

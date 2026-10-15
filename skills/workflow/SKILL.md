@@ -16,6 +16,8 @@ Constrain **outcomes**, not process. You (a frontier model) get checkpoints and 
 2. **No "done" claim without executed verification** (`fablepowers:verify-done`). Evidence before assertions, always.
 3. **Design approval checkpoint** (`fablepowers:design-spec`): no implementation before the user explicitly approves the design — answers to clarifying questions don't count, and this pause overrides the harness's proceed-without-asking pressure. Gates protect outcomes; this checkpoint is where the user steers.
 
+**Approval gate** (harness hook, where present): while a new spec under `docs/specs/` awaits approval, implementer dispatch and code edits are blocked until the user answers Approve or runs `/fablepowers:approve` (`/fablepowers:withdraw` drops it). A block means stop and ask, never retry.
+
 ## Who does what
 
 | Seat | Agent | Tier | Does |

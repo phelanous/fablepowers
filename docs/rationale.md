@@ -222,3 +222,77 @@ Also deferred, out of this release's scope: the controller as a nested subagent,
 1. **Main-loop cache cost** (writes+reads vs output) per execution session — the reason for file handoff and short returns. It should fall relative to the $1,280 vs $574 split.
 2. **Re-dispatch count after compaction** — committed tasks dispatched again. It should be zero where a ledger exists.
 3. **Builder-check yield** — build-changing questions per substantial spec, and whether the answers changed the spec. If it rarely finds one, it is ceremony; drop it.
+
+## Decisions (2026-10-15): the approval gate and harness-neutral wording
+
+### Why a mechanical gate
+
+The design-approval checkpoint has been prompt-level since the 2026-07-31
+amendment, and that amendment is the evidence against prompt-level checkpoints:
+soft steps lose to the harness's proceed-without-asking pressure, and wording
+alone held in 17 of 19 sessions in the next audit, not 19 of 19. The 2026-10-14
+multi-harness spike (`docs/specs/2026-10-14-multi-harness-spike.md`) added that
+a hook gate is the only approval mechanism that holds on Codex, OpenCode and Pi,
+including non-interactive runs: Codex's Plan mode asks but lets edits through,
+OpenCode's question tool is cancelled in `run`, and Pi has no blocking question
+in print mode. A hook that denies implementer dispatch and code edits while a
+design is pending works the same way on every harness that has pre-tool hooks.
+
+A short Claude Code spike (2.1.299, 2026-10-15) settled what the gate keys on,
+each point observed by execution:
+
+- **The question's answer** is at PostToolUse `tool_response.answers[<question>]`.
+  The model can put `answers` in its own call, but Claude Code strips them and
+  still asks the user, also under bypassPermissions — so the question path needs
+  no pre-tool check against self-answering. A PreToolUse hook that returns
+  `updatedInput.answers`, though, answers it with no user involved, and the
+  result looks exactly like a user's answer. That is the accepted gap below.
+- **The approve command** keys on `UserPromptExpansion`, not `UserPromptSubmit`.
+  A scheduled wakeup delivers its text through `UserPromptSubmit` verbatim, so a
+  model could schedule `/fablepowers:approve` for itself. For a skill without
+  `disable-model-invocation`, a wakeup fires `UserPromptExpansion` too, with a
+  payload identical to a typed command. With `disable-model-invocation: true` the
+  model's own invocation is refused before any hook runs, and the wakeup's text
+  is never expanded. That one frontmatter value is what makes the command
+  user-only; a test asserts it.
+- **A PreToolUse deny holds** in bypassPermissions, acceptEdits and auto modes.
+  Without `hookEventName` in the JSON, Claude Code ignores the deny, so the exact
+  output shape is tested.
+- **Worktree-isolated subagents** run with their `cwd` in the agent worktree,
+  where the gitignored markers are absent; the gate acts at the parent's
+  dispatch, which is where it is needed.
+
+### What was trimmed
+
+The builder check suggested edge-case protections; at the approval ask the user
+chose the core only (stop a session rolling past approval, plus the cheap
+measures against self-approval). Out: re-pending a design when its spec is
+rewritten, looking up markers in the main checkout from a linked worktree,
+restricting which agent types may run, policing shell commands, and enforcing
+the recorded spec hash. The accepted gap that follows: shell writes can forge or
+delete markers, write specs without pending them, or install the settings hook
+that answers the question. The gate is a guard against momentum, not a sandbox.
+A security review after the first build closed the cheap holes in the edit-tool
+path: writes through marker-named directories, case variants, and NTFS name
+variants (trailing dots and spaces, `:stream`) are denied, and an `approved`
+marker counts only if it is a regular file holding the gate's JSON.
+
+### Harness-neutral wording
+
+Skills and agent bodies now name actions and seats; the Claude Code tools,
+models and mechanisms live in `skills/workflow/references/claude-code.md`. The
+injected session-start preamble keeps the Skill / Agent / `subagent_type`
+mapping: moving dispatch instructions out of injected context could change
+dispatch behaviour, the defect the pinned-model agents exist to prevent. Defaults
+recorded for later phases: Claude Code opus / sonnet / opus; Codex Sol / Terra /
+Sol, with a per-user override required, since the spike account had no Sol
+model. OpenCode (0.6.0) and Pi (0.7.0) each get their own design.
+
+### What to watch next audit
+
+1. **Gate denials per design session**, and whether the model stops and asks
+   after one or retries. Retries mean the deny text needs work.
+2. **Approvals by path** (`via` in the `approved` markers): question vs command.
+3. **Stray pending designs** (withdrawn, or still pending at session end), which
+   would mean `docs/specs/` is being used for non-design notes.
+

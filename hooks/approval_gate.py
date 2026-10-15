@@ -24,9 +24,10 @@ Events (see hooks/hooks.json for the matchers):
   UserPromptExpansion fablepowers:approve|withdraw    user commands
 
 Edit-tool writes through any path with a marker-named component under a
-`.fablepowers` component (case-insensitive) are denied. Shell (Bash) writes to
-markers are not intercepted: an accepted gap, documented in the Claude Code
-harness reference.
+`.fablepowers` component are denied, names compared case-insensitively and
+NTFS-normalised (trailing dots/spaces and `:stream` suffixes ignored). Shell
+(Bash) writes to markers are not intercepted: an accepted gap, documented in the
+Claude Code harness reference.
 
 FABLEPOWERS_GATE=off: never deny; would-be denials go to .fablepowers/gate.log.
 Malformed payloads and internal errors allow (fail open) and are logged there.
@@ -186,12 +187,21 @@ def resolve(path, cwd):
     return os.path.realpath(path)
 
 
+def win_name(part):
+    """A path component as Windows/NTFS resolves it, casefolded: anything from the
+    first ':' dropped (`approved:s` and `approved::$DATA` name a stream of
+    `approved`), then trailing dots and spaces stripped (`approved.` and
+    `approved ` open `approved`)."""
+    return part.split(":", 1)[0].rstrip(". ").casefold()
+
+
 def is_marker_path(path):
-    """True when any component after a `.fablepowers` component is a marker name,
-    compared case-insensitively (case-insensitive filesystems resolve
-    `.FablePowers/k/Approved` to the marker; `approved/x` would create a directory
-    named like it)."""
-    parts = [p.casefold() for p in path.split(os.sep)]
+    """True when any component after a `.fablepowers` component is a marker name.
+    Components are compared as win_name() normalises them: case-insensitive
+    filesystems resolve `.FablePowers/k/Approved` to the marker, NTFS also
+    `approved.`, `approved ` and `approved:stream`; `approved/x` would create a
+    directory named like it."""
+    parts = [win_name(p) for p in path.split(os.sep)]
     fp = ".fablepowers".casefold()
     markers = {m.casefold() for m in MARKER_NAMES}
     if fp not in parts:

@@ -403,6 +403,30 @@ create_spec "$R" docs/specs/pre.md
 check "forged approved dir before create: pending written" test -f "$R/.fablepowers/pre/pending"
 check "forged approved dir before create: dispatch denied" test "$(agent_verdict "$R" fablepowers:implementer)" == deny
 
+# --- 5c. NTFS name variants of markers (path strings only) ------------------------------------
+
+echo "5c. NTFS marker name variants denied"
+
+# NTFS opens `approved.`, `approved ` and `approved:stream` as `approved` (trailing
+# dots/spaces are stripped; `:` names an alternate data stream), and likewise for
+# the `.fablepowers` directory component.
+R="$TEST_ROOT/r5n"; new_repo "$R"
+for f in '.fablepowers/k/approved.' '.fablepowers/k/approved ' '.fablepowers/k/approved. . ' \
+         '.fablepowers/k/approved:stream' '.fablepowers/k/approved::$DATA' '.fablepowers/k/Pending:x:$DATA' \
+         '.fablepowers/k/pending..' '.fablepowers/k/approved./x' '.fablepowers/k/approved.:s' '.fablepowers/k/pending :$DATA' \
+         '.fablepowers./k/approved' '.fablepowers /k/approved' '.FablePowers. /k/Approved.'; do
+  check "no pending: Write '$f' denied" test "$(edit_verdict pre-write "$R" "$R/$f")" == deny
+done
+check "relative '.fablepowers/k/approved:s' denied" test "$(edit_verdict pre-write "$R" '.fablepowers/k/approved:s')" == deny
+check "Edit '.fablepowers/k/pending ' denied" test "$(edit_verdict pre-edit "$R" "$R/.fablepowers/k/pending ")" == deny
+# Only trailing dots/spaces and the stream suffix are ignored.
+for f in '.fablepowers/k/approved.md' '.fablepowers/k/approvedx' '.fablepowers/k/notes:approved' \
+         '.fablepowers/k/.approved' 'src/approved./x.py'; do
+  check "'$f' allowed" test "$(edit_verdict pre-write "$R" "$R/$f")" == allow
+done
+create_spec "$R" docs/specs/k4.md
+check "pending: Write '.fablepowers/k4/approved:x' denied" test "$(edit_verdict pre-write "$R" "$R/.fablepowers/k4/approved:x")" == deny
+
 # --- 6. approve and withdraw commands ---------------------------------------------------------
 
 echo "6. Approve / withdraw commands"

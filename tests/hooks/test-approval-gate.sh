@@ -1220,14 +1220,27 @@ expect "nothing pending" context
 check "  says so" bash -c '[[ "$1" == *"nothing is pending"* ]]' _ "$(text_of)"
 check "  no marker" test ! -e "$R/.fablepowers"
 ccreate "$R" docs/specs/one.md
-for p in '$fablepowers:approve a b' 'please $fablepowers:approve' $'$fablepowers:approve\nyes' \
+for p in 'please $fablepowers:approve' '/fablepowers:approve' '$fablepowers:Approve' 'fablepowers:approve' ''; do
+  cups "$R" "$p"
+  check "not an approval: '$p' (allowed, nothing recorded)" test "$(verdict)" == allow -a ! -e "$R/.fablepowers/one/approved"
+done
+# N-b: a prompt that starts with the command but does not match it gets a
+# "not recognised" context and records nothing.
+for p in '$fablepowers:approve a b' $'$fablepowers:approve\nyes' \
          $'$fablepowers:approve\n\n' $'$fablepowers:approve\r\n\r\n' $'$fablepowers:approve\n ' $'\n$fablepowers:approve' \
-         $'$fablepowers:approve\r' '$fablepowers:approvex' '/fablepowers:approve' '$fablepowers:Approve' 'fablepowers:approve' \
-         '$fablepowers:approve one two' ''; do
+         $'$fablepowers:approve\r' '$fablepowers:approvex' '$fablepowers:approve one two'; do
   cups "$R" "$p"
   q="${p//$'\r'/\\r}"
-  check "not an approval: '${q//$'\n'/\\n}' (allowed, nothing recorded)" test "$(verdict)" == allow -a ! -e "$R/.fablepowers/one/approved"
+  check "not an approval: '${q//$'\n'/\\n}' (not-recognised context, nothing recorded)" \
+    bash -c '[[ "$1" == context && "$2" == *"was not recognised"* && "$2" == *"send exactly \`\$fablepowers:approve [key]\` on its own"* ]]' _ "$(verdict)" "$(text_of)"
+  check "  nothing recorded" test ! -e "$R/.fablepowers/one/approved" -a -e "$R/.fablepowers/one/pending"
 done
+cups "$R" $'$fablepowers:withdraw one\n\n'
+check "near-miss withdraw: not-recognised context naming withdraw" \
+  bash -c '[[ "$1" == context && "$2" == *"send exactly \`\$fablepowers:withdraw [key]\` on its own"* ]]' _ "$(verdict)" "$(text_of)"
+check "  still pending" test -e "$R/.fablepowers/one/pending"
+cups "$R" '$fablepowers:approve a b' codex-ups-child
+check "near-miss with agent_id (a subagent prompt): silent, nothing recorded" test "$(verdict)" == allow -a ! -e "$R/.fablepowers/one/approved"
 # One trailing word is the key argument: one that names no pending design records nothing.
 for p in '$fablepowers:approve please' '$fablepowers:approve one.'; do
   cups "$R" "$p"
@@ -1389,6 +1402,55 @@ check "  PreToolUse: systemMessage only" test "$OUT" == "$WARNING"
 reset_warned
 cpost "$RQ" "$(patch_of $'*** Add File: src/x.py\n+x')" "$(resp_of "A src/x.py")"
 check "no python, repo with .fablepowers/: any Codex Post apply_patch warns with PostToolUse context" codex_warned PostToolUse
+# SF1: a Codex PreToolUse (systemMessage only, seen by no one) must not use up the
+# warn-once marker. One session_id throughout, a design pending from an earlier
+# session, FABLEPOWERS_PYTHON=/bin/false: the first event that reaches the model
+# carries the warning.
+GATE_ENV=("FABLEPOWERS_PYTHON=/bin/false")
+cups_same() {  # cups_same <repo> <prompt>: a Codex UPS in the apply_patch fixtures' session
+  run_gate_json UserPromptSubmit "" "$(payload codex-ups CWD="$1" PROMPT="$2" \
+    | sed 's/01a14098-73fc-7733-9da3-d7bf4ee63209/01a1408b-1e59-7092-843b-bc23a311d75f/')"
+}
+RS="$TEST_ROOT/c8s"; new_repo "$RS"; mkdir -p "$RS/.fablepowers/old"; : > "$RS/.fablepowers/old/pending"
+printf '# spec\n' > "$RS/docs/specs/old.md"
+reset_warned
+cpatch "$RS" "$(patch_of $'*** Update File: src/app.py\n@@\n-hello\n+bye')" >/dev/null
+check "SF1: Codex Pre apply_patch (code edit) prints the systemMessage" test "$OUT" == "$WARNING"
+check "  SF1: no warn-once marker after a Codex PreToolUse" test ! -e "$CWARNED"
+run_gate PreToolUse collaborationspawn_agent codex-v2-pre-spawn CWD="$RS" TASK=fablepowers_implementer_t1
+check "SF1: Codex Pre spawn prints the systemMessage" test "$OUT" == "$WARNING"
+check "  SF1: still no warn-once marker" test ! -e "$CWARNED"
+cpost "$RS" "$(patch_of $'*** Add File: docs/specs/new.md\n+x')" "$(resp_of "A docs/specs/new.md")"
+check "SF1: Pre -> Post apply_patch spec add: the Post carries the PostToolUse context" codex_warned PostToolUse
+check "  SF1: warn-once marker written by the Post" test -f "$CWARNED"
+cups_same "$RS" '$fablepowers:approve'
+expect "SF1: Pre -> Post -> UPS: the UPS is silent (warned once)" allow
+reset_warned
+cpatch "$RS" "$(patch_of $'*** Update File: src/app.py\n@@\n-hello\n+bye')" >/dev/null
+run_gate PreToolUse spawn_agent codex-v1-pre-spawn CWD="$RS" MESSAGE=hi
+check "SF1: Codex v1 Pre spawn prints the systemMessage" test "$OUT" == "$WARNING"
+cups_same "$RS" '$fablepowers:approve'
+check "SF1: Pre -> UPS \$fablepowers:approve: the UPS carries the UserPromptSubmit context" codex_warned UserPromptSubmit
+check "  SF1: warn-once marker written by the UPS" test -f "$CWARNED"
+cpost "$RS" "$(patch_of $'*** Add File: docs/specs/new2.md\n+x')" "$(resp_of "A docs/specs/new2.md")"
+expect "SF1: Post after the UPS warning silent" allow
+# Any PreToolUse carrying turn_id counts as Codex, whatever its tool_name.
+reset_warned
+run_gate_json PreToolUse Write "$(payload codex-pre-apply_patch CWD="$RS" PATCH=x | sed 's/"apply_patch"/"Write"/')"
+check "SF1: PreToolUse with turn_id (tool_name Write) prints the systemMessage" test "$OUT" == "$WARNING"
+check "  SF1: no warn-once marker" test ! -e "$CWARNED"
+# A Codex tool_name alone (no turn_id) counts too.
+reset_warned
+run_gate_json PreToolUse Write "$(payload codex-pre-apply_patch CWD="$RS" PATCH=x | sed 's/"turn_id": *"[^"]*",//')"
+check "SF1: PreToolUse apply_patch without turn_id prints the systemMessage" test "$OUT" == "$WARNING"
+check "  SF1: no warn-once marker" test ! -e "$CWARNED"
+# Claude Code unchanged: its PreToolUse systemMessage is shown, so it uses the marker.
+reset_warned
+run_gate PreToolUse Agent pre-agent CWD="$RS" SUBAGENT=fablepowers:implementer
+check "SF1: Claude Code PreToolUse still warns" test "$OUT" == "$WARNING"
+check "  SF1: Claude Code PreToolUse writes the warn-once marker" test -f "$WARNED"
+run_gate PreToolUse Write pre-write CWD="$RS" FILE="$RS/src/app.py"
+expect "SF1: Claude Code second call silent" allow
 GATE_ENV=()
 reset_warned
 

@@ -67,7 +67,9 @@ logic above, unchanged. Same markers, states and rules:
   UserPromptSubmit (turn_id, no agent_id)   the whole prompt matching
       `$fablepowers:approve|withdraw [key]` approves / withdraws. On Codex a
       block reason never reaches the model or an exec user, so every answer is
-      additionalContext; several pending without a key records nothing.
+      additionalContext; several pending without a key records nothing. A
+      prompt that starts with `$fablepowers:approve|withdraw` but does not match
+      records nothing and gets a "not recognised" context.
 Codex deny messages name `$fablepowers:approve [key]` (no question path) and
 end with the recovery line (trust the hooks in /hooks, or FABLEPOWERS_GATE=off),
 with no final period since Codex appends ". Tool: <name>".
@@ -106,6 +108,8 @@ REVIEWER_TASK = "fablepowers_reviewer"
 REVIEWER_SEAT_LINE = re.compile(r"fablepowers-seat:[ \t]*reviewer")
 # One trailing newline (LF or CRLF) is accepted, in case a client submits it.
 CODEX_COMMAND = re.compile(r"[ \t]*\$fablepowers:(approve|withdraw)(?:[ \t]+(\S+))?[ \t]*(?:\r?\n)?")
+# A prompt that starts like a command but is not one gets a "not recognised" hint.
+CODEX_NEAR_MISS = re.compile(r"\s*\$fablepowers:(approve|withdraw)")
 CODEX_CONFIG_DIRS = ("rules", "agents")
 CODEX_RECOVERY = ("If the user's approval does not register, the fablepowers hooks may be "
                   "untrusted: trust them in `/hooks`, or set `FABLEPOWERS_GATE=off` to turn the gate off")
@@ -797,8 +801,17 @@ def codex_user_prompt(top, payload):
     if "agent_id" in payload:
         return  # a subagent's prompt is the spawn message, never the user's command
     prompt = payload.get("prompt")
-    m = CODEX_COMMAND.fullmatch(prompt) if isinstance(prompt, str) else None
+    if not isinstance(prompt, str):
+        return
+    m = CODEX_COMMAND.fullmatch(prompt)
     if not m:
+        near = CODEX_NEAR_MISS.match(prompt)
+        if near:
+            verb = near.group(1)
+            codex_context(
+                "fablepowers approval gate: `$fablepowers:%s` was not recognised, so it recorded "
+                "nothing; send exactly `$fablepowers:%s [key]` on its own, as the whole message. "
+                "Tell the user this; do not act on this message as an approval." % (verb, verb))
         return
     verb, arg = m.group(1), m.group(2) or ""
     pending = pending_designs(top)

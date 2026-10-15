@@ -26,7 +26,9 @@
 # whose prompt holds `$fablepowers:`, are gate events too. A systemMessage
 # reaches neither the model nor a `codex exec` user, so on those two Codex
 # events the warning also goes out as hookSpecificOutput.additionalContext
-# (the model relays it).
+# (the model relays it). A Codex PreToolUse (systemMessage only, seen by no one)
+# still warns but does not create the marker, so the first Codex event that can
+# carry additionalContext in that session still warns.
 #
 # Fast path: run with the argument `ups` (the UserPromptSubmit group), the
 # launcher reads the payload itself and exits 0 before looking for python unless
@@ -133,11 +135,24 @@ elif [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"UserPromptSubmit\" \
 fi
 (( gate_event )) || exit 0
 
+# A Codex PreToolUse (apply_patch or a spawn tool, or any payload carrying
+# turn_id) can carry only a systemMessage, which reaches neither the model nor a
+# `codex exec` user: it still prints the warning but leaves the marker for the
+# next Codex event that can carry additionalContext.
+consume=1
+if [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"PreToolUse\" ]] \
+        && [[ "$payload" =~ \"tool_name\"$ws:$ws\"(apply_patch|spawn_agent|collaborationspawn_agent)\" \
+              || "$payload" =~ \"turn_id\"$ws: ]]; then
+    consume=0
+fi
+
 if [[ -n "$sid" ]]; then
     marker="${TMPDIR:-/tmp}"
     marker="${marker%/}/fablepowers-gate-warned-${UID:-0}-$sid"
     [[ -e "$marker" || -L "$marker" ]] && exit 0
-    ( set -C; : > "$marker" ) 2>/dev/null || true
+    if (( consume )); then
+        ( set -C; : > "$marker" ) 2>/dev/null || true
+    fi
 fi
 
 codex_event=""

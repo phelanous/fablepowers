@@ -10,6 +10,13 @@
 # Only when none exists does it fall back to a PATH lookup of "bash".
 # tests/hooks/test-session-start.sh runs it via /bin/sh -c and /bin/bash -c, and
 # via a non-bash sh with BASH unset, each under a normal and an empty PATH.
+#
+# The same hook runs on Codex. The harness is detected from the SessionStart
+# payload on stdin (see detect_harness). On Claude Code, and with empty stdin,
+# the output is exactly 0.4.0's. On Codex the preamble names Codex, points to
+# references/codex.md and carries the effective seat table: defaults overridden
+# by the [codex] table of ${XDG_CONFIG_HOME:-$HOME/.config}/fablepowers/models.toml.
+# bash 3.2-compatible: no associative arrays, no ${x,,}, no mapfile.
 
 set -euo pipefail
 
@@ -61,7 +68,272 @@ escape_for_json() {
     printf '%s' "$s"
 }
 
-preamble="You have fablepowers on Claude Code. The workflow map below is \`fablepowers:workflow\`, your entry point for substantive dev work. Invoke the other skills through the Skill tool as \`fablepowers:<skill>\`; dispatch the implementer, strict-implementer and reviewer seats through the Agent tool with \`subagent_type: \"fablepowers:<agent>\"\`, never the default general-purpose agent. Ask the user a structured question (the design approval) with AskUserQuestion; track tasks with TodoWrite. The rest of the mapping is in the workflow skill's \`references/claude-code.md\`."
+# --- harness detection ---------------------------------------------------------
+
+# The hook payload (JSON) arrives on stdin. One builtin read with a 1-second
+# total timeout, so a stdin that never closes cannot block the session; skipped
+# when stdin is a terminal. Empty or unreadable stdin leaves the payload empty.
+payload=""
+if [[ ! -t 0 ]]; then
+    IFS= read -r -t 1 -d '' payload 2>/dev/null || true
+fi
+
+# Codex iff, in order: the payload has a "permission_mode" or "model" key
+# (Codex's SessionStart has both, Claude Code's neither); else the
+# transcript_path basename is rollout-*.jsonl (Codex's session logs); else
+# PLUGIN_ROOT is set and equals CLAUDE_PLUGIN_ROOT (Codex sets both, Claude Code
+# only CLAUDE_PLUGIN_ROOT). Otherwise Claude Code. Keys are matched with their
+# closing quote, so an escaped \"model\" inside a string value does not count.
+detect_harness() {
+    local re_key='"(permission_mode|model)"[[:space:]]*:'
+    local re_tp='"transcript_path"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
+    local tp
+    harness="claude-code"
+    if [[ "$payload" =~ $re_key ]]; then
+        harness="codex"
+    elif [[ "$payload" =~ $re_tp ]]; then
+        tp="${BASH_REMATCH[1]}"
+        if [[ "${tp##*/}" == rollout-*.jsonl ]]; then
+            harness="codex"
+        fi
+    fi
+    if [[ "$harness" != codex && -n "${PLUGIN_ROOT:-}" && "${PLUGIN_ROOT}" == "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
+        harness="codex"
+    fi
+}
+detect_harness
+
+if [[ "$harness" != codex ]]; then
+    preamble="You have fablepowers on Claude Code. The workflow map below is \`fablepowers:workflow\`, your entry point for substantive dev work. Invoke the other skills through the Skill tool as \`fablepowers:<skill>\`; dispatch the implementer, strict-implementer and reviewer seats through the Agent tool with \`subagent_type: \"fablepowers:<agent>\"\`, never the default general-purpose agent. Ask the user a structured question (the design approval) with AskUserQuestion; track tasks with TodoWrite. The rest of the mapping is in the workflow skill's \`references/claude-code.md\`."
+
+    session_context="$(escape_for_json "${preamble}")\\n\\n$(escape_for_json "${workflow_content}")"
+
+    # printf rather than a heredoc: bash 5.3+ can hang on heredocs in hooks.
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$session_context"
+
+    exit 0
+fi
+
+# --- Codex: plugin root ----------------------------------------------------------
+
+# Absolute plugin root from this script's directory (builtins only).
+case "$SCRIPT_DIR" in
+    /*) plugin_root="$SCRIPT_DIR" ;;
+    *) plugin_root="${PWD:-.}/${SCRIPT_DIR}" ;;
+esac
+# normalize_path <absolute path>: drop empty and "." segments and resolve ".."
+# lexically, so the root the context names is clean however the hook was invoked.
+normalize_path() {
+    local p="${1}/" out="" seg
+    while [[ -n "$p" ]]; do
+        seg="${p%%/*}"
+        p="${p#*/}"
+        case "$seg" in
+            ''|.) ;;
+            ..) out="${out%/*}" ;;
+            *) out="${out}/${seg}" ;;
+        esac
+    done
+    printf '%s' "${out:-/}"
+}
+plugin_root="$(normalize_path "${plugin_root}/..")"
+
+# --- Codex: seat table from defaults + models.toml -----------------------------
+
+D_IMPL_MODEL="gpt-6.1-sol";    D_IMPL_EFFORT="high"
+D_STRICT_MODEL="gpt-5.6-terra"; D_STRICT_EFFORT="medium"
+D_REV_MODEL="gpt-6.1-sol";     D_REV_EFFORT="high"
+implementer="$D_IMPL_MODEL";          implementer_effort="$D_IMPL_EFFORT"
+strict_implementer="$D_STRICT_MODEL"; strict_implementer_effort="$D_STRICT_EFFORT"
+reviewer="$D_REV_MODEL";              reviewer_effort="$D_REV_EFFORT"
+
+warn_count=0
+warn_lines=""
+# Only the first 3 warnings reach the context; the rest are counted.
+warn() {
+    warn_count=$((warn_count + 1))
+    if [[ "$warn_count" -le 3 ]]; then
+        warn_lines="${warn_lines}"$'\n'"- $1"
+    fi
+}
+
+# default_of <key>: that key's default value.
+default_of() {
+    case "$1" in
+        implementer) printf '%s' "$D_IMPL_MODEL" ;;
+        strict_implementer) printf '%s' "$D_STRICT_MODEL" ;;
+        reviewer) printf '%s' "$D_REV_MODEL" ;;
+        implementer_effort) printf '%s' "$D_IMPL_EFFORT" ;;
+        strict_implementer_effort) printf '%s' "$D_STRICT_EFFORT" ;;
+        reviewer_effort) printf '%s' "$D_REV_EFFORT" ;;
+    esac
+}
+
+# set_key <key> <value>: key is one of the six known names (checked by the caller).
+set_key() {
+    case "$1" in
+        implementer) implementer="$2" ;;
+        strict_implementer) strict_implementer="$2" ;;
+        reviewer) reviewer="$2" ;;
+        implementer_effort) implementer_effort="$2" ;;
+        strict_implementer_effort) strict_implementer_effort="$2" ;;
+        reviewer_effort) reviewer_effort="$2" ;;
+    esac
+}
+
+# reject <line> <key> <why>: warn and put the key back to its default.
+reject() {
+    local d
+    d="$(default_of "$2")"
+    set_key "$2" "$d"
+    warn "line $1: $2 $3; using the default $d."
+}
+
+# trim <string>: strip leading and trailing whitespace (spaces, tabs, ...).
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
+
+# parse_models_toml <file>. Grammar: only the [codex] table is read, other
+# tables are ignored. Lines are key = "value"; full-line and trailing # comments
+# (outside the quotes) are ignored; CRLF and a leading UTF-8 BOM are stripped.
+# Keys: implementer, strict_implementer, reviewer (model ids, matching
+# ^[A-Za-z0-9._:/-]{1,64}$) and <seat>_effort (low|medium|high|xhigh|max|ultra).
+# Single-quoted or unquoted values, invalid values, unknown keys, malformed
+# lines and an unreadable file each add a warning; a rejected key keeps its
+# default. A duplicate key warns and the last occurrence wins. Warnings never
+# quote file content beyond a validated key name.
+parse_models_toml() {
+    local LC_ALL=C
+    local file="$1" line n=0 in_codex=0 seen=" " hdr name key rest val after
+    local re_key='^[A-Za-z0-9_-]+$' re_model='^[A-Za-z0-9._:/-]{1,64}$'
+    [[ -e "$file" ]] || return 0
+    if [[ ! -f "$file" || ! -r "$file" ]]; then
+        warn "models.toml is not a readable file; using the defaults."
+        return 0
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        n=$((n + 1))
+        if [[ "$n" -eq 1 ]]; then
+            line="${line#$'\xef\xbb\xbf'}"
+        fi
+        # trim also strips a CRLF line's trailing \r ([:space:] includes it).
+        line="$(trim "$line")"
+        if [[ -z "$line" || "$line" == \#* ]]; then
+            continue
+        fi
+        if [[ "$line" == \[* ]]; then
+            hdr="$(trim "${line%%#*}")"
+            in_codex=0
+            if [[ "$hdr" == \[*\] ]]; then
+                name="${hdr#\[}"
+                name="$(trim "${name%\]}")"
+                if [[ "$name" == codex ]]; then
+                    in_codex=1
+                fi
+            else
+                warn "line $n: malformed table header; ignored."
+            fi
+            continue
+        fi
+        if [[ "$in_codex" -ne 1 ]]; then
+            continue
+        fi
+        if [[ "$line" != *=* ]]; then
+            warn "line $n: not a key = \"value\" line; ignored."
+            continue
+        fi
+        key="$(trim "${line%%=*}")"
+        rest="$(trim "${line#*=}")"
+        if [[ ! "$key" =~ $re_key ]]; then
+            warn "line $n: malformed key; ignored."
+            continue
+        fi
+        case "$key" in
+            implementer|strict_implementer|reviewer|implementer_effort|strict_implementer_effort|reviewer_effort) ;;
+            *)
+                warn "line $n: unknown key ${key:0:32}; ignored."
+                continue
+                ;;
+        esac
+        if [[ "$seen" == *" $key "* ]]; then
+            warn "line $n: duplicate key $key; the last one wins."
+        fi
+        seen="${seen}${key} "
+        case "$rest" in
+            \"*)
+                val="${rest#\"}"
+                if [[ "$val" != *\"* ]]; then
+                    reject "$n" "$key" "has an unterminated string"
+                    continue
+                fi
+                after="$(trim "${val#*\"}")"
+                val="${val%%\"*}"
+                if [[ -n "$after" && "$after" != \#* ]]; then
+                    reject "$n" "$key" "has text after the value"
+                    continue
+                fi
+                ;;
+            \'*)
+                reject "$n" "$key" "is single-quoted (use double quotes)"
+                continue
+                ;;
+            *)
+                reject "$n" "$key" "is not a double-quoted string"
+                continue
+                ;;
+        esac
+        case "$key" in
+            *_effort)
+                case "$val" in
+                    low|medium|high|xhigh|max|ultra) set_key "$key" "$val" ;;
+                    *) reject "$n" "$key" "is not low, medium, high, xhigh, max or ultra" ;;
+                esac
+                ;;
+            *)
+                if [[ "$val" =~ $re_model ]]; then
+                    set_key "$key" "$val"
+                else
+                    reject "$n" "$key" "is not a valid model id"
+                fi
+                ;;
+        esac
+    done < "$file"
+}
+
+config_home="${XDG_CONFIG_HOME:-}"
+if [[ -z "$config_home" && -n "${HOME:-}" ]]; then
+    config_home="${HOME}/.config"
+fi
+models_file=""
+if [[ -n "$config_home" ]]; then
+    models_file="${config_home}/fablepowers/models.toml"
+    parse_models_toml "$models_file"
+fi
+
+if [[ "$warn_count" -gt 3 ]]; then
+    warn_lines="${warn_lines}"$'\n'"- … $((warn_count - 3)) more"
+fi
+
+# --- Codex: output ---------------------------------------------------------------
+
+codex_ref="${plugin_root}/skills/workflow/references/codex.md"
+preamble="You have fablepowers on Codex. The workflow map below is \`fablepowers:workflow\`, your entry point for substantive dev work. Before invoking another fablepowers skill, dispatching a seat or asking for design approval, read the Codex mapping in \`${codex_ref}\`. Plugin root: \`${plugin_root}\`."
+if [[ -n "$models_file" ]]; then
+    seat_source="defaults, overridden by the [codex] table of ${models_file}"
+else
+    seat_source="defaults; no models.toml since HOME and XDG_CONFIG_HOME are unset"
+fi
+preamble="${preamble}"$'\n'"Seat table (${seat_source}); spawn each seat with exactly this model and reasoning_effort:"
+preamble="${preamble}"$'\n'"- implementer (agents/implementer.md): model ${implementer}, reasoning_effort ${implementer_effort}"
+preamble="${preamble}"$'\n'"- strict_implementer (agents/strict-implementer.md): model ${strict_implementer}, reasoning_effort ${strict_implementer_effort}"
+preamble="${preamble}"$'\n'"- reviewer (agents/reviewer.md): model ${reviewer}, reasoning_effort ${reviewer_effort}"
+if [[ "$warn_count" -gt 0 ]]; then
+    preamble="${preamble}"$'\n'"models.toml warnings (${warn_count}):${warn_lines}"
+fi
 
 session_context="$(escape_for_json "${preamble}")\\n\\n$(escape_for_json "${workflow_content}")"
 

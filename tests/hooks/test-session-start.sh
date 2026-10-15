@@ -9,11 +9,23 @@
 # new one. Old and new hooks always run against the same SKILL.md, in temp
 # plugin trees. The new preamble and the map are asserted structurally, and
 # the injected context is capped at 6,000 characters.
+#
+# 0.5.0 adds harness detection from the SessionStart payload on stdin. Every
+# hook run gets empty stdin unless a test passes a payload ($HOOK_STDIN). On a
+# Claude Code payload the output must stay byte-identical to the empty-stdin
+# (0.4.0) output; on a Codex payload the context is the Codex preamble with the
+# seat table (from models.toml) followed by the same map, capped at 8,000.
 set -euo pipefail
+
+# No hook run inherits the runner's stdin: empty stdin is the 0.4.0 case.
+exec </dev/null
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BASELINE_DIR="$SCRIPT_DIR/fixtures/0.2.x"   # fablepowers 0.2.1: awk/dirname hook, exec'd via its shebang
+SS_FIX="$SCRIPT_DIR/fixtures/session-start" # real SessionStart payloads (Codex, Claude Code)
+CLAUDE_PAYLOAD="$SS_FIX/claude-sessionstart-startup.json"
+CODEX_PAYLOAD="$SS_FIX/codex-sessionstart-startup-exec.json"
 # HOOKS_JSON / SESSION_START override the files under test (mutation checks on a copy).
 HOOKS_JSON="${HOOKS_JSON:-$REPO_ROOT/hooks/hooks.json}"
 SESSION_START="${SESSION_START:-$REPO_ROOT/hooks/session-start}"
@@ -53,16 +65,18 @@ hook_cmd() {
 
 # run_with <normal|broken> <tree> <launcher words...>: run the tree's hooks.json
 # command as "<launcher> -c <command>"; stdout to $OUT, exit status to $RC.
-# normal = the test's environment minus BASH; broken = empty environment with
-# PATH=/nonexistent. Extra VAR=value pairs for the hook go in $HOOK_ENV.
+# normal = the test's environment minus BASH and PLUGIN_ROOT, with
+# XDG_CONFIG_HOME pointing at an empty directory (no user models.toml); broken =
+# empty environment with PATH=/nonexistent. Extra VAR=value pairs for the hook
+# go in $HOOK_ENV; the hook's stdin is $HOOK_STDIN (default /dev/null).
 run_with() {
   local mode="$1" tree="$2" cmd; shift 2
   cmd="$(hook_cmd "$tree")"
   RC=0
   if [[ "$mode" == normal ]]; then
-    OUT="$(cd "$TEST_ROOT" && env -u BASH CLAUDE_PLUGIN_ROOT="$tree" ${HOOK_ENV:-} "$@" -c "$cmd" 2>"$TEST_ROOT/stderr")" || RC=$?
+    OUT="$(cd "$TEST_ROOT" && env -u BASH -u PLUGIN_ROOT XDG_CONFIG_HOME="$TEST_ROOT/xdg-empty" CLAUDE_PLUGIN_ROOT="$tree" ${HOOK_ENV:-} "$@" -c "$cmd" <"${HOOK_STDIN:-/dev/null}" 2>"$TEST_ROOT/stderr")" || RC=$?
   else
-    OUT="$(cd "$TEST_ROOT" && env -i PATH=/nonexistent CLAUDE_PLUGIN_ROOT="$tree" ${HOOK_ENV:-} "$@" -c "$cmd" 2>"$TEST_ROOT/stderr")" || RC=$?
+    OUT="$(cd "$TEST_ROOT" && env -i PATH=/nonexistent CLAUDE_PLUGIN_ROOT="$tree" ${HOOK_ENV:-} "$@" -c "$cmd" <"${HOOK_STDIN:-/dev/null}" 2>"$TEST_ROOT/stderr")" || RC=$?
   fi
 }
 run_normal() { run_with normal "$1" "$SH"; }
@@ -130,6 +144,13 @@ for fx in "$FIX"/*.md; do
   else
     fail "$name: old rc=$old_rc new rc=$new_rc; outputs $([[ "$want" == "$new_out" ]] && echo equal || echo differ)"
     diff <(printf '%s\n' "$want") <(printf '%s\n' "$new_out") | head -5 || true
+  fi
+  # A real Claude Code SessionStart payload on stdin changes nothing.
+  HOOK_STDIN="$CLAUDE_PAYLOAD" run_normal "$TEST_ROOT/new-$name"
+  if [[ "$RC" == 0 && "$OUT" == "$want" ]]; then
+    pass "$name: Claude Code payload on stdin: same output (rc 0)"
+  else
+    fail "$name: Claude Code payload on stdin: rc $RC, output differs from the empty-stdin output"
   fi
 done
 
@@ -251,6 +272,14 @@ echo "Launchers: the literal command via <shell> -c, normal and broken PATH"
 
 run_normal "$TEST_ROOT/old-real"; reference="$(swapped "$OUT")"
 
+# The Codex reference: the real Codex payload with a models.toml setting every
+# key, so the parser also runs under every launcher and a broken PATH.
+CODEX_XDG="$TEST_ROOT/xdg-full"
+mkdir -p "$CODEX_XDG/fablepowers"
+cp "$SS_FIX/models-full.toml" "$CODEX_XDG/fablepowers/models.toml"
+HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$CODEX_XDG" run_normal "$TEST_ROOT/new-real"
+codex_reference="$OUT"
+
 # Claude Code runs the command through /bin/sh -c (observed: BASH=/bin/sh with
 # "shell": "bash" on Linux), so every launcher runs with BASH removed from the
 # environment. A bash launcher sets BASH itself; a non-bash sh (dash) does not,
@@ -282,6 +311,18 @@ for launcher in "${LAUNCHERS[@]}"; do
       pass "$launcher -c, $mode PATH: rc 0, output equals the 0.2.x hook's (preamble swapped)"
     else
       fail "$launcher -c, $mode PATH: rc $RC; $(head -c 160 "$TEST_ROOT/stderr" | tr '\n' ' ')"
+    fi
+    HOOK_STDIN="$CLAUDE_PAYLOAD" run_with "$mode" "$TEST_ROOT/new-real" "${words[@]}"
+    if [[ "$RC" == 0 && "$OUT" == "$reference" ]]; then
+      pass "$launcher -c, $mode PATH, Claude Code payload: rc 0, same output"
+    else
+      fail "$launcher -c, $mode PATH, Claude Code payload: rc $RC; $(head -c 160 "$TEST_ROOT/stderr" | tr '\n' ' ')"
+    fi
+    HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$CODEX_XDG" run_with "$mode" "$TEST_ROOT/new-real" "${words[@]}"
+    if [[ "$RC" == 0 && "$OUT" == "$codex_reference" ]]; then
+      pass "$launcher -c, $mode PATH, Codex payload + models.toml: rc 0, output equals the Codex reference"
+    else
+      fail "$launcher -c, $mode PATH, Codex payload + models.toml: rc $RC; $(head -c 160 "$TEST_ROOT/stderr" | tr '\n' ' ')"
     fi
   done
 done
@@ -374,6 +415,358 @@ run_normal "$TEST_ROOT/new-missing"; new_missing="$OUT"
 run_normal "$TEST_ROOT/old-missing"
 [[ "$(swapped "$OUT")" == "$new_missing" ]] && pass "missing file: identical to the 0.2.x hook (preamble swapped)" \
   || fail "missing file: differs from the 0.2.x hook"
+
+# --- (g) stdin: harness detection, never blocking -------------------------------
+
+echo "Harness detection from the SessionStart payload"
+
+T="$TEST_ROOT/new-real"
+run_normal "$T"; claude_ref="$OUT"   # empty stdin: the 0.4.0 output
+
+# is_codex <json>: the context starts with the Codex preamble.
+is_codex() { [[ "$(preamble_of "$1" 2>/dev/null)" == "You have fablepowers on Codex."* ]]; }
+
+for fx in "$SS_FIX"/codex-sessionstart-*.json; do
+  HOOK_STDIN="$fx" run_normal "$T"
+  if [[ "$RC" == 0 ]] && is_codex "$OUT"; then
+    pass "$(basename "$fx"): Codex preamble (rc 0)"
+  else
+    fail "$(basename "$fx"): no Codex preamble (rc $RC)"
+  fi
+done
+
+# Raw stdout bytes for the real Claude Code payload equal the empty-stdin bytes.
+(cd "$TEST_ROOT" && env -u PLUGIN_ROOT CLAUDE_PLUGIN_ROOT="$T" "$SH" -c "$(hook_cmd "$T")" <"$CLAUDE_PAYLOAD") > "$TEST_ROOT/claude-payload.bytes"
+if cmp -s "$TEST_ROOT/new.bytes" "$TEST_ROOT/claude-payload.bytes"; then
+  pass "Claude Code payload: raw stdout bytes identical to the empty-stdin run"
+else
+  fail "Claude Code payload: raw stdout bytes differ from the empty-stdin run"
+fi
+
+# detect <label> <codex|claude> <payload text> [VAR=value ...]: run with that
+# payload (and extra env) and check the harness the output shows.
+detect() {
+  local label="$1" want="$2" body="$3"; shift 3
+  printf '%s' "$body" > "$TEST_ROOT/payload.json"
+  HOOK_STDIN="$TEST_ROOT/payload.json" HOOK_ENV="$*" run_normal "$T"
+  if [[ "$RC" != 0 ]]; then
+    fail "$label: rc $RC"
+  elif [[ "$want" == codex ]] && is_codex "$OUT"; then
+    pass "$label: Codex"
+  elif [[ "$want" == claude && "$OUT" == "$claude_ref" ]]; then
+    pass "$label: Claude Code, output identical to the empty-stdin run"
+  else
+    fail "$label: expected $want"
+  fi
+}
+detect "permission_mode key only" codex '{"hook_event_name":"SessionStart","permission_mode":"default"}'
+detect "model key only" codex '{"hook_event_name":"SessionStart","model":"gpt-6-luna"}'
+detect "model key with spaces before the colon" codex '{"model" : "x"}'
+detect "transcript_path basename rollout-*.jsonl only" codex '{"transcript_path":"/h/.codex/sessions/2026/10/15/rollout-2026-a.jsonl"}'
+detect "transcript_path with escaped slashes" codex '{"transcript_path":"\/h\/.codex\/sessions\/rollout-x.jsonl"}'
+detect "transcript_path rollout-*.json (not .jsonl)" claude '{"transcript_path":"/h/.codex/sessions/rollout-x.json"}'
+detect "transcript_path basename myrollout-*.jsonl" claude '{"transcript_path":"/h/myrollout-x.jsonl"}'
+detect "rollout- only in a directory name" claude '{"transcript_path":"/h/rollout-dir/abc.jsonl"}'
+detect "transcript_path key spelled differently" claude '{"transcript":"/h/rollout-x.jsonl"}'
+detect "\"model\" escaped inside a string value" claude '{"cwd":"/a/\"model\": x","transcript_path":"/h/.claude/projects/p/u.jsonl"}'
+detect "\"permission_mode\" escaped inside a string value" claude '{"cwd":"/a/\"permission_mode\":1"}'
+detect "a key ending in model" claude '{"default_model":"x","model_id":"y"}'
+detect "PLUGIN_ROOT equal to CLAUDE_PLUGIN_ROOT, empty payload" codex '' "PLUGIN_ROOT=$T"
+detect "PLUGIN_ROOT equal to CLAUDE_PLUGIN_ROOT, Claude Code payload" codex "$(<"$CLAUDE_PAYLOAD")" "PLUGIN_ROOT=$T"
+detect "PLUGIN_ROOT set to another directory" claude "$(<"$CLAUDE_PAYLOAD")" "PLUGIN_ROOT=$TEST_ROOT/elsewhere"
+detect "PLUGIN_ROOT empty" claude '' "PLUGIN_ROOT="
+detect "not JSON" claude 'hello'
+
+# A stdin that never closes does not block: the read times out (1 s).
+mkfifo "$TEST_ROOT/fifo"
+exec 9<>"$TEST_ROOT/fifo"
+t0=$SECONDS
+RC=0
+OUT="$(cd "$TEST_ROOT" && timeout 15 env -u BASH -u PLUGIN_ROOT CLAUDE_PLUGIN_ROOT="$T" "$SH" -c "$(hook_cmd "$T")" <"$TEST_ROOT/fifo" 2>"$TEST_ROOT/stderr")" || RC=$?
+elapsed=$((SECONDS - t0))
+if [[ "$RC" == 0 && "$elapsed" -le 3 && "$OUT" == "$claude_ref" ]]; then
+  pass "stdin never closes, no data: rc 0 in ${elapsed}s (<= 3), Claude Code output"
+else
+  fail "stdin never closes, no data: rc $RC after ${elapsed}s"
+fi
+# Same, with a payload written but stdin still open.
+printf '%s' "$(<"$CODEX_PAYLOAD")" >&9
+t0=$SECONDS
+RC=0
+OUT="$(cd "$TEST_ROOT" && timeout 15 env -u BASH -u PLUGIN_ROOT XDG_CONFIG_HOME="$TEST_ROOT/xdg-empty" CLAUDE_PLUGIN_ROOT="$T" "$SH" -c "$(hook_cmd "$T")" <"$TEST_ROOT/fifo" 2>"$TEST_ROOT/stderr")" || RC=$?
+elapsed=$((SECONDS - t0))
+if [[ "$RC" == 0 && "$elapsed" -le 3 ]] && context_of "$OUT" >/dev/null; then
+  pass "stdin never closes after a payload: rc 0 in ${elapsed}s (<= 3), valid hook JSON ($(is_codex "$OUT" && echo Codex || echo 'Claude Code'))"
+else
+  fail "stdin never closes after a payload: rc $RC after ${elapsed}s"
+fi
+exec 9>&-
+
+# Closed stdin (not just empty) also gives the 0.4.0 output.
+RC=0
+OUT="$(cd "$TEST_ROOT" && env -u BASH -u PLUGIN_ROOT CLAUDE_PLUGIN_ROOT="$T" "$SH" -c "$(hook_cmd "$T")" <&- 2>"$TEST_ROOT/stderr")" || RC=$?
+if [[ "$RC" == 0 && "$OUT" == "$claude_ref" ]]; then
+  pass "closed stdin: rc 0, Claude Code output"
+else
+  fail "closed stdin: rc $RC, output differs"
+fi
+
+# --- (h) the Codex preamble, the map and the size cap --------------------------
+
+echo "Codex preamble and map"
+
+# codex_parts <json>: checks context = preamble + blank line + SKILL.md minus
+# frontmatter (byte for byte), the preamble has no blank line; prints the preamble.
+codex_parts() {
+  python3 -c '
+import json, sys
+ctx = json.loads(sys.argv[1])["hookSpecificOutput"]["additionalContext"]
+lines = open(sys.argv[2], encoding="utf-8").read().split("\n")
+end = lines.index("---", 1)
+body = "\n".join(lines[end + 1:]).rstrip("\n")
+pre = ctx[: len(ctx) - len(body) - 2]
+if not ctx.endswith("\n\n" + body) or "\n\n" in pre:
+    sys.exit(1)
+sys.stdout.write(pre)' "$1" "$REPO_ROOT/skills/workflow/SKILL.md"
+}
+
+# seats_of <json>: "implementer=M/E strict_implementer=M/E reviewer=M/E" from the seat table.
+seats_of() {
+  printf '%s' "$1" | python3 -c '
+import json, re, sys
+ctx = json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]
+pre = ctx.split("\n\n", 1)[0]
+out = []
+for seat, f in (("implementer", "implementer"), ("strict_implementer", "strict-implementer"), ("reviewer", "reviewer")):
+    m = re.search(r"^- %s \(agents/%s\.md\): model (\S+), reasoning_effort (\S+)$" % (seat, f), pre, re.M)
+    out.append("%s=%s/%s" % (seat, m.group(1), m.group(2)) if m else seat + "=MISSING")
+print(" ".join(out))'
+}
+
+# warnings_of <json>: the warning lines (one per line), empty if none.
+warnings_of() {
+  printf '%s' "$1" | python3 -c '
+import json, sys
+ctx = json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]
+pre = ctx.split("\n\n", 1)[0].split("\n")
+i = next((k for k, l in enumerate(pre) if l.startswith("models.toml warnings (")), None)
+if i is not None:
+    sys.stdout.write("\n".join(pre[i:]))'
+}
+
+DEFAULT_SEATS="implementer=gpt-6.1-sol/high strict_implementer=gpt-5.6-terra/medium reviewer=gpt-6.1-sol/high"
+
+HOOK_STDIN="$CODEX_PAYLOAD" run_normal "$T"; codex_default="$OUT"
+if pre="$(codex_parts "$codex_default")"; then
+  pass "Codex context is the preamble, a blank line, then the map byte for byte"
+else
+  fail "Codex context is not preamble + blank line + SKILL.md minus frontmatter"
+  pre=""
+fi
+for needle in 'You have fablepowers on Codex.' '`fablepowers:workflow`' \
+  "\`$T/skills/workflow/references/codex.md\`" "Plugin root: \`$T\`." \
+  "Seat table (defaults, overridden by the [codex] table of $TEST_ROOT/xdg-empty/fablepowers/models.toml)" \
+  'reasoning_effort'; do
+  [[ "$pre" == *"$needle"* ]] && pass "Codex preamble names '$needle'" || fail "Codex preamble lacks '$needle'"
+done
+for needle in 'Claude Code' 'AskUserQuestion' 'TodoWrite' 'Agent tool' 'Skill tool' 'models.toml warnings'; do
+  [[ "$pre" != *"$needle"* ]] && pass "Codex preamble does not mention '$needle'" || fail "Codex preamble mentions '$needle'"
+done
+got="$(seats_of "$codex_default")"
+[[ "$got" == "$DEFAULT_SEATS" ]] && pass "no models.toml: default seat table" || fail "no models.toml: seats '$got'"
+size="$(context_of "$codex_default" | python3 -c 'import sys; print(len(sys.stdin.read()))')"
+[[ "$size" -le 8000 ]] && pass "Codex additionalContext is $size characters (cap 8000)" \
+  || fail "Codex additionalContext is $size characters, over the 8000 cap"
+
+# The plugin root is absolute even when the hook is invoked by a relative path.
+for inv in 'hooks/session-start' './hooks/../hooks/session-start'; do
+  RC=0
+  OUT="$(cd "$T" && env -u PLUGIN_ROOT XDG_CONFIG_HOME="$TEST_ROOT/xdg-empty" "$SH" $inv <"$CODEX_PAYLOAD" 2>"$TEST_ROOT/stderr")" || RC=$?
+  if [[ "$RC" == 0 && "$OUT" == "$codex_default" ]]; then
+    pass "relative invocation '$inv': same Codex output (absolute plugin root)"
+  else
+    fail "relative invocation '$inv': rc $RC, output differs"
+  fi
+done
+RC=0
+OUT="$(cd "$T/hooks" && env -u PLUGIN_ROOT XDG_CONFIG_HOME="$TEST_ROOT/xdg-empty" "$SH" session-start <"$CODEX_PAYLOAD" 2>"$TEST_ROOT/stderr")" || RC=$?
+[[ "$RC" == 0 && "$OUT" == "$codex_default" ]] && pass "no-slash invocation from hooks/: same Codex output" \
+  || fail "no-slash invocation from hooks/: rc $RC, output differs"
+
+# Neither HOME nor XDG_CONFIG_HOME (broken PATH, empty env): defaults, said so.
+HOOK_STDIN="$CODEX_PAYLOAD" run_broken "$T"
+if [[ "$RC" == 0 && "$(seats_of "$OUT")" == "$DEFAULT_SEATS" && "$(preamble_of "$OUT" 2>/dev/null; context_of "$OUT")" == *"no models.toml since HOME and XDG_CONFIG_HOME are unset"* ]]; then
+  pass "no HOME, no XDG_CONFIG_HOME: defaults, and the preamble says why"
+else
+  fail "no HOME, no XDG_CONFIG_HOME: rc $RC, seats '$(seats_of "$OUT" 2>/dev/null)'"
+fi
+
+# --- (i) models.toml -------------------------------------------------------------
+
+echo "models.toml parser"
+
+XN=0
+# toml_run <file-or-empty> [VAR=value ...]: Codex run with that file as
+# $XDG_CONFIG_HOME/fablepowers/models.toml (none if empty).
+toml_run() {
+  local src="$1"; shift
+  XN=$((XN + 1))
+  local xdg="$TEST_ROOT/xdg-$XN"
+  mkdir -p "$xdg/fablepowers"
+  [[ -n "$src" ]] && cp "$src" "$xdg/fablepowers/models.toml"
+  HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$xdg $*" run_normal "$T"
+}
+
+# toml_case <label> <content (printf format)> <expected seats> <expected warning count> [warning substring]
+toml_case() {
+  local label="$1" content="$2" want_seats="$3" want_n="$4" want_w="${5:-}" got_w n
+  printf -- "$content" > "$TEST_ROOT/models.toml"
+  toml_run "$TEST_ROOT/models.toml"
+  got_w="$(warnings_of "$OUT")"
+  if [[ -z "$got_w" ]]; then n=0; else n="${got_w%%)*}"; n="${n##*(}"; fi
+  if [[ "$RC" == 0 && "$(seats_of "$OUT")" == "$want_seats" && "$n" == "$want_n" && "$got_w" == *"$want_w"* ]]; then
+    pass "$label"
+  else
+    fail "$label: rc $RC, seats '$(seats_of "$OUT" 2>/dev/null)', warnings ($n): $(printf '%s' "$got_w" | tr '\n' '|')"
+  fi
+}
+
+S_IMPL_LUNA="implementer=gpt-6-luna/high strict_implementer=gpt-5.6-terra/medium reviewer=gpt-6.1-sol/high"
+
+toml_run "$SS_FIX/models-full.toml"
+want="implementer=gpt-6-luna/low strict_implementer=org/model-1.2:beta/xhigh reviewer=gpt-5.6-luna/max"
+if [[ "$(seats_of "$OUT")" == "$want" && -z "$(warnings_of "$OUT")" ]]; then
+  pass "every [codex] key overrides its default; [claude-code] and [other] ignored; no warnings"
+else
+  fail "models-full.toml: seats '$(seats_of "$OUT")', warnings '$(warnings_of "$OUT")'"
+fi
+[[ "$(context_of "$OUT")" == *"overridden by the [codex] table of $TEST_ROOT/xdg-$XN/fablepowers/models.toml"* ]] \
+  && pass "the seat table names the models.toml it read" || fail "the seat table does not name the models.toml path"
+
+toml_run ""
+[[ "$(seats_of "$OUT")" == "$DEFAULT_SEATS" && -z "$(warnings_of "$OUT")" ]] \
+  && pass "missing file: defaults, no warning" || fail "missing file: seats '$(seats_of "$OUT")', warnings '$(warnings_of "$OUT")'"
+
+toml_case "empty file: defaults, no warning" '' "$DEFAULT_SEATS" 0
+toml_case "comments, blank lines and indentation" '# c\n\n[codex]\n  # indented comment\n\timplementer = "gpt-6-luna"   # trailing # comment\n\n' "$S_IMPL_LUNA" 0
+toml_case "keys before any table are ignored" 'implementer = "gpt-6-luna"\n[codex]\n' "$DEFAULT_SEATS" 0
+toml_case "only [codex] is read; malformed lines elsewhere ignored" '[claude-code]\nimplementer = "x1"\nnot a line\n[codex]\nimplementer = "gpt-6-luna"\n[codex.sub]\nreviewer = "x2"\n[[codex]]\nreviewer = "x3"\n' "$S_IMPL_LUNA" 0
+toml_case "table header with spaces and a trailing comment" '[ codex ] # mine\nimplementer = "gpt-6-luna"\n' "$S_IMPL_LUNA" 0
+toml_case "CRLF line endings" '[codex]\r\nimplementer = "gpt-6-luna"\r\nimplementer_effort = "high" # c\r\n' "$S_IMPL_LUNA" 0
+toml_case "UTF-8 BOM" '\xef\xbb\xbf[codex]\nimplementer = "gpt-6-luna"\n' "$S_IMPL_LUNA" 0
+toml_case "BOM only stripped on line 1" '[codex]\n\xef\xbb\xbfimplementer = "gpt-6-luna"\n' "$DEFAULT_SEATS" 1 "line 2: malformed key"
+toml_case "no newline at end of file" '[codex]\nimplementer = "gpt-6-luna"' "$S_IMPL_LUNA" 0
+toml_case "single-quoted value: default + warning" "[codex]\nimplementer = 'gpt-6-luna'\n" "$DEFAULT_SEATS" 1 "line 2: implementer is single-quoted (use double quotes); using the default gpt-6.1-sol."
+toml_case "unquoted value: default + warning" '[codex]\nimplementer = gpt-6-luna\n' "$DEFAULT_SEATS" 1 "line 2: implementer is not a double-quoted string"
+toml_case "unterminated string: default + warning" '[codex]\nimplementer = "gpt-6-luna\n' "$DEFAULT_SEATS" 1 "unterminated"
+toml_case "text after the value: default + warning" '[codex]\nimplementer = "gpt-6-luna" x\n' "$DEFAULT_SEATS" 1 "text after the value"
+toml_case "duplicate key: last wins + warning" '[codex]\nimplementer = "a1"\nimplementer = "gpt-6-luna"\n' "$S_IMPL_LUNA" 1 "line 3: duplicate key implementer"
+toml_case "duplicate key, last invalid: default + 2 warnings" '[codex]\nimplementer = "gpt-6-luna"\nimplementer = "bad id"\n' "$DEFAULT_SEATS" 2 "duplicate key implementer"
+toml_case "duplicate key across two [codex] tables: last wins" '[codex]\nimplementer = "a1"\n[other]\n[codex]\nimplementer = "gpt-6-luna"\n' "$S_IMPL_LUNA" 1 "duplicate"
+toml_case "model id with a space: default + warning" '[codex]\nimplementer = "gpt 6"\n' "$DEFAULT_SEATS" 1 "line 2: implementer is not a valid model id; using the default gpt-6.1-sol."
+toml_case "model id with a +: default + warning" '[codex]\nimplementer = "gpt+6"\n' "$DEFAULT_SEATS" 1 "not a valid model id"
+toml_case "model id with a non-ASCII letter: default + warning" '[codex]\nimplementer = "gpt-\xc3\xa9"\n' "$DEFAULT_SEATS" 1 "not a valid model id"
+toml_case "model id with # inside the quotes: default + warning" '[codex]\nimplementer = "gpt#6"\n' "$DEFAULT_SEATS" 1 "not a valid model id"
+toml_case "empty model id: default + warning" '[codex]\nimplementer = ""\n' "$DEFAULT_SEATS" 1 "not a valid model id"
+id64="$(printf 'a%.0s' {1..64})"
+toml_case "64-character model id accepted" "[codex]\nreviewer = \"$id64\"\n" "implementer=gpt-6.1-sol/high strict_implementer=gpt-5.6-terra/medium reviewer=$id64/high" 0
+toml_case "65-character model id: default + warning" "[codex]\nreviewer = \"${id64}b\"\n" "$DEFAULT_SEATS" 1 "reviewer is not a valid model id"
+toml_case "model id characters . _ : / - and digits accepted" '[codex]\nstrict_implementer = "A.z_:0/9-x"\n' "implementer=gpt-6.1-sol/high strict_implementer=A.z_:0/9-x/medium reviewer=gpt-6.1-sol/high" 0
+for e in low medium high xhigh max ultra; do
+  toml_case "effort '$e' accepted" "[codex]\nstrict_implementer_effort = \"$e\"\n" "implementer=gpt-6.1-sol/high strict_implementer=gpt-5.6-terra/$e reviewer=gpt-6.1-sol/high" 0
+done
+toml_case "effort 'minimal': default + warning" '[codex]\nreviewer_effort = "minimal"\n' "$DEFAULT_SEATS" 1 "line 2: reviewer_effort is not low, medium, high, xhigh, max or ultra; using the default high."
+toml_case "effort 'High' (case matters): default + warning" '[codex]\nimplementer_effort = "High"\n' "$DEFAULT_SEATS" 1 "implementer_effort is not low"
+toml_case "unknown key: ignored + warning" '[codex]\norchestrator = "gpt-6-luna"\n' "$DEFAULT_SEATS" 1 "line 2: unknown key orchestrator; ignored."
+toml_case "quoted key: ignored + warning" '[codex]\n"implementer" = "gpt-6-luna"\n' "$DEFAULT_SEATS" 1 "line 2: malformed key"
+toml_case "line without =: ignored + warning" '[codex]\nimplementer\n' "$DEFAULT_SEATS" 1 "line 2: not a key = \"value\" line"
+toml_case "malformed table header: warning, table not read" '[codex\nimplementer = "gpt-6-luna"\n' "$DEFAULT_SEATS" 1 "line 1: malformed table header"
+toml_case "five warnings: three listed, then the count of the rest" '[codex]\na1 = "x"\na2 = "x"\na3 = "x"\na4 = "x"\na5 = "x"\n' "$DEFAULT_SEATS" 5 "- … 2 more"
+printf '[codex]\na1 = "x"\na2 = "x"\na3 = "x"\na4 = "x"\na5 = "x"\n' > "$TEST_ROOT/models.toml"
+toml_run "$TEST_ROOT/models.toml"
+w="$(warnings_of "$OUT")"
+if [[ "$w" == $'models.toml warnings (5):\n- line 2: unknown key a1; ignored.\n- line 3: unknown key a2; ignored.\n- line 4: unknown key a3; ignored.\n- … 2 more' ]]; then
+  pass "warning block is exactly: header, 3 warning lines, '… 2 more'"
+else
+  fail "warning block: $(printf '%s' "$w" | tr '\n' '|')"
+fi
+toml_case "three warnings: no '… more' line" '[codex]\na1 = "x"\na2 = "x"\na3 = "x"\n' "$DEFAULT_SEATS" 3 "line 4: unknown key a3; ignored."
+w="$(warnings_of "$OUT")"
+[[ "$w" != *"more"* ]] && pass "three warnings: all listed, no '… more' line" || fail "three warnings: '$w'"
+
+# A long unknown key is cut to 32 characters in its warning.
+long_key="$(printf 'k%.0s' {1..200})"
+toml_case "a long unknown key is cut to 32 characters" "[codex]\n$long_key = \"x\"\n" "$DEFAULT_SEATS" 1 "unknown key $(printf 'k%.0s' {1..32}); ignored."
+
+# Unreadable file and a directory in its place.
+mkdir -p "$TEST_ROOT/xdg-dir/fablepowers/models.toml"
+HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$TEST_ROOT/xdg-dir" run_normal "$T"
+[[ "$(seats_of "$OUT")" == "$DEFAULT_SEATS" && "$(warnings_of "$OUT")" == *"models.toml is not a readable file; using the defaults."* ]] \
+  && pass "models.toml is a directory: defaults + warning" || fail "models.toml is a directory: '$(warnings_of "$OUT")'"
+if [[ "$(id -u)" != 0 ]]; then
+  mkdir -p "$TEST_ROOT/xdg-unread/fablepowers"
+  printf '[codex]\nimplementer = "gpt-6-luna"\n' > "$TEST_ROOT/xdg-unread/fablepowers/models.toml"
+  chmod 000 "$TEST_ROOT/xdg-unread/fablepowers/models.toml"
+  HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$TEST_ROOT/xdg-unread" run_normal "$T"
+  [[ "$RC" == 0 && "$(seats_of "$OUT")" == "$DEFAULT_SEATS" && "$(warnings_of "$OUT")" == *"not a readable file"* ]] \
+    && pass "unreadable models.toml: defaults + warning" || fail "unreadable models.toml: rc $RC '$(warnings_of "$OUT")'"
+  chmod 600 "$TEST_ROOT/xdg-unread/fablepowers/models.toml"
+else
+  echo "  [SKIP] running as root: an unreadable file cannot be made"
+fi
+
+# Location: $XDG_CONFIG_HOME wins; empty or unset falls back to $HOME/.config.
+mkdir -p "$TEST_ROOT/home/.config/fablepowers" "$TEST_ROOT/xdg-x/fablepowers"
+printf '[codex]\nimplementer = "gpt-6-luna"\n' > "$TEST_ROOT/home/.config/fablepowers/models.toml"
+printf '[codex]\nreviewer = "gpt-6-luna"\n' > "$TEST_ROOT/xdg-x/fablepowers/models.toml"
+HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="HOME=$TEST_ROOT/home XDG_CONFIG_HOME=" run_normal "$T"
+[[ "$(seats_of "$OUT")" == "$S_IMPL_LUNA" ]] && pass "XDG_CONFIG_HOME empty: \$HOME/.config/fablepowers/models.toml read" \
+  || fail "XDG_CONFIG_HOME empty: seats '$(seats_of "$OUT")'"
+HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="HOME=$TEST_ROOT/home" run_broken "$T"
+[[ "$(seats_of "$OUT")" == "$S_IMPL_LUNA" ]] && pass "XDG_CONFIG_HOME unset (broken PATH): \$HOME/.config used" \
+  || fail "XDG_CONFIG_HOME unset: seats '$(seats_of "$OUT")'"
+HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="HOME=$TEST_ROOT/home XDG_CONFIG_HOME=$TEST_ROOT/xdg-x" run_normal "$T"
+[[ "$(seats_of "$OUT")" == "implementer=gpt-6.1-sol/high strict_implementer=gpt-5.6-terra/medium reviewer=gpt-6-luna/high" ]] \
+  && pass "XDG_CONFIG_HOME set: its models.toml wins over \$HOME/.config" || fail "XDG_CONFIG_HOME set: seats '$(seats_of "$OUT")'"
+
+# models.toml is read only on the Codex path: a broken file changes nothing on Claude Code.
+mkdir -p "$TEST_ROOT/xdg-bad/fablepowers"
+printf '[codex]\nimplementer = bad\n' > "$TEST_ROOT/xdg-bad/fablepowers/models.toml"
+HOOK_STDIN="$CLAUDE_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$TEST_ROOT/xdg-bad" run_normal "$T"
+[[ "$OUT" == "$claude_ref" ]] && pass "Claude Code payload with a malformed models.toml: output unchanged" \
+  || fail "Claude Code payload with a malformed models.toml: output changed"
+
+# The parser under bash --posix gives the same output.
+RC=0
+OUT="$(cd "$TEST_ROOT" && env -u PLUGIN_ROOT XDG_CONFIG_HOME="$CODEX_XDG" "$SH" --posix "$T/hooks/session-start" <"$CODEX_PAYLOAD" 2>"$TEST_ROOT/stderr")" || RC=$?
+[[ "$RC" == 0 && "$OUT" == "$codex_reference" ]] && pass "bash --posix: same Codex output with the full models.toml" \
+  || fail "bash --posix: rc $RC; $(head -c 160 "$TEST_ROOT/stderr")"
+printf '\xef\xbb\xbf[codex]\r\nimplementer = "gpt 6"\r\nreviewer_effort = "x"\r\nfoo = "y"\r\nbar\r\n' > "$TEST_ROOT/xdg-bad/fablepowers/models.toml"
+HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$TEST_ROOT/xdg-bad" run_normal "$T"; posix_want="$OUT"
+RC=0
+OUT="$(cd "$TEST_ROOT" && env -u PLUGIN_ROOT XDG_CONFIG_HOME="$TEST_ROOT/xdg-bad" "$SH" --posix "$T/hooks/session-start" <"$CODEX_PAYLOAD" 2>"$TEST_ROOT/stderr")" || RC=$?
+[[ "$RC" == 0 && "$OUT" == "$posix_want" && "$(warnings_of "$OUT")" == "models.toml warnings (4):"* ]] \
+  && pass "bash --posix: same Codex output and warnings with a malformed CRLF+BOM models.toml" \
+  || fail "bash --posix, malformed file: rc $RC; $(head -c 160 "$TEST_ROOT/stderr")"
+
+# Worst case size: every seat rejected, many warnings, a long config path.
+deep="$TEST_ROOT/$(printf 'deep-directory-name-%.0s' {1..8})"
+mkdir -p "$deep/fablepowers"
+{
+  printf '\xef\xbb\xbf[codex]\r\n'
+  for k in implementer strict_implementer reviewer; do
+    printf '%s = "%s"\r\n' "$k" "$(printf 'x%.0s' {1..80})" "${k}_effort" "nope"
+  done
+  for i in $(seq 1 200); do printf 'unknown_key_%s_%s = "x"\r\n' "$i" "$(printf 'y%.0s' {1..40})"; done
+} > "$deep/fablepowers/models.toml"
+HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$deep" run_normal "$T"
+size="$(context_of "$OUT" | python3 -c 'import sys; print(len(sys.stdin.read()))')"
+nw="$(warnings_of "$OUT" | grep -c '^- ' || true)"
+if [[ "$RC" == 0 && "$size" -le 8000 && "$nw" == 4 && "$(seats_of "$OUT")" == "$DEFAULT_SEATS" ]]; then
+  pass "worst case (206 warnings, long path): $size characters (cap 8000), 3 warning lines + '… more'"
+else
+  fail "worst case: rc $RC, $size characters, $nw warning lines, seats '$(seats_of "$OUT")'"
+fi
 
 echo
 if [[ "$FAILURES" -eq 0 ]]; then

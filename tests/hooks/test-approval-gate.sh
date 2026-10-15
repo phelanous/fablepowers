@@ -225,7 +225,8 @@ expect "overwrite (type update) of a spec" allow
 check "overwrite does not pend" test ! -e "$R/.fablepowers/over/pending"
 
 R="$TEST_ROOT/r2c"; new_repo "$R"
-mkdir -p "$R/.fablepowers/done"; printf '{}' > "$R/.fablepowers/done/approved"
+mkdir -p "$R/.fablepowers/done"
+printf '{"spec": "docs/specs/done.md", "approved_at": "2026-01-01T00:00:00+00:00", "via": "command", "spec_sha256": null}' > "$R/.fablepowers/done/approved"
 create_spec "$R" docs/specs/done.md
 check "create of an already-approved key does not re-pend" test ! -e "$R/.fablepowers/done/pending"
 
@@ -331,6 +332,76 @@ check "pending: Write .fablepowers/k2/approved denied" test "$(edit_verdict pre-
 run_gate PreToolUse Write pre-write CWD="$R" FILE="$R/.fablepowers/k2/approved"
 reason="$(text_of)"
 check "marker deny reason points at the commands" bash -c '[[ "$1" == *"/fablepowers:approve"* && "$1" == *"Do not retry"* ]]' _ "$reason"
+
+# --- 5b. marker forgery: directories, case variants, invalid markers ---------------------------
+
+echo "5b. Marker forgery rejected"
+
+R="$TEST_ROOT/r5b"; new_repo "$R"
+# Paths through a marker-named directory would create a directory `approved`/`pending`.
+for f in .fablepowers/k/approved/x .fablepowers/k/pending/x .fablepowers/k/approved/sub/y.md; do
+  check "no pending: Write $f denied" test "$(edit_verdict pre-write "$R" "$R/$f")" == deny
+done
+check "relative .fablepowers/k/approved/x denied" test "$(edit_verdict pre-write "$R" .fablepowers/k/approved/x)" == deny
+# Case variants resolve to the marker on case-insensitive filesystems (payload only).
+for f in .fablepowers/k/Approved .fablepowers/k/PENDING .FablePowers/k/approved .FABLEPOWERS/k/Pending/x; do
+  check "no pending: Write $f denied" test "$(edit_verdict pre-write "$R" "$R/$f")" == deny
+done
+check "Edit .FablePowers/k/APPROVED denied" test "$(edit_verdict pre-edit "$R" "$R/.FablePowers/k/APPROVED")" == deny
+# Non-marker names under .fablepowers stay writable.
+check ".fablepowers/k/reports/pending-review.md allowed" test "$(edit_verdict pre-write "$R" "$R/.fablepowers/k/reports/pending-review.md")" == allow
+check ".FablePowers/k/Approved.md allowed" test "$(edit_verdict pre-write "$R" "$R/.FablePowers/k/Approved.md")" == allow
+check "src/approved/x.py (no .fablepowers) allowed" test "$(edit_verdict pre-write "$R" "$R/src/approved/x.py")" == allow
+create_spec "$R" docs/specs/k3.md
+check "pending: Write .fablepowers/k3/approved/x denied" test "$(edit_verdict pre-write "$R" "$R/.fablepowers/k3/approved/x")" == deny
+check "pending: Write .FablePowers/k3/Approved denied" test "$(edit_verdict pre-write "$R" "$R/.FablePowers/k3/Approved")" == deny
+
+# An `approved` that the gate did not write does not approve: the design stays pending.
+forged_case() {  # forged_case <label> <setup-command...>: pending design f + forged approved
+  local R="$TEST_ROOT/r5f-$((++FORGED_N))"; new_repo "$R"
+  create_spec "$R" docs/specs/f.md
+  ( cd "$R/.fablepowers/f" && "$@" )
+  check "forged approved ($LABEL): implementer dispatch denied" test "$(agent_verdict "$R" fablepowers:implementer)" == deny
+  check "forged approved ($LABEL): code edit denied" test "$(edit_verdict pre-edit "$R" "$R/src/app.py")" == deny
+  check "forged approved ($LABEL): logged to gate.log" grep -q "invalid approved marker for \`f\`" "$R/.fablepowers/gate.log"
+}
+FORGED_N=0
+VALID='{"spec": "docs/specs/f.md", "approved_at": "2026-01-01T00:00:00+00:00", "via": "command", "spec_sha256": null}'
+LABEL="directory";            forged_case mkdir -p approved/x
+LABEL="empty file";           forged_case touch approved
+LABEL="not JSON";             forged_case sh -c 'printf "yes" > approved'
+LABEL="JSON array";           forged_case sh -c 'printf "[]" > approved'
+LABEL="{} (no fields)";       forged_case sh -c 'printf "{}" > approved'
+LABEL="no via";               forged_case sh -c 'printf "%s" "{\"spec\": null, \"approved_at\": \"2026-01-01\"}" > approved'
+LABEL="via not a gate path";  forged_case sh -c 'printf "%s" "{\"spec\": null, \"approved_at\": \"2026-01-01\", \"via\": \"model\"}" > approved'
+LABEL="no approved_at";       forged_case sh -c 'printf "%s" "{\"spec\": null, \"via\": \"command\"}" > approved'
+LABEL="empty approved_at";    forged_case sh -c 'printf "%s" "{\"spec\": null, \"approved_at\": \"\", \"via\": \"command\"}" > approved'
+LABEL="no spec";              forged_case sh -c 'printf "%s" "{\"approved_at\": \"2026-01-01\", \"via\": \"command\"}" > approved'
+LABEL="spec not a string";    forged_case sh -c 'printf "%s" "{\"spec\": 1, \"approved_at\": \"2026-01-01\", \"via\": \"command\"}" > approved'
+LABEL="symlink to valid JSON"; forged_case sh -c 'printf "%s" "$1" > ../real-approval; ln -s ../real-approval approved' _ "$VALID"
+
+R="$TEST_ROOT/r5v"; new_repo "$R"
+create_spec "$R" docs/specs/f.md
+printf '%s' "$VALID" > "$R/.fablepowers/f/approved"
+check "hand-written valid approved JSON (regular file) approves" test "$(agent_verdict "$R" fablepowers:implementer)" == allow
+printf '%s' '{"spec": "docs/specs/f.md", "approved_at": "2026-01-01T00:00:00+00:00", "via": "question"}' > "$R/.fablepowers/f/approved"
+check "via question, spec_sha256 absent: approves" test "$(agent_verdict "$R" fablepowers:implementer)" == allow
+
+# `pending` counts only as a regular, non-symlink file.
+R="$TEST_ROOT/r5p"; new_repo "$R"
+mkdir -p "$R/.fablepowers/d/pending"
+check "pending as a directory: not pending (dispatch allowed)" test "$(agent_verdict "$R" fablepowers:implementer)" == allow
+R="$TEST_ROOT/r5q"; new_repo "$R"
+mkdir -p "$R/.fablepowers/s"; printf '{"spec": "docs/specs/s.md"}' > "$R/real-pending"
+ln -s "$R/real-pending" "$R/.fablepowers/s/pending"
+check "pending as a symlink: not pending (dispatch allowed)" test "$(agent_verdict "$R" fablepowers:implementer)" == allow
+
+# A forged approved directory present before the spec create does not stop it pending.
+R="$TEST_ROOT/r5c"; new_repo "$R"
+mkdir -p "$R/.fablepowers/pre/approved/x"
+create_spec "$R" docs/specs/pre.md
+check "forged approved dir before create: pending written" test -f "$R/.fablepowers/pre/pending"
+check "forged approved dir before create: dispatch denied" test "$(agent_verdict "$R" fablepowers:implementer)" == deny
 
 # --- 6. approve and withdraw commands ---------------------------------------------------------
 

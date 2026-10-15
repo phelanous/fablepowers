@@ -135,14 +135,18 @@ elif [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"UserPromptSubmit\" \
 fi
 (( gate_event )) || exit 0
 
-# A Codex PreToolUse (apply_patch or a spawn tool, or any payload carrying
-# turn_id) can carry only a systemMessage, which reaches neither the model nor a
-# `codex exec` user: it still prints the warning but leaves the marker for the
-# next Codex event that can carry additionalContext.
+# A Codex event (apply_patch or a spawn tool, or any payload carrying turn_id)
+# leaves the marker for a later one when its warning reaches nobody who can act:
+# a PreToolUse can carry only a systemMessage, which reaches neither the model
+# nor a `codex exec` user; an event carrying agent_id is a subagent's (v2
+# children share the root's session_id), whose context goes to the subagent, not
+# to the root or the user. It still prints the warning. Claude Code events keep
+# using the marker: their systemMessage is shown to the user.
 consume=1
-if [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"PreToolUse\" ]] \
-        && [[ "$payload" =~ \"tool_name\"$ws:$ws\"(apply_patch|spawn_agent|collaborationspawn_agent)\" \
-              || "$payload" =~ \"turn_id\"$ws: ]]; then
+if [[ "$payload" =~ \"tool_name\"$ws:$ws\"(apply_patch|spawn_agent|collaborationspawn_agent)\" \
+        || "$payload" =~ \"turn_id\"$ws: ]] \
+   && [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"PreToolUse\" \
+        || "$payload" =~ \"agent_id\"$ws: ]]; then
     consume=0
 fi
 

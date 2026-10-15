@@ -1238,6 +1238,15 @@ done
 cups "$R" $'$fablepowers:withdraw one\n\n'
 check "near-miss withdraw: not-recognised context naming withdraw" \
   bash -c '[[ "$1" == context && "$2" == *"send exactly \`\$fablepowers:withdraw [key]\` on its own"* ]]' _ "$(verdict)" "$(text_of)"
+check "  N-2: the hint says 'as a withdrawal', never 'as an approval'" \
+  bash -c '[[ "$1" == *"do not act on this message as a withdrawal."* && "$1" != *"as an approval"* ]]' _ "$(text_of)"
+check "  still pending" test -e "$R/.fablepowers/one/pending"
+cups "$R" '$fablepowers:approve a b'
+check "N-2: approve near-miss hint says 'as an approval'" \
+  bash -c '[[ "$1" == *"do not act on this message as an approval."* ]]' _ "$(text_of)"
+cups "$R" '$fablepowers:withdraw nosuch'
+check "N-2: withdraw with an unknown key: 'no pending design matches', 'as a withdrawal'" \
+  bash -c '[[ "$1" == *"no pending design matches \`nosuch\`"* && "$1" == *"Do not act on this message as a withdrawal."* && "$1" != *"as an approval"* ]]' _ "$(text_of)"
 check "  still pending" test -e "$R/.fablepowers/one/pending"
 cups "$R" '$fablepowers:approve a b' codex-ups-child
 check "near-miss with agent_id (a subagent prompt): silent, nothing recorded" test "$(verdict)" == allow -a ! -e "$R/.fablepowers/one/approved"
@@ -1245,7 +1254,7 @@ check "near-miss with agent_id (a subagent prompt): silent, nothing recorded" te
 for p in '$fablepowers:approve please' '$fablepowers:approve one.'; do
   cups "$R" "$p"
   check "not an approval: '$p' (no such key: context, nothing recorded)" \
-    bash -c '[[ "$1" == context && "$2" == *"no pending design matches"* ]]' _ "$(verdict)" "$(text_of)"
+    bash -c '[[ "$1" == context && "$2" == *"no pending design matches"* && "$2" == *"Do not act on this message as an approval."* ]]' _ "$(verdict)" "$(text_of)"
   check "  nothing recorded" test ! -e "$R/.fablepowers/one/approved"
 done
 cups "$R" '$fablepowers:approve' codex-ups-child
@@ -1451,6 +1460,32 @@ check "SF1: Claude Code PreToolUse still warns" test "$OUT" == "$WARNING"
 check "  SF1: Claude Code PreToolUse writes the warn-once marker" test -f "$WARNED"
 run_gate PreToolUse Write pre-write CWD="$RS" FILE="$RS/src/app.py"
 expect "SF1: Claude Code second call silent" allow
+# S-1: a Codex subagent's event (agent_id; v2 children share the root's
+# session_id, as the real fixture shows) still carries the context to the
+# subagent but must not use up the marker: the root's later approve still warns.
+reset_warned
+run_gate PreToolUse collaborationspawn_agent codex-v2-pre-spawn CWD="$RS" TASK=fablepowers_implementer_t1
+check "S-1: root Pre spawn prints the systemMessage" test "$OUT" == "$WARNING"
+check "  S-1: no warn-once marker after the spawn" test ! -e "$CWARNED"
+cpost "$RS" "$(patch_of $'*** Update File: src/app.py\n@@\n-hello\n+bye')" "$(resp_of "M src/app.py")" "$RS" codex-post-apply_patch-subagent
+check "S-1: subagent Post apply_patch (agent_id) still carries the PostToolUse context" codex_warned PostToolUse
+check "  S-1: no warn-once marker after the subagent's Post" test ! -e "$CWARNED"
+cpost "$RS" "$(patch_of $'*** Add File: docs/specs/sub.md\n+x')" "$(resp_of "A docs/specs/sub.md")" "$RS" codex-post-apply_patch-subagent
+check "S-1: subagent Post spec Add carries the context" codex_warned PostToolUse
+check "  S-1: still no warn-once marker" test ! -e "$CWARNED"
+cups_same "$RS" '$fablepowers:approve'
+check "S-1: Pre spawn -> subagent Post -> root UPS \$fablepowers:approve carries the UserPromptSubmit context" codex_warned UserPromptSubmit
+check "  S-1: warn-once marker written by the root UPS" test -f "$CWARNED"
+cpost "$RS" "$(patch_of $'*** Update File: src/app.py\n@@\n-hello\n+bye')" "$(resp_of "M src/app.py")" "$RS" codex-post-apply_patch-subagent
+expect "S-1: subagent Post after the root was warned: silent" allow
+# Claude Code subagent events unchanged: a Claude subagent's (agent_id, no
+# turn_id) Post warns and uses the marker.
+reset_warned
+run_gate PostToolUse Write post-write-create-subagent CWD="$RS" FILE="$RS/docs/specs/sub.md"
+check "S-1: Claude Code subagent Post Write still warns" test "$OUT" == "$WARNING"
+check "  S-1: Claude Code subagent Post writes the warn-once marker" test -f "$WARNED"
+run_gate PreToolUse Write pre-write CWD="$RS" FILE="$RS/src/app.py"
+expect "S-1: Claude Code call after the subagent's warning silent" allow
 GATE_ENV=()
 reset_warned
 

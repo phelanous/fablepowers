@@ -1,0 +1,14 @@
+# fablepowers seat models: every [codex] key set, with comments and other tables.
+[claude-code]
+implementer = "not-applied"
+
+[codex]
+implementer = "gpt-6-luna"            # trailing comment
+implementer_effort = "low"
+  strict_implementer = "org/model-1.2:beta"
+strict_implementer_effort = "xhigh"
+reviewer="gpt-5.6-luna"
+reviewer_effort   =   "max"
+
+[other]
+reviewer = "not-applied-either"

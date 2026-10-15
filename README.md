@@ -27,8 +27,11 @@ new session, so the model knows the entry point without any CLAUDE.md edits.
 **Requirements:** Claude Code 2.1.299 or later (the version the approval gate is
 tested with; the approve and withdraw commands rely on its `UserPromptExpansion`
 hook event), and Python 3.8+ for the approval gate. Without a usable `python3`
-the gate turns itself off and everything else still works; it warns (once per
-session) only in repositories that already have a `.fablepowers/` directory.
+the gate turns itself off and everything else still works. It then warns once
+per session: on any hooked call in a repository that has a `.fablepowers/`
+directory, and elsewhere in a repository on the calls where the gate would have
+acted (creating a spec under `docs/specs/`, the approval question, and
+`/fablepowers:approve` or `/fablepowers:withdraw`).
 
 ## How it works
 
@@ -93,11 +96,15 @@ or CI); what would have been blocked is logged to `.fablepowers/gate.log`.
 
 The gate stops a session that rolls past approval; it is not a sandbox. It
 watches the edit tools and the agent dispatch, not shell commands. While a
-design is pending, the edit tools are blocked from repo code and from Claude
-Code settings files (`.claude/settings.json`, `.claude/settings.local.json`,
-in any location), but a model writing through the shell could still forge or
-delete a marker or install a settings hook that answers the question for the
-user. Details:
+design is pending, the edit tools are blocked from repo code and from the usual
+Claude Code settings files (`.claude/settings.json`, `.claude/settings.local.json`,
+in any location). That closes the common settings files only: an edit-tool
+write to the installed plugin's own hook files, to a config directory not named
+`.claude`, or to managed settings is not blocked, and is covered only by Claude
+Code's own permission prompt for paths outside the project. A model writing
+through the shell could also still forge or delete a marker or install a hook
+that answers the question for the user. These are adversarial paths, outside
+what the gate is for. Details:
 [`skills/workflow/references/claude-code.md`](skills/workflow/references/claude-code.md#approval-mechanism).
 
 The usual path: `workflow` → `design-spec` (approval) → `implementation-plan`

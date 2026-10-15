@@ -79,6 +79,10 @@ EOF
 # for that event/matcher on the substituted fixture. stdout -> $OUT, exit -> $RC.
 # Extra environment for the hook in the GATE_ENV array; RUN_MODE=broken runs
 # with an empty environment and PATH=/nonexistent.
+# TMPDIR is pinned to $GATE_TMP so the no-python warn-once markers stay in the
+# test tree; reset_warned clears them (every fixture has the same session_id).
+GATE_TMP="$TEST_ROOT/tmp"; mkdir -p "$GATE_TMP"
+reset_warned() { rm -f "$GATE_TMP"/fablepowers-gate-warned-*; }
 GATE_ENV=()
 RUN_MODE=normal
 run_gate() {
@@ -87,11 +91,25 @@ run_gate() {
     OUT=""; RC=99; echo "    (no single hooks.json entry for $event/$matcher)"; return
   fi
   input="$(payload "$fixture" "$@")"
+  run_cmd_input "$cmd" "$input"
+}
+
+# run_gate_json <event> <matcher> <json>: as run_gate, with a literal payload.
+run_gate_json() {
+  local cmd
+  if ! cmd="$(hook_cmd "$1" "$2")"; then
+    OUT=""; RC=99; echo "    (no single hooks.json entry for $1/$2)"; return
+  fi
+  run_cmd_input "$cmd" "$3"
+}
+
+run_cmd_input() {
+  local cmd="$1" input="$2"
   RC=0
   if [[ "$RUN_MODE" == broken ]]; then
-    OUT="$(cd "$TEST_ROOT" && printf '%s' "$input" | env -i PATH=/nonexistent CLAUDE_PLUGIN_ROOT="$PLUGIN" ${GATE_ENV[@]+"${GATE_ENV[@]}"} "$SH" -c "$cmd" 2>"$TEST_ROOT/stderr")" || RC=$?
+    OUT="$(cd "$TEST_ROOT" && printf '%s' "$input" | env -i PATH=/nonexistent TMPDIR="$GATE_TMP" CLAUDE_PLUGIN_ROOT="$PLUGIN" ${GATE_ENV[@]+"${GATE_ENV[@]}"} "$SH" -c "$cmd" 2>"$TEST_ROOT/stderr")" || RC=$?
   else
-    OUT="$(cd "$TEST_ROOT" && printf '%s' "$input" | env -u BASH CLAUDE_PLUGIN_ROOT="$PLUGIN" ${GATE_ENV[@]+"${GATE_ENV[@]}"} "$SH" -c "$cmd" 2>"$TEST_ROOT/stderr")" || RC=$?
+    OUT="$(cd "$TEST_ROOT" && printf '%s' "$input" | env -u BASH TMPDIR="$GATE_TMP" CLAUDE_PLUGIN_ROOT="$PLUGIN" ${GATE_ENV[@]+"${GATE_ENV[@]}"} "$SH" -c "$cmd" 2>"$TEST_ROOT/stderr")" || RC=$?
   fi
 }
 
@@ -457,6 +475,8 @@ check "pending: Write ~/.claude/settings.json denied" test "$(edit_verdict pre-w
 run_gate PreToolUse Write pre-write CWD="$R" FILE="$H/.claude/settings.json"
 check "settings deny reason names the pending design and the commands" \
   bash -c '[[ "$1" == *docs/specs/s.md* && "$1" == *"/fablepowers:approve s"* && "$1" == *settings.json* && "$1" == *"Do not retry"* ]]' _ "$(text_of)"
+check "settings deny reason says the user can make the change themselves" \
+  bash -c '[[ "$1" == *"they can make it themselves"* ]]' _ "$(text_of)"
 check "pending: Edit ~/.claude/settings.local.json denied" test "$(edit_verdict pre-edit "$R" "$H/.claude/settings.local.json")" == deny
 check "pending: MultiEdit <repo>/.claude/settings.json denied" test "$(edit_verdict pre-multiedit "$R" "$R/.claude/settings.json")" == deny
 check "pending: <repo>/docs/plans/.claude/settings.json denied (allowed dir)" test "$(edit_verdict pre-write "$R" "$R/docs/plans/.claude/settings.json")" == deny
@@ -622,32 +642,103 @@ check "broken PATH output equals normal" test "$OUT" == "$before"
 RUN_MODE=normal
 
 printf '#!/bin/sh\nexit 1\n' > "$TEST_ROOT/brokenpy"; chmod +x "$TEST_ROOT/brokenpy"
-# No usable python: silent where no pending marker could exist (outside git, or
-# a repo without .fablepowers/), warn once per session where .fablepowers/ exists.
+WARNING='{"systemMessage":"fablepowers approval gate disabled: python3 not found"}'
+WARNED="$GATE_TMP/fablepowers-gate-warned-$UID-76496df1-bffc-49e9-96ae-c92ee405caf7"
+# No usable python: silent outside git; in a repo without .fablepowers/ silent
+# except on the calls where the gate would have acted (spec create, the
+# approval question, approve/withdraw), where it warns once per session; in a
+# repo with .fablepowers/ it warns once per session on any call.
 for py in /nonexistent "$TEST_ROOT/brokenpy" "$TEST_ROOT"; do
   GATE_ENV=("FABLEPOWERS_PYTHON=$py")
   run_gate PreToolUse Agent pre-agent CWD="$TEST_ROOT/nowhere" SUBAGENT=fablepowers:implementer
   expect "FABLEPOWERS_PYTHON=$py, outside git: silent" allow
 done
-RQ="$TEST_ROOT/r8q"; new_repo "$RQ"
+mkdir -p "$TEST_ROOT/nowhere/docs/specs"
+run_gate PostToolUse Write post-write-create CWD="$TEST_ROOT/nowhere" FILE="$TEST_ROOT/nowhere/docs/specs/a.md"
+expect "no python, outside git: spec create silent" allow
+run_gate PostToolUse AskUserQuestion post-ask CWD="$TEST_ROOT/nowhere" ANSWER=Approve
+expect "no python, outside git: approval answer silent" allow
+check "  no warn-once marker" test ! -e "$WARNED"
+
+# nopy_gate_events <label> <repo>: the no-python checks for a repo or worktree
+# without .fablepowers/ (GATE_ENV must select a missing python).
+nopy_gate_events() {
+  local L="$1" R="$2"
+  reset_warned
+  run_gate PreToolUse Agent pre-agent CWD="$R" SUBAGENT=fablepowers:implementer
+  expect "no python, $L: implementer dispatch silent" allow
+  run_gate PreToolUse Write pre-write CWD="$R" FILE="$R/docs/specs/a.md"
+  expect "no python, $L: PreToolUse Write of a spec silent" allow
+  run_gate PostToolUse Write post-write-create CWD="$R" FILE="$R/src/new.py"
+  expect "no python, $L: non-spec create silent" allow
+  run_gate PostToolUse Write post-write-create CWD="$R" FILE="$R/docs/specs/notes.txt"
+  expect "no python, $L: non-.md create under docs/specs silent" allow
+  run_gate PostToolUse Write post-write-update CWD="$R" FILE="$R/docs/specs/a.md"
+  expect "no python, $L: spec update silent" allow
+  run_gate PostToolUse Write post-write-create CWD="$R" FILE="$R/src/docs/specsx/a.md"
+  expect "no python, $L: create under a docs/specs-like path silent" allow
+  run_gate_json PostToolUse Write "$(payload post-write-create CWD="$R" FILE="$R/docs/specs/a.md" | sed 's/"PostToolUse"/"PreToolUse"/')"
+  expect "no python, $L: spec-create-shaped PreToolUse payload silent" allow
+  check "  $L: no warn-once marker yet" test ! -e "$WARNED"
+  run_gate PostToolUse Write post-write-create CWD="$R" FILE="$R/docs/specs/a.md"
+  expect "no python, $L: spec create warns" warning
+  check "  $L: warning text" test "$OUT" == "$WARNING"
+  check "  $L: warn-once marker in TMPDIR" test -f "$WARNED"
+  check "  $L: no .fablepowers/ created" test ! -e "$R/.fablepowers"
+  run_gate PostToolUse AskUserQuestion post-ask CWD="$R" ANSWER=Approve
+  expect "no python, $L: approval answer after the warning silent" allow
+  run_gate PostToolUse Write post-write-create CWD="$R" FILE="$R/docs/specs/b.md"
+  expect "no python, $L: second spec create silent" allow
+  reset_warned
+  run_gate PostToolUse AskUserQuestion post-ask CWD="$R" ANSWER=Approve
+  expect "no python, $L: PostToolUse AskUserQuestion warns" warning
+  run_gate PostToolUse AskUserQuestion post-ask CWD="$R" ANSWER=Approve
+  expect "no python, $L: PostToolUse AskUserQuestion once per session" allow
+  reset_warned
+  run_gate_json PostToolUse AskUserQuestion "$(payload post-ask CWD="$R" ANSWER=Approve | sed 's/"PostToolUse"/"PreToolUse"/')"
+  expect "no python, $L: PreToolUse AskUserQuestion warns" warning
+  reset_warned
+  run_gate UserPromptExpansion fablepowers:approve expansion CWD="$R" COMMAND=fablepowers:approve ARGS=
+  expect "no python, $L: /fablepowers:approve warns" warning
+  run_gate UserPromptExpansion fablepowers:withdraw expansion CWD="$R" COMMAND=fablepowers:withdraw ARGS=
+  expect "no python, $L: /fablepowers:withdraw once per session" allow
+  reset_warned
+  run_gate UserPromptExpansion fablepowers:withdraw expansion CWD="$R" COMMAND=fablepowers:withdraw ARGS=a
+  expect "no python, $L: /fablepowers:withdraw warns" warning
+  reset_warned
+  run_gate UserPromptExpansion fablepowers:approve expansion CWD="$R" COMMAND=other:approve ARGS=
+  expect "no python, $L: another command's expansion silent" allow
+  check "  $L: still no .fablepowers/" test ! -e "$R/.fablepowers"
+}
 GATE_ENV=("FABLEPOWERS_PYTHON=/nonexistent")
-run_gate PreToolUse Agent pre-agent CWD="$RQ" SUBAGENT=fablepowers:implementer
-expect "no python, repo without .fablepowers/: first call silent" allow
-run_gate PreToolUse Write pre-write CWD="$RQ" FILE="$RQ/src/app.py"
-expect "no python, repo without .fablepowers/: second call silent" allow
-check "  no .fablepowers/ created" test ! -e "$RQ/.fablepowers"
+RQ="$TEST_ROOT/r8q"; new_repo "$RQ"
+nopy_gate_events "fresh repo without .fablepowers/" "$RQ"
+git -C "$RQ" commit -q --allow-empty -m init
+git -C "$RQ" worktree add -q "$TEST_ROOT/r8q-wt" -b wt8
+mkdir -p "$TEST_ROOT/r8q-wt/docs/specs" "$TEST_ROOT/r8q-wt/src"
+mkdir -p "$RQ/.fablepowers"   # the main checkout has one; the worktree does not
+nopy_gate_events "linked worktree without .fablepowers/" "$TEST_ROOT/r8q-wt"
+# A payload without session_id warns on every qualifying call.
+reset_warned
+for n in 1 2; do
+  run_gate_json PostToolUse AskUserQuestion "$(payload post-ask CWD="$TEST_ROOT/r8q-wt" ANSWER=Approve | sed 's/"session_id": *"[^"]*",//')"
+  expect "no python, no session_id: call $n warns" warning
+done
+reset_warned
 RUN_MODE=broken
 run_gate PreToolUse Agent pre-agent CWD="$R" SUBAGENT=fablepowers:implementer
 expect "no python, empty PATH, pending design: first call warns (allowed)" warning
-check "  warning text" test "$OUT" == '{"systemMessage":"fablepowers approval gate disabled: python3 not found"}'
-check "  warn-once marker written" test -e "$R/.fablepowers/.gate-warned-76496df1-bffc-49e9-96ae-c92ee405caf7"
+check "  warning text" test "$OUT" == "$WARNING"
+check "  warn-once marker written" test -e "$WARNED"
 run_gate PreToolUse Write pre-write CWD="$R" FILE="$R/src/app.py"
 expect "no python, same session: second call silent" allow
 RUN_MODE=normal
+reset_warned
 RF="$TEST_ROOT/r8f"; new_repo "$RF"; mkdir -p "$RF/.fablepowers"
 GATE_ENV=("FABLEPOWERS_PYTHON=$TEST_ROOT/brokenpy")
 run_gate PreToolUse Write pre-write CWD="$RF/src" FILE="$RF/src/app.py"
 expect "broken python, repo with .fablepowers/ (subdirectory cwd): warns" warning
+reset_warned
 GATE_ENV=("FABLEPOWERS_PYTHON=$(command -v python3)")
 check "FABLEPOWERS_PYTHON=<real python3> runs the gate" test "$(agent_verdict "$R" fablepowers:implementer)" == deny
 # A python below 3.8 fails the launcher's version check: fake one by making
@@ -655,6 +746,7 @@ check "FABLEPOWERS_PYTHON=<real python3> runs the gate" test "$(agent_verdict "$
 printf '#!/bin/sh\ncase "$*" in *version_info*) exit 1 ;; esac\nexec python3 "$@"\n' > "$TEST_ROOT/py37"; chmod +x "$TEST_ROOT/py37"
 GATE_ENV=("FABLEPOWERS_PYTHON=$TEST_ROOT/py37")
 RP="$TEST_ROOT/r8p"; new_repo "$RP"; mkdir -p "$RP/.fablepowers"
+reset_warned
 run_gate PreToolUse Agent pre-agent CWD="$RP" SUBAGENT=fablepowers:implementer
 expect "python failing the 3.8 check" warning
 GATE_ENV=()

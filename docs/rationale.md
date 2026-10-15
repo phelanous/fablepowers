@@ -275,7 +275,9 @@ that answers the question. The gate is a guard against momentum, not a sandbox.
 A security review after the first build closed the cheap holes in the edit-tool
 path: writes through marker-named directories, case variants, and NTFS name
 variants (trailing dots and spaces, `:stream`) are denied, and an `approved`
-marker counts only if it is a regular file holding the gate's JSON.
+marker counts only if it is a regular file holding the gate's JSON. The
+integration review added a settings guard: while a design is pending, edit-tool
+writes to Claude Code settings files are denied.
 
 ### Harness-neutral wording
 

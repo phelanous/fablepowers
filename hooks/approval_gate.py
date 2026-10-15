@@ -298,7 +298,8 @@ def pre_tool_use(top, payload, cwd):
         if is_settings_path(lexical) or is_settings_path(real):
             deny(top, payload, pending_reason(
                 pending, "editing the Claude Code settings file `%s` (settings files stay closed "
-                "to the edit tools until approval)" % lexical))
+                "to the edit tools until approval; if the user asked for this settings change, they can "
+                "make it themselves, or approve or withdraw the design first)" % lexical))
             return
         if not under(real, top):
             return

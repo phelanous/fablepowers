@@ -18,14 +18,14 @@ Constrain **outcomes**, not process. You (a frontier model) get checkpoints and 
 
 ## Who does what
 
-| Role | Agent | Model | Does |
+| Seat | Agent | Tier | Does |
 |---|---|---|---|
 | Orchestrator | the user's session | whatever the session runs | design dialogue, plan, dispatch, spot-check, fix-loop decisions, user communication. **Never implements a plan task.** |
-| Implementer | `fablepowers:implementer` | Opus | one plan task per dispatch, fresh context, behavioral tests with the mutation check, commit, report |
-| Strict implementer | `fablepowers:strict-implementer` | Sonnet | mechanical, fully specified tasks under the imperative red-green prompt; followed by a spec-check |
-| Reviewer | `fablepowers:reviewer` | Opus | plan review, integration review, spec-check, builder check of a substantial spec; fresh context; never an agent that implemented anything in the feature |
+| Implementer | `fablepowers:implementer` | frontier | one plan task per dispatch, fresh context, behavioral tests with the mutation check, commit, report |
+| Strict implementer | `fablepowers:strict-implementer` | mid | mechanical, fully specified tasks under the imperative red-green prompt; followed by a spec-check |
+| Reviewer | `fablepowers:reviewer` | frontier | plan review, integration review, spec-check, builder check of a substantial spec; fresh context; never an agent that implemented anything in the feature |
 
-Skills are invoked with the Skill tool as `fablepowers:<skill>`; the three agents are dispatched with the Agent tool by passing `subagent_type: "fablepowers:<agent>"`, never the default general-purpose agent.
+Invoke skills by name (`fablepowers:<skill>`); dispatch each seat as its named agent (`fablepowers:<agent>`), never a generic agent that inherits your model. Tools, models and mechanisms per harness: `references/<harness>.md` beside this skill (Claude Code: `references/claude-code.md`).
 
 A task you could do yourself in this session is still dispatched: a fully briefed single-session task dispatches implementers like any other. Your job is the plan, the dispatch and the judgment calls.
 
@@ -36,7 +36,7 @@ A task you could do yourself in this session is still dispatched: a fully briefe
 | New feature / behavior change idea | `fablepowers:design-spec` | Flexible — scale to size; substantial specs get a builder check before the approval ask |
 | Spec approved, multi-task work ahead | `fablepowers:implementation-plan` | Flexible |
 | Plan ready to execute | `fablepowers:subagent-execution` | Flexible for you; strict prompts for weak implementers |
-| Executing a plan task | `fablepowers:implementer` / `fablepowers:strict-implementer` (Agent tool, `subagent_type`) | Dispatch is not optional |
+| Executing a plan task | `fablepowers:implementer` / `fablepowers:strict-implementer` (named seat) | Dispatch is not optional |
 | Writing tests for any change | `fablepowers:behavioral-testing` | Outcome is rigid, ordering is free |
 | Work complete, pre-merge | `fablepowers:integration-review` | **RIGID** |
 | About to say "done" / "fixed" / "passing" | `fablepowers:verify-done` | **RIGID** |

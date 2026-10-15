@@ -61,7 +61,7 @@ escape_for_json() {
     printf '%s' "$s"
 }
 
-preamble="You have fablepowers. The workflow map below is \`fablepowers:workflow\`, your entry point for substantive dev work. Invoke the other skills through the Skill tool as \`fablepowers:<skill>\`; dispatch the implementer, strict-implementer and reviewer agents through the Agent tool with \`subagent_type: \"fablepowers:<agent>\"\`."
+preamble="You have fablepowers on Claude Code. The workflow map below is \`fablepowers:workflow\`, your entry point for substantive dev work. Invoke the other skills through the Skill tool as \`fablepowers:<skill>\`; dispatch the implementer, strict-implementer and reviewer seats through the Agent tool with \`subagent_type: \"fablepowers:<agent>\"\`, never the default general-purpose agent. Ask the user a structured question (the design approval) with AskUserQuestion; track tasks with TodoWrite. The rest of the mapping is in the workflow skill's \`references/claude-code.md\`."
 
 session_context="$(escape_for_json "${preamble}")\\n\\n$(escape_for_json "${workflow_content}")"
 

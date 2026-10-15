@@ -11,14 +11,14 @@ Execute a plan by dispatching a fresh subagent per task. Context isolation is th
 
 **The orchestrator never implements a plan task.** Not when the task is small, not when you already have the files open, not when dispatching feels slower. The only code you write yourself is a one-line fix inside the review loop — and when you do it, say so in your report to the user.
 
-| Role | Agent | Model | Does |
+| Seat | Agent | Tier | Does |
 |---|---|---|---|
 | Orchestrator | the user's session | whatever the session runs | design dialogue, plan, dispatch, spot-check, fix-loop decisions, user communication. **Never implements a plan task.** |
-| Implementer | `fablepowers:implementer` | Opus | one plan task per dispatch, fresh context, behavioral tests with the mutation check, commit, report |
-| Strict implementer | `fablepowers:strict-implementer` | Sonnet | mechanical, fully specified tasks under the imperative red-green prompt; followed by a spec-check |
-| Reviewer | `fablepowers:reviewer` | Opus | plan review, integration review, spec-check, builder check of a substantial spec; fresh context; never an agent that implemented anything in the feature |
+| Implementer | `fablepowers:implementer` | frontier | one plan task per dispatch, fresh context, behavioral tests with the mutation check, commit, report |
+| Strict implementer | `fablepowers:strict-implementer` | mid | mechanical, fully specified tasks under the imperative red-green prompt; followed by a spec-check |
+| Reviewer | `fablepowers:reviewer` | frontier | plan review, integration review, spec-check, builder check of a substantial spec; fresh context; never an agent that implemented anything in the feature |
 
-Skills are invoked with the Skill tool as `fablepowers:<skill>`; the three agents are dispatched with the Agent tool by passing `subagent_type: "fablepowers:<agent>"`, never the default general-purpose agent.
+Skills are invoked by name as `fablepowers:<skill>`; each seat is dispatched as its named agent, `fablepowers:<agent>`, never a generic agent that inherits your model. The harness reference (`fablepowers:workflow`'s `references/<harness>.md`) maps these actions to your harness's tools and each seat to its model. A plan header or task names its seat as `implementer` or `strict-implementer`; older plans say `opus` and `sonnet-strict`, which mean the same seats.
 
 **`implementer` flow (the default):**
 1. Plan was already reviewed (`fablepowers:implementation-plan`). Dispatch one `fablepowers:implementer` per task, by reference (see Dispatch hygiene).
@@ -63,14 +63,14 @@ review rereview-<k> | <head7> | <verdict> | reports/review-rereview-<k>.md
 
 ## Dispatch hygiene (both flows)
 
-- **Always pass the agent type explicitly**: `subagent_type: "fablepowers:implementer"` (or `strict-implementer`, `reviewer`) on the Agent tool. The default general-purpose agent inherits your model and effort — dispatching it is not a delegation, it is your own session in a second window.
+- **Always dispatch the named seat**: the `fablepowers:implementer` agent (or `strict-implementer`, `reviewer`), named explicitly in the dispatch. Never a generic agent that inherits your model: it runs on your model and effort — dispatching it is not a delegation, it is your own session in a second window.
 - **Dispatch by reference.** An implementer dispatch names the plan path (absolute, and readable from the implementer's working directory — check it is there when the worktree was created after planning), the task's heading and the spec path; the implementer reads its task, contracts, invariants and test obligations from the plan. The prompt carries only what the plan doesn't: how to run the tests, the commit convention, fix-round findings (or the path to the review report holding them), and the report path. Strict-tier dispatches keep their code-level prompt with the task text inline.
-- **Short returns.** Every dispatch names its report path. Use the workspace names above, never a generic `report.md`, `summary.md`, `findings.md` or `analysis.md` — the harness refuses subagent writes to those basenames (any directory, any case), and an agent whose write is refused returns its full report inline instead. Implementers return at most 15 lines — `Status`, `SHA`, `Tests` (one line), `Deviations: <count>` plus up to 3 one-line headlines, `Report: <path>`; reviewers return `Verdict`, one line per must-fix (`file:line — headline`), `Declined to judge: <count>`, `Report: <path>`. Keep the full reports in their files; pass a path to the next agent rather than pasting a report into its prompt.
+- **Short returns.** Every dispatch names its report path. Use the workspace names above, never a generic `report.md`, `summary.md`, `findings.md` or `analysis.md` — a harness may refuse subagent writes to those basenames (any directory, any case; see the harness reference), and an agent whose write is refused returns its full report inline instead. Implementers return at most 15 lines — `Status`, `SHA`, `Tests` (one line), `Deviations: <count>` plus up to 3 one-line headlines, `Report: <path>`; reviewers return `Verdict`, one line per must-fix (`file:line — headline`), `Declined to judge: <count>`, `Report: <path>`. Keep the full reports in their files; pass a path to the next agent rather than pasting a report into its prompt.
 - **No coaching reviewers** — spec-checks included. A reviewer dispatch carries the task or spec, the range, the paths and how to run things; never a pre-rated severity, an instruction to ignore or go easy on something, or the implementer's rationale for a choice. A defect the plan itself mandates is still reported, flagged plan-mandated; take it to the user.
 - **Fix-round dispatches carry test obligations.** When an implementer is sent to fix review findings, pass the review report's path and list each must-fix finding's failure scenario as a test obligation — fails on the current code, passes after the fix — and expect before/after evidence per finding in the report (`reports/task-<n>-fix<k>.md`; for integration-review findings, `reports/integration-fix<k>.md`). The full rule is in `fablepowers:integration-review`.
 - Implementers may ask questions before starting — answer, then re-dispatch.
 - One task in flight per dependency chain; independent tasks may run in parallel.
-- Track tasks in TodoWrite; mark complete only after the task's checks pass — the same moment the ledger line goes in.
+- Track tasks in your harness's task list; mark complete only after the task's checks pass — the same moment the ledger line goes in.
 
 ## Failure handling
 

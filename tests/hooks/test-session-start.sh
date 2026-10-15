@@ -4,8 +4,11 @@
 # Every hook run goes through the literal "command" string read from a
 # hooks.json, with CLAUDE_PLUGIN_ROOT set, through "<shell> -c" the way Claude
 # Code runs it. The 0.2.x hook, vendored under fixtures/0.2.x/, is the
-# byte-for-byte reference; old and new hooks always run against the same
-# SKILL.md, in temp plugin trees.
+# byte-for-byte reference for everything except the preamble line (0.4.0 names
+# the harness): new output == 0.2.x output with its preamble swapped for the
+# new one. Old and new hooks always run against the same SKILL.md, in temp
+# plugin trees. The new preamble and the map are asserted structurally, and
+# the injected context is capped at 6,000 characters.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -70,9 +73,27 @@ context_of() {
   printf '%s' "$1" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])'
 }
 
-# --- (b) normal PATH: byte-identical to the 0.2.x hook ----------------------
+# preamble_of <json>: the context's first line (the preamble).
+preamble_of() {
+  printf '%s' "$1" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"].split("\n", 1)[0])'
+}
 
-echo "Normal PATH: output byte-identical to the 0.2.x hook"
+# swapped <0.2.x output>: that output with the 0.2.x preamble replaced by the
+# new one ($OLD_PRE -> $NEW_PRE, JSON-escaped, exactly one occurrence). This is
+# what the new hook must print. Fails (rc 1) if the old preamble is not there.
+swapped() {
+  python3 -c '
+import json, sys
+old, new, s = sys.argv[1:4]
+esc = lambda x: json.dumps(x, ensure_ascii=False)[1:-1]
+if s.count(esc(old)) != 1:
+    sys.exit(1)
+sys.stdout.write(s.replace(esc(old), esc(new), 1))' "$OLD_PRE" "$NEW_PRE" "$1"
+}
+
+# --- (b) normal PATH: byte-identical to the 0.2.x hook, preamble swapped -----
+
+echo "Normal PATH: output byte-identical to the 0.2.x hook's, preamble swapped"
 
 FIX="$TEST_ROOT/fixtures"
 mkdir -p "$FIX"
@@ -91,17 +112,24 @@ printf -- '---\nname: x\n --- \n---\n\n\n# Lead blanks "q" \\ back\ttab\n\n\n' >
 printf -- '---\nname: x\n---\n---\nbody after second rule' > "$FIX/rule-right-after.md"
 printf -- '---' > "$FIX/dashes-only.md"
 
+# The two preambles, read from each hook's output on the real SKILL.md.
+make_tree "$TEST_ROOT/old-real" old "$FIX/real.md"
+make_tree "$TEST_ROOT/new-real" new "$FIX/real.md"
+run_normal "$TEST_ROOT/old-real"; OLD_PRE="$(preamble_of "$OUT")"
+run_normal "$TEST_ROOT/new-real"; NEW_PRE="$(preamble_of "$OUT")"
+
 for fx in "$FIX"/*.md; do
   name="$(basename "$fx" .md)"
   make_tree "$TEST_ROOT/old-$name" old "$fx"
   make_tree "$TEST_ROOT/new-$name" new "$fx"
   run_normal "$TEST_ROOT/old-$name"; old_out="$OUT"; old_rc="$RC"
   run_normal "$TEST_ROOT/new-$name"; new_out="$OUT"; new_rc="$RC"
-  if [[ "$old_rc" == 0 && "$new_rc" == 0 && "$old_out" == "$new_out" ]]; then
-    pass "$name: identical (rc 0)"
+  want="$(swapped "$old_out" || echo "<0.2.x preamble not found>")"
+  if [[ "$old_rc" == 0 && "$new_rc" == 0 && "$want" == "$new_out" ]]; then
+    pass "$name: identical after the preamble swap (rc 0)"
   else
-    fail "$name: old rc=$old_rc new rc=$new_rc; outputs $([[ "$old_out" == "$new_out" ]] && echo equal || echo differ)"
-    diff <(printf '%s\n' "$old_out") <(printf '%s\n' "$new_out") | head -5 || true
+    fail "$name: old rc=$old_rc new rc=$new_rc; outputs $([[ "$want" == "$new_out" ]] && echo equal || echo differ)"
+    diff <(printf '%s\n' "$want") <(printf '%s\n' "$new_out") | head -5 || true
   fi
 done
 
@@ -109,8 +137,15 @@ done
 run_cmd_bytes() { (cd "$TEST_ROOT" && CLAUDE_PLUGIN_ROOT="$1" "$SH" -c "$(hook_cmd "$1")") > "$2"; }
 run_cmd_bytes "$TEST_ROOT/old-real" "$TEST_ROOT/old.bytes"
 run_cmd_bytes "$TEST_ROOT/new-real" "$TEST_ROOT/new.bytes"
-if cmp -s "$TEST_ROOT/old.bytes" "$TEST_ROOT/new.bytes"; then
-  pass "real SKILL.md: raw stdout bytes identical"
+python3 -c '
+import json, sys
+old, new, src, dst = sys.argv[1:5]
+esc = lambda x: json.dumps(x, ensure_ascii=False)[1:-1].encode()
+b = open(src, "rb").read()
+open(dst, "wb").write(b.replace(esc(old), esc(new), 1) if b.count(esc(old)) == 1 else b"")
+' "$OLD_PRE" "$NEW_PRE" "$TEST_ROOT/old.bytes" "$TEST_ROOT/want.bytes"
+if [[ -s "$TEST_ROOT/want.bytes" ]] && cmp -s "$TEST_ROOT/want.bytes" "$TEST_ROOT/new.bytes"; then
+  pass "real SKILL.md: raw stdout bytes identical after the preamble swap"
 else
   fail "real SKILL.md: raw stdout bytes differ"
 fi
@@ -118,10 +153,57 @@ fi
 # The repo's own hook, run in place, also matches.
 run_normal "$REPO_ROOT"; in_place="$OUT"; in_place_rc="$RC"
 run_normal "$TEST_ROOT/old-real"
-if [[ "$in_place_rc" == 0 && "$in_place" == "$OUT" ]]; then
-  pass "repo hook run in place matches the 0.2.x hook"
+if [[ "$in_place_rc" == 0 && "$in_place" == "$(swapped "$OUT")" ]]; then
+  pass "repo hook run in place matches the 0.2.x hook (preamble swapped)"
 else
   fail "repo hook run in place differs from the 0.2.x hook"
+fi
+
+# --- (f) the new preamble, the map and the size cap ----------------------------
+
+echo "Preamble and map content"
+
+run_normal "$TEST_ROOT/new-real"; new_real="$OUT"   # the hook under test, real SKILL.md
+
+# The preamble names the harness and keeps the Claude Code dispatch mapping in
+# the injected context (it must not move out to a reference file).
+for needle in 'Claude Code' '`fablepowers:workflow`' 'Skill tool' '`fablepowers:<skill>`' \
+  'Agent tool' 'subagent_type: "fablepowers:<agent>"' 'general-purpose' \
+  'AskUserQuestion' 'TodoWrite' 'references/claude-code.md'; do
+  if [[ "$NEW_PRE" == *"$needle"* ]]; then
+    pass "preamble names '$needle'"
+  else
+    fail "preamble lacks '$needle'"
+  fi
+done
+[[ "$NEW_PRE" != "$OLD_PRE" ]] && pass "preamble differs from 0.2.x's" \
+  || fail "preamble is still 0.2.x's"
+[[ -f "$REPO_ROOT/skills/workflow/references/claude-code.md" ]] \
+  && pass "the reference the preamble names exists" \
+  || fail "skills/workflow/references/claude-code.md is missing"
+
+# Context = preamble + blank line + the repo's SKILL.md minus frontmatter, byte
+# for byte (trailing newlines dropped, as command substitution drops them).
+if python3 -c '
+import json, sys
+ctx = json.loads(sys.argv[1])["hookSpecificOutput"]["additionalContext"]
+pre, sep, body = ctx.partition("\n\n")
+lines = open(sys.argv[2], encoding="utf-8").read().split("\n")
+assert lines[0] == "---"
+end = lines.index("---", 1)
+want = "\n".join(lines[end + 1:]).rstrip("\n")
+sys.exit(0 if sep and "\n" not in pre and pre == sys.argv[3] and body == want else 1)
+' "$new_real" "$REPO_ROOT/skills/workflow/SKILL.md" "$NEW_PRE"; then
+  pass "context is the one-line preamble, a blank line, then the map byte for byte"
+else
+  fail "context is not preamble + blank line + SKILL.md minus frontmatter"
+fi
+
+size="$(context_of "$new_real" | python3 -c 'import sys; print(len(sys.stdin.read()))')"
+if [[ "$size" -le 6000 ]]; then
+  pass "additionalContext is $size characters (cap 6000)"
+else
+  fail "additionalContext is $size characters, over the 6000 cap"
 fi
 
 # --- (a) broken PATH ----------------------------------------------------------
@@ -167,7 +249,7 @@ fi
 
 echo "Launchers: the literal command via <shell> -c, normal and broken PATH"
 
-run_normal "$TEST_ROOT/old-real"; reference="$OUT"
+run_normal "$TEST_ROOT/old-real"; reference="$(swapped "$OUT")"
 
 # Claude Code runs the command through /bin/sh -c (observed: BASH=/bin/sh with
 # "shell": "bash" on Linux), so every launcher runs with BASH removed from the
@@ -197,7 +279,7 @@ for launcher in "${LAUNCHERS[@]}"; do
   for mode in normal broken; do
     run_with "$mode" "$TEST_ROOT/new-real" "${words[@]}"
     if [[ "$RC" == 0 && "$OUT" == "$reference" ]]; then
-      pass "$launcher -c, $mode PATH: rc 0, output equals the 0.2.x hook's"
+      pass "$launcher -c, $mode PATH: rc 0, output equals the 0.2.x hook's (preamble swapped)"
     else
       fail "$launcher -c, $mode PATH: rc $RC; $(head -c 160 "$TEST_ROOT/stderr" | tr '\n' ' ')"
     fi
@@ -290,7 +372,7 @@ for mode in normal broken; do
 done
 run_normal "$TEST_ROOT/new-missing"; new_missing="$OUT"
 run_normal "$TEST_ROOT/old-missing"
-[[ "$OUT" == "$new_missing" ]] && pass "missing file: identical to the 0.2.x hook" \
+[[ "$(swapped "$OUT")" == "$new_missing" ]] && pass "missing file: identical to the 0.2.x hook (preamble swapped)" \
   || fail "missing file: differs from the 0.2.x hook"
 
 echo

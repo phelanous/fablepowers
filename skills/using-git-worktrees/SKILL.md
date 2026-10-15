@@ -63,7 +63,7 @@ Honor any existing declared preference without asking. **A worktree requested by
 
 The user has asked for an isolated workspace (Step 0 consent). Do you already have a way to create a worktree? It might be a tool with a name like `EnterWorktree`, `WorktreeCreate`, a `/worktree` command, or a `--worktree` flag. If you do, use it and skip to Step 2.
 
-Some native tools may only be used after the user explicitly mentions worktrees (Claude Code's `EnterWorktree` is one). If the only consent you have is a `fablepowers:implementation-plan` request, ask the user once, in one line ("The plan asks for an isolated worktree — OK to create one with `EnterWorktree`?"), then use the tool.
+Some native tools may only be used after the user explicitly mentions worktrees (Claude Code's `EnterWorktree` is one). If the only consent you have is a `fablepowers:implementation-plan` request, ask the user once, in one line ("The plan asks for an isolated worktree — OK to create one with the native worktree tool?"), then use the tool.
 
 Native tools handle directory placement, branch creation, and cleanup automatically. Using `git worktree add` when you have a native tool creates phantom state your harness can't see or manage. A native tool's worktree (for example Claude Code's `<root>/.claude/worktrees/…`) is host-owned: leave its cleanup to the host's exit tool (e.g. `ExitWorktree`).
 

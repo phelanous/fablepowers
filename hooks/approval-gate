@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Launcher for the fablepowers design-approval gate (hooks/approval_gate.py).
+#
+# hooks.json runs it the same way as session-start: an sh-builtin command picks
+# a bash ($BASH, then /bin/bash, /usr/bin/bash, /usr/local/bin/bash,
+# /opt/homebrew/bin/bash, then PATH) and execs this script. Bash builtins only
+# until python is found, so an empty or broken PATH still works.
+#
+# Python: $FABLEPOWERS_PYTHON if set (a user override and the test seam; when
+# set it is the only candidate), else python3 on PATH, then /usr/bin/python3,
+# /usr/local/bin/python3, /opt/homebrew/bin/python3. A candidate must be
+# Python 3.8+. The hook payload on stdin passes straight through to python.
+#
+# No usable python: the gate is disabled (every call allowed) with a warning,
+# once per session when the repo's .fablepowers/ can hold the marker
+# .gate-warned-<session_id>, else on every call. Always exits 0.
+
+case "$0" in
+    */*) SCRIPT_DIR="${0%/*}"; SCRIPT_DIR="${SCRIPT_DIR:-/}" ;;
+    *) SCRIPT_DIR="." ;;
+esac
+
+usable() {
+    [[ -n "$1" && -f "$1" && -x "$1" ]] \
+        && "$1" -I -c 'import sys; sys.exit(sys.version_info < (3, 8))' </dev/null >/dev/null 2>&1
+}
+
+if [[ -n "${FABLEPOWERS_PYTHON:-}" ]]; then
+    candidates=("$FABLEPOWERS_PYTHON")
+else
+    candidates=()
+    p="$(command -v python3 2>/dev/null)" && candidates+=("$p")
+    candidates+=(/usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3)
+fi
+
+for py in "${candidates[@]}"; do
+    if usable "$py"; then
+        exec "$py" -I "$SCRIPT_DIR/approval_gate.py"
+    fi
+done
+
+# --- no usable python: warn and allow --------------------------------------------
+
+warning='{"systemMessage":"fablepowers approval gate disabled: python3 not found"}'
+
+payload=""
+IFS= read -r -d '' payload || true
+
+sid=""
+cwd=""
+re_sid='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]+)"'
+re_cwd='"cwd"[[:space:]]*:[[:space:]]*"([^"\\]+)"'
+[[ "$payload" =~ $re_sid ]] && sid="${BASH_REMATCH[1]}"
+[[ "$payload" =~ $re_cwd ]] && cwd="${BASH_REMATCH[1]}"
+
+top=""
+if [[ "$cwd" == /* ]]; then
+    d="$cwd"
+    while :; do
+        if [[ -e "$d/.git" ]]; then top="$d"; break; fi
+        [[ "$d" == "/" || -z "$d" ]] && break
+        d="${d%/*}"; d="${d:-/}"
+    done
+fi
+
+if [[ -n "$sid" && -n "$top" && -d "$top/.fablepowers" ]]; then
+    marker="$top/.fablepowers/.gate-warned-$sid"
+    [[ -e "$marker" ]] && exit 0
+    : > "$marker" 2>/dev/null || true
+fi
+
+printf '%s\n' "$warning"
+exit 0

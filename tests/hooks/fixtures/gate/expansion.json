@@ -1,0 +1,13 @@
+{
+  "session_id": "76496df1-bffc-49e9-96ae-c92ee405caf7",
+  "transcript_path": "/home/user/.claude/projects/-repo/76496df1-bffc-49e9-96ae-c92ee405caf7.jsonl",
+  "cwd": "__CWD__",
+  "prompt_id": "c4c83d36-1b9b-4cc8-90b1-bcdb0c85d68a",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptExpansion",
+  "expansion_type": "slash_command",
+  "command_name": "__COMMAND__",
+  "command_args": "__ARGS__",
+  "command_source": "plugin",
+  "prompt": "/__COMMAND__ __ARGS__"
+}

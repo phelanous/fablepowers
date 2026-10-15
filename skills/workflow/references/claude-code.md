@@ -30,7 +30,31 @@ The model is pinned in each agent's frontmatter (`agents/<agent>.md`), which als
 
 ## Approval mechanism
 
-_Placeholder — written in 0.4.0 Task 3: the approval gate's hook events, markers, the two approval paths (`/fablepowers:approve` and answering Approve to the design question), `/fablepowers:withdraw`, the `FABLEPOWERS_GATE=off` escape hatch, the python3 requirement and the tested-with Claude Code version._
+The design-approval checkpoint is enforced by a hook, `hooks/approval-gate` (a PATH-independent bash launcher) running `hooks/approval_gate.py`. Tested with Claude Code 2.1.299; treat that as the minimum, since the approve and withdraw commands rely on the `UserPromptExpansion` hook event.
+
+**Markers.** Per design, in `<toplevel>/.fablepowers/<key>/`, where `<toplevel>` is the nearest ancestor of the hook's `cwd` holding `.git` and `<key>` is the spec's basename without `.md`. The gate is inert outside a git repo.
+
+- `pending` (`{"spec", "created"}`) is written by the hook when the main session creates a new file `docs/specs/<name>.md` with the Write tool. Overwrites, subagent writes, nested directories and specs kept outside `docs/specs/` do not pend. `docs/specs/` is for designs only: any new file there starts an approval, so put other notes elsewhere, and `/fablepowers:withdraw` clears a stray one.
+- `approved` (`{"spec", "approved_at", "via": "command"|"question", "spec_sha256"}`) is written by the hook on a user action only. `pending` stays beside it as an audit record; the hash is recorded, not enforced.
+- A design is pending while `pending` is a regular file and there is no valid `approved` (a regular, non-symlink file holding that JSON). A directory, symlink or malformed file named `approved` does not approve; it is logged to `.fablepowers/gate.log`.
+
+**What it blocks** (PreToolUse, `permissionDecision: "deny"` with a reason that names the pending keys and both commands):
+
+- While any design is pending: an Agent call with `subagent_type` `fablepowers:implementer` or `fablepowers:strict-implementer`, and Write, Edit, MultiEdit or NotebookEdit on a path inside the toplevel outside `docs/specs/`, `docs/plans/` and `.fablepowers/`. Paths are resolved with symlinks and `..` before the check. Reviewer dispatch and paths outside the repo are allowed.
+- Always: Write, Edit, MultiEdit or NotebookEdit on a path with a component named `pending` or `approved` under a `.fablepowers` component. Names compare case-insensitively and as NTFS resolves them (trailing dots and spaces, and `:stream` suffixes, are ignored).
+
+**Approving.** Two user actions, and only these, write `approved`:
+
+- `/fablepowers:approve [key or spec path]`, recorded on the `UserPromptExpansion` event. One pending design needs no argument; with several, a missing or unknown argument blocks the command and lists the keys, and nothing is recorded. The approve and withdraw skills set `disable-model-invocation: true`, which makes Claude Code refuse the model's own Skill call before any hook runs. That setting is what keeps the model from approving itself, and a test asserts it.
+- Answering **Approve** to the design question (AskUserQuestion), recorded on PostToolUse from `tool_response.answers`. It counts only when the question's options are exactly Approve and Changes needed and exactly one design is pending with its spec file present. Otherwise the hook tells the model and the user why it recorded nothing, and which command to run. Changes needed records nothing; the design stays pending.
+
+**Withdrawing.** `/fablepowers:withdraw [key or spec path]` removes `pending` for an abandoned design (same argument rules). The spec file stays.
+
+**Escape hatch.** `FABLEPOWERS_GATE=off` in the environment: nothing is denied, and each would-be denial is appended to `.fablepowers/gate.log`. Malformed payloads and internal errors also allow and are logged there.
+
+**Python.** The gate needs Python 3.8+ (stdlib only, run with `-I`). The launcher uses `$FABLEPOWERS_PYTHON` when set (then it is the only candidate), else `python3` on PATH, then `/usr/bin/python3`, `/usr/local/bin/python3`, `/opt/homebrew/bin/python3`. With no usable python the gate is disabled and allows everything, with the warning `fablepowers approval gate disabled: python3 not found`, shown once per session when `.fablepowers/` exists, else on every call.
+
+**Accepted gap: shell writes.** The gate watches the edit tools and the dispatch, not shell commands. Through a shell command the model could forge or delete markers (including creating a directory named like one), write a spec without pending it, or write a hook into project settings. Such a hook could auto-answer the approval question: Claude Code lets a PreToolUse hook fill in AskUserQuestion's answers, and the result is indistinguishable from a user's. Its edit tools are blocked from code and settings while a design is pending; its shell is not. The gate stops a session rolling past approval; it is not a sandbox.
 
 ## Report-name write guard
 

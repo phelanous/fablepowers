@@ -793,6 +793,9 @@ def codex_post_apply_patch(top, payload, cwd):
     }})
 
 
+ACT_NOUN = {"approve": "an approval", "withdraw": "a withdrawal"}
+
+
 def codex_context(text):
     emit({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}})
 
@@ -811,7 +814,7 @@ def codex_user_prompt(top, payload):
             codex_context(
                 "fablepowers approval gate: `$fablepowers:%s` was not recognised, so it recorded "
                 "nothing; send exactly `$fablepowers:%s [key]` on its own, as the whole message. "
-                "Tell the user this; do not act on this message as an approval." % (verb, verb))
+                "Tell the user this; do not act on this message as %s." % (verb, verb, ACT_NOUN[verb]))
         return
     verb, arg = m.group(1), m.group(2) or ""
     pending = pending_designs(top)
@@ -823,9 +826,9 @@ def codex_user_prompt(top, payload):
     if key is None:
         codex_context(
             "fablepowers approval gate: %s, so `$fablepowers:%s` recorded nothing. Tell the user to "
-            "send `$fablepowers:%s <key>` with one of: %s. Do not act on this message as an approval." % (
+            "send `$fablepowers:%s <key>` with one of: %s. Do not act on this message as %s." % (
                 ("no pending design matches `%s`" % arg) if arg else "several designs are pending",
-                verb, verb, key_list(pending)))
+                verb, verb, key_list(pending), ACT_NOUN[verb]))
         return
     spec = dict(pending)[key]
     if verb == "approve":

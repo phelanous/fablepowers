@@ -27,7 +27,8 @@ new session, so the model knows the entry point without any CLAUDE.md edits.
 **Requirements:** Claude Code 2.1.299 or later (the version the approval gate is
 tested with; the approve and withdraw commands rely on its `UserPromptExpansion`
 hook event), and Python 3.8+ for the approval gate. Without a usable `python3`
-the gate turns itself off with a visible warning and everything else still works.
+the gate turns itself off and everything else still works; it warns (once per
+session) only in repositories that already have a `.fablepowers/` directory.
 
 ## How it works
 
@@ -91,9 +92,12 @@ design (and specs kept outside `docs/specs/`) are never gated.
 or CI); what would have been blocked is logged to `.fablepowers/gate.log`.
 
 The gate stops a session that rolls past approval; it is not a sandbox. It
-watches the edit tools and the agent dispatch, not shell commands, so a model
-writing through the shell could still forge or delete a marker or install a
-settings hook that answers the question for the user. Details:
+watches the edit tools and the agent dispatch, not shell commands. While a
+design is pending, the edit tools are blocked from repo code and from Claude
+Code settings files (`.claude/settings.json`, `.claude/settings.local.json`,
+in any location), but a model writing through the shell could still forge or
+delete a marker or install a settings hook that answers the question for the
+user. Details:
 [`skills/workflow/references/claude-code.md`](skills/workflow/references/claude-code.md#approval-mechanism).
 
 The usual path: `workflow` → `design-spec` (approval) → `implementation-plan`

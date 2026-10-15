@@ -427,6 +427,58 @@ done
 create_spec "$R" docs/specs/k4.md
 check "pending: Write '.fablepowers/k4/approved:x' denied" test "$(edit_verdict pre-write "$R" "$R/.fablepowers/k4/approved:x")" == deny
 
+# --- 5d. marker check on the lexical path ------------------------------------------------------
+
+echo "5d. Marker paths through symlinked directories denied"
+
+# When `.fablepowers/<key>` (or `.fablepowers` itself) is a symlink to a
+# non-marker directory, the resolved path has no `.fablepowers` component, but a
+# write through it still lands where the gate reads `approved`.
+R="$TEST_ROOT/r5l"; new_repo "$R"
+mkdir -p "$R/docs/plans/elsewhere" "$R/.fablepowers"
+ln -s ../docs/plans/elsewhere "$R/.fablepowers/k"
+check "no pending: Write .fablepowers/<symlinked key>/approved denied" test "$(edit_verdict pre-write "$R" "$R/.fablepowers/k/approved")" == deny
+check "no pending: Edit .fablepowers/<symlinked key>/pending denied" test "$(edit_verdict pre-edit "$R" "$R/.fablepowers/k/pending")" == deny
+R="$TEST_ROOT/r5m"; new_repo "$R"
+mkdir -p "$R/docs/plans/fp/k"
+ln -s docs/plans/fp "$R/.fablepowers"
+check "no pending: Write <symlinked .fablepowers>/k/approved denied" test "$(edit_verdict pre-write "$R" "$R/.fablepowers/k/approved")" == deny
+
+# --- 5e. Claude Code settings files while pending ----------------------------------------------
+
+echo "5e. Settings files closed to the edit tools while pending"
+
+R="$TEST_ROOT/r5s"; new_repo "$R"
+H="$TEST_ROOT/home"; mkdir -p "$H/.claude"
+check "no pending: Write ~/.claude/settings.json allowed" test "$(edit_verdict pre-write "$R" "$H/.claude/settings.json")" == allow
+check "no pending: Write <repo>/.claude/settings.json allowed" test "$(edit_verdict pre-write "$R" "$R/.claude/settings.json")" == allow
+create_spec "$R" docs/specs/s.md
+check "pending: Write ~/.claude/settings.json denied" test "$(edit_verdict pre-write "$R" "$H/.claude/settings.json")" == deny
+run_gate PreToolUse Write pre-write CWD="$R" FILE="$H/.claude/settings.json"
+check "settings deny reason names the pending design and the commands" \
+  bash -c '[[ "$1" == *docs/specs/s.md* && "$1" == *"/fablepowers:approve s"* && "$1" == *settings.json* && "$1" == *"Do not retry"* ]]' _ "$(text_of)"
+check "pending: Edit ~/.claude/settings.local.json denied" test "$(edit_verdict pre-edit "$R" "$H/.claude/settings.local.json")" == deny
+check "pending: MultiEdit <repo>/.claude/settings.json denied" test "$(edit_verdict pre-multiedit "$R" "$R/.claude/settings.json")" == deny
+check "pending: <repo>/docs/plans/.claude/settings.json denied (allowed dir)" test "$(edit_verdict pre-write "$R" "$R/docs/plans/.claude/settings.json")" == deny
+check "pending: relative .claude/settings.local.json from cwd docs/plans denied" \
+  test "$(edit_verdict pre-write "$R" .claude/settings.local.json "$R/docs/plans")" == deny
+for f in .Claude/Settings.JSON .CLAUDE/settings.local.json '.claude/settings.json.' '.claude/settings.json ' \
+         '.claude/settings.json:s' '.claude./settings.json'; do
+  check "pending: Write ~/'$f' denied" test "$(edit_verdict pre-write "$R" "$H/$f")" == deny
+done
+# A settings file reached through a symlinked directory (resolved path matches).
+ln -s "$H/.claude" "$TEST_ROOT/cfglink"
+check "pending: Write <symlink to ~/.claude>/settings.json denied" test "$(edit_verdict pre-write "$R" "$TEST_ROOT/cfglink/settings.json")" == deny
+# A settings file that is itself a symlink into a dotfiles tree (lexical path matches).
+D="$TEST_ROOT/home2"; mkdir -p "$D/.claude" "$TEST_ROOT/dotfiles"; printf '{}' > "$TEST_ROOT/dotfiles/claude-settings"
+ln -s "$TEST_ROOT/dotfiles/claude-settings" "$D/.claude/settings.json"
+check "pending: Write ~/.claude/settings.json symlinked to dotfiles denied" test "$(edit_verdict pre-write "$R" "$D/.claude/settings.json")" == deny
+for f in .claude/settings.json.bak .claude/agents/x.md claude/settings.json .claude/hooks/settings.json .claude/settings.yaml; do
+  check "pending: Write ~/'$f' (not a settings file) allowed" test "$(edit_verdict pre-write "$R" "$H/$f")" == allow
+done
+run_gate UserPromptExpansion fablepowers:approve expansion CWD="$R" COMMAND=fablepowers:approve ARGS=""
+check "approved: Write ~/.claude/settings.json allowed" test "$(edit_verdict pre-write "$R" "$H/.claude/settings.json")" == allow
+
 # --- 6. approve and withdraw commands ---------------------------------------------------------
 
 echo "6. Approve / withdraw commands"
@@ -513,6 +565,9 @@ check "Changes needed: not approved" test ! -e "$R/.fablepowers/q/approved"
 run_gate PostToolUse AskUserQuestion post-ask-other-labels CWD="$R"
 expect "different labels answered Approve" allow
 check "different labels: not approved" test ! -e "$R/.fablepowers/q/approved"
+run_gate PostToolUse AskUserQuestion post-ask-three-options CWD="$R"
+expect "three options (Approve, Changes needed twice) answered Approve" allow
+check "three options: not approved" test ! -e "$R/.fablepowers/q/approved"
 run_gate PostToolUse AskUserQuestion post-ask-unanswered CWD="$R"
 expect "empty answers" allow
 check "empty answers: not approved" test ! -e "$R/.fablepowers/q/approved"
@@ -567,27 +622,40 @@ check "broken PATH output equals normal" test "$OUT" == "$before"
 RUN_MODE=normal
 
 printf '#!/bin/sh\nexit 1\n' > "$TEST_ROOT/brokenpy"; chmod +x "$TEST_ROOT/brokenpy"
+# No usable python: silent where no pending marker could exist (outside git, or
+# a repo without .fablepowers/), warn once per session where .fablepowers/ exists.
 for py in /nonexistent "$TEST_ROOT/brokenpy" "$TEST_ROOT"; do
   GATE_ENV=("FABLEPOWERS_PYTHON=$py")
   run_gate PreToolUse Agent pre-agent CWD="$TEST_ROOT/nowhere" SUBAGENT=fablepowers:implementer
-  expect "FABLEPOWERS_PYTHON=$py, no repo" warning
-  check "  warning text" test "$OUT" == '{"systemMessage":"fablepowers approval gate disabled: python3 not found"}'
+  expect "FABLEPOWERS_PYTHON=$py, outside git: silent" allow
 done
+RQ="$TEST_ROOT/r8q"; new_repo "$RQ"
 GATE_ENV=("FABLEPOWERS_PYTHON=/nonexistent")
+run_gate PreToolUse Agent pre-agent CWD="$RQ" SUBAGENT=fablepowers:implementer
+expect "no python, repo without .fablepowers/: first call silent" allow
+run_gate PreToolUse Write pre-write CWD="$RQ" FILE="$RQ/src/app.py"
+expect "no python, repo without .fablepowers/: second call silent" allow
+check "  no .fablepowers/ created" test ! -e "$RQ/.fablepowers"
 RUN_MODE=broken
 run_gate PreToolUse Agent pre-agent CWD="$R" SUBAGENT=fablepowers:implementer
 expect "no python, empty PATH, pending design: first call warns (allowed)" warning
+check "  warning text" test "$OUT" == '{"systemMessage":"fablepowers approval gate disabled: python3 not found"}'
 check "  warn-once marker written" test -e "$R/.fablepowers/.gate-warned-76496df1-bffc-49e9-96ae-c92ee405caf7"
 run_gate PreToolUse Write pre-write CWD="$R" FILE="$R/src/app.py"
 expect "no python, same session: second call silent" allow
 RUN_MODE=normal
+RF="$TEST_ROOT/r8f"; new_repo "$RF"; mkdir -p "$RF/.fablepowers"
+GATE_ENV=("FABLEPOWERS_PYTHON=$TEST_ROOT/brokenpy")
+run_gate PreToolUse Write pre-write CWD="$RF/src" FILE="$RF/src/app.py"
+expect "broken python, repo with .fablepowers/ (subdirectory cwd): warns" warning
 GATE_ENV=("FABLEPOWERS_PYTHON=$(command -v python3)")
 check "FABLEPOWERS_PYTHON=<real python3> runs the gate" test "$(agent_verdict "$R" fablepowers:implementer)" == deny
 # A python below 3.8 fails the launcher's version check: fake one by making
 # sys.version_info's check exit 1 (as "import sys; sys.exit(True)" would).
 printf '#!/bin/sh\ncase "$*" in *version_info*) exit 1 ;; esac\nexec python3 "$@"\n' > "$TEST_ROOT/py37"; chmod +x "$TEST_ROOT/py37"
 GATE_ENV=("FABLEPOWERS_PYTHON=$TEST_ROOT/py37")
-run_gate PreToolUse Agent pre-agent CWD="$TEST_ROOT/nowhere" SUBAGENT=fablepowers:implementer
+RP="$TEST_ROOT/r8p"; new_repo "$RP"; mkdir -p "$RP/.fablepowers"
+run_gate PreToolUse Agent pre-agent CWD="$RP" SUBAGENT=fablepowers:implementer
 expect "python failing the 3.8 check" warning
 GATE_ENV=()
 

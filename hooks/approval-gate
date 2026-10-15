@@ -11,12 +11,17 @@
 # /usr/local/bin/python3, /opt/homebrew/bin/python3. A candidate must be
 # Python 3.8+. The hook payload on stdin passes straight through to python.
 #
-# No usable python: the gate is disabled (every call allowed). The warning is
-# shown only in a repo whose <toplevel>/.fablepowers/ exists: without python no
-# pending marker can ever be created, so elsewhere (repos that never used
-# fablepowers, and outside git) the gate cannot matter and stays silent. There
-# it is shown once per session (marker .fablepowers/.gate-warned-<session_id>),
-# or on every call when the payload has no session_id. Always exits 0.
+# No usable python: the gate is disabled (every call allowed). Inside a git
+# repo it warns, once per session, when the call is one where the gate would
+# have acted: a PostToolUse Write creating a .md under docs/specs/ (a design
+# would have become pending), an AskUserQuestion call (the approval answer),
+# or a UserPromptExpansion of fablepowers:approve or fablepowers:withdraw. In
+# a repo whose <toplevel>/.fablepowers/ exists it warns on any call. Other
+# calls, and everything outside git, stay silent. The event is classified with
+# bash pattern matches on the raw payload. Once per session means a marker
+# file ${TMPDIR:-/tmp}/fablepowers-gate-warned-<uid>-<session_id>, created with
+# noclobber; a payload with no session_id warns on every qualifying call.
+# Always exits 0.
 
 case "$0" in
     */*) SCRIPT_DIR="${0%/*}"; SCRIPT_DIR="${SCRIPT_DIR:-/}" ;;
@@ -66,12 +71,32 @@ if [[ "$cwd" == /* ]]; then
     done
 fi
 
-[[ -n "$top" && -d "$top/.fablepowers" ]] || exit 0
+[[ -n "$top" ]] || exit 0
+
+ws='[[:space:]]*'
+gate_event=0
+if [[ -d "$top/.fablepowers" ]]; then
+    gate_event=1
+elif [[ "$payload" =~ \"tool_name\"$ws:$ws\"AskUserQuestion\" ]]; then
+    gate_event=1
+elif [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"UserPromptExpansion\" \
+        && "$payload" =~ \"command_name\"$ws:$ws\"fablepowers:(approve|withdraw)\" ]]; then
+    gate_event=1
+elif [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"PostToolUse\" \
+        && "$payload" =~ \"tool_name\"$ws:$ws\"Write\" \
+        && "$payload" =~ \"type\"$ws:$ws\"create\" \
+        && "$payload" =~ \"file_path\"$ws:$ws\"([^\"]*)\" ]]; then
+    case "${BASH_REMATCH[1]}" in
+        */docs/specs/*.md|docs/specs/*.md) gate_event=1 ;;
+    esac
+fi
+(( gate_event )) || exit 0
 
 if [[ -n "$sid" ]]; then
-    marker="$top/.fablepowers/.gate-warned-$sid"
-    [[ -e "$marker" ]] && exit 0
-    : > "$marker" 2>/dev/null || true
+    marker="${TMPDIR:-/tmp}"
+    marker="${marker%/}/fablepowers-gate-warned-${UID:-0}-$sid"
+    [[ -e "$marker" || -L "$marker" ]] && exit 0
+    ( set -C; : > "$marker" ) 2>/dev/null || true
 fi
 
 printf '%s\n' "$warning"

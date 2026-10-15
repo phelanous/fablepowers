@@ -1,0 +1,12 @@
+{
+  "session_id": "01a1408c-3129-7042-bd83-8067959268d1",
+  "turn_id": "01a1408c-51c5-7150-bfd0-348ba39ea445",
+  "agent_id": "01a1408c-51ab-71e2-b37b-b66249e96b2a",
+  "agent_type": "default",
+  "transcript_path": "/home/phelanous/.codex/sessions/2026/10/15/rollout-2026-10-15T10-11-40-01a1408c-51ab-71e2-b37b-b66249e96b2a.jsonl",
+  "cwd": "__CWD__",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "prompt": "__PROMPT__"
+}

@@ -6,9 +6,12 @@
 # Every gate run goes through the literal "command" string hooks.json holds for
 # that event and matcher, with CLAUDE_PLUGIN_ROOT set to a temp plugin tree, via
 # "bash -c", with a payload built from tests/hooks/fixtures/gate/*.json (shaped
-# on the payloads Claude Code 2.1.299 sent in the gate spike). Placeholders
-# __CWD__, __FILE__, __SUBAGENT__, __COMMAND__, __ARGS__ and __ANSWER__ are
-# replaced inside JSON strings. Repos are temp git repos.
+# on the payloads Claude Code 2.1.299 sent in the gate spike; codex-*.json and
+# ups-claude.json on the payloads Codex 0.162.1 and Claude Code sent in the
+# codex-port Task 0 run). Placeholders __CWD__, __FILE__, __SUBAGENT__,
+# __COMMAND__, __ARGS__, __ANSWER__, __PATCH__, __RESPONSE__, __TASK__,
+# __MESSAGE__ and __PROMPT__ are replaced inside JSON strings. Repos are temp
+# git repos.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -45,11 +48,12 @@ chmod +x "$PLUGIN/hooks/approval-gate"
 # --- helpers ---------------------------------------------------------------------
 
 # hook_cmd <event> <matcher>: the literal command of the one hooks.json entry
-# with exactly that matcher; exit 1 if there is not exactly one such entry.
+# with exactly that matcher ("" = a group without one); exit 1 if there is not
+# exactly one such entry.
 hook_cmd() {
   python3 - "$PLUGIN/hooks/hooks.json" "$1" "$2" <<'EOF'
 import json, sys
-entries = [e for e in json.load(open(sys.argv[1]))["hooks"].get(sys.argv[2], []) if e.get("matcher") == sys.argv[3]]
+entries = [e for e in json.load(open(sys.argv[1]))["hooks"].get(sys.argv[2], []) if e.get("matcher", "") == sys.argv[3]]
 if len(entries) != 1 or len(entries[0]["hooks"]) != 1:
     sys.exit(1)
 print(entries[0]["hooks"][0]["command"])
@@ -119,8 +123,8 @@ run_cmd_input() {
 
 # verdict: classify $OUT/$RC. deny = exit 0 + exactly the PreToolUse deny shape
 # with a non-empty reason; allow = exit 0 + empty stdout; block = exit 0 +
-# top-level decision block with a reason; context = exit 0 + UserPromptExpansion
-# or PostToolUse additionalContext; else "other(...)".
+# top-level decision block with a reason; context = exit 0 + UserPromptExpansion,
+# UserPromptSubmit or PostToolUse additionalContext; else "other(...)".
 verdict() {
   if [[ "$RC" != 0 ]]; then echo "rc$RC"; return; fi
   if [[ -z "$OUT" ]]; then echo allow; return; fi
@@ -137,7 +141,7 @@ if set(d) == {"hookSpecificOutput"} and h.get("hookEventName") == "PreToolUse" \
     print("deny")
 elif set(d) == {"decision", "reason"} and d["decision"] == "block" and d["reason"]:
     print("block")
-elif isinstance(h, dict) and h.get("hookEventName") in ("UserPromptExpansion", "PostToolUse") and h.get("additionalContext"):
+elif isinstance(h, dict) and h.get("hookEventName") in ("UserPromptExpansion", "UserPromptSubmit", "PostToolUse") and h.get("additionalContext"):
     print("context")
 elif set(d) == {"systemMessage"}:
     print("warning")
@@ -830,6 +834,440 @@ assert isinstance(h["permissionDecisionReason"], str) and h["permissionDecisionR
 assert len(h) == 3
 ' "$OUT"
 check "nothing on stderr" test ! -s "$TEST_ROOT/stderr"
+
+# --- 11. Codex branch -------------------------------------------------------------------------
+
+echo "11. Codex: hooks.json wiring and skill policy"
+
+check "PreToolUse groups: the 0.4.0 ones first, in order, then the Codex spawns" python3 -c '
+import json,sys
+h = json.load(open(sys.argv[1]))["hooks"]
+m = lambda ev: [g.get("matcher") for g in h[ev]]
+assert list(h) == ["SessionStart", "PreToolUse", "PostToolUse", "UserPromptExpansion", "UserPromptSubmit"], list(h)
+assert m("PreToolUse") == ["Agent", "Write", "Edit", "MultiEdit", "NotebookEdit", "collaborationspawn_agent", "spawn_agent"], m("PreToolUse")
+assert m("PostToolUse") == ["Write", "AskUserQuestion"], m("PostToolUse")
+assert m("UserPromptExpansion") == ["fablepowers:approve", "fablepowers:withdraw"]
+assert m("UserPromptSubmit") == [None], m("UserPromptSubmit")
+' "$PLUGIN/hooks/hooks.json"
+for em in PreToolUse:collaborationspawn_agent PreToolUse:spawn_agent; do
+  event="${em%%:*}"; matcher="${em#*:}"
+  if c="$(hook_cmd "$event" "$matcher")" && [[ "$c" == *'${CLAUDE_PLUGIN_ROOT}/hooks/approval-gate"; done; exec bash'* ]]; then
+    pass "$event matcher '$matcher' runs the approval-gate launcher"
+  else
+    fail "$event matcher '$matcher': no single entry running the approval-gate launcher"
+  fi
+done
+if c="$(hook_cmd UserPromptSubmit "")" && [[ "$c" == *'${CLAUDE_PLUGIN_ROOT}/hooks/approval-gate" ups; done; exec bash "${CLAUDE_PLUGIN_ROOT}/hooks/approval-gate" ups' ]]; then
+  pass "UserPromptSubmit group runs the launcher with the 'ups' fast-path argument"
+else
+  fail "UserPromptSubmit group: no single entry running 'approval-gate ups'"
+fi
+for s in approve withdraw; do
+  check "skills/$s/agents/openai.yaml: allow_implicit_invocation false" \
+    test "$(cat "$SKILLS_DIR/$s/agents/openai.yaml" 2>/dev/null)" == $'policy:\n  allow_implicit_invocation: false'
+done
+
+# Codex helpers. patch_of <op-lines>: a patch around the lines; resp_of <A|M|D path>...:
+# the apply_patch tool_response Codex 0.162.1 prints for a success.
+patch_of() { printf '*** Begin Patch\n%s\n*** End Patch' "$1"; }
+resp_of() { printf 'Exit code: 0\nWall time: 0.1 seconds\nOutput:\nSuccess. Updated the following files:\n'; printf '%s\n' "$@"; }
+CODEX_DENIES="$TEST_ROOT/codex-denies"; : > "$CODEX_DENIES"
+# note_deny: record the deny text of $OUT (one per line) for the recovery-line check.
+note_deny() { [[ "$(verdict)" == deny ]] && text_of | tr '\n' ' ' >> "$CODEX_DENIES" && echo >> "$CODEX_DENIES"; return 0; }
+# cpatch <repo> <patch> [cwd] [matcher]: verdict of a PreToolUse apply_patch.
+cpatch() {
+  run_gate PreToolUse "${4:-Write}" codex-pre-apply_patch CWD="${3:-$1}" PATCH="$2"
+  note_deny; verdict
+}
+# cspawn2 <repo> <task_name>, cspawn1 <repo> <message> [matcher]: verdict of a spawn.
+cspawn2() { run_gate PreToolUse collaborationspawn_agent codex-v2-pre-spawn CWD="$1" TASK="$2"; note_deny; verdict; }
+cspawn1() { run_gate PreToolUse "${3:-spawn_agent}" codex-v1-pre-spawn CWD="$1" MESSAGE="$2"; note_deny; verdict; }
+# cpost <repo> <patch> <response> [cwd] [fixture]: run a PostToolUse apply_patch.
+cpost() { run_gate PostToolUse Write "${5:-codex-post-apply_patch}" CWD="${4:-$1}" PATCH="$2" RESPONSE="$3"; }
+# ccreate <repo> <path-from-cwd> [cwd]: write the spec, then its Codex Post Add.
+ccreate() {
+  local cwd="${3:-$1}"
+  mkdir -p "$(dirname "$cwd/$2")"; printf '# spec\n' > "$cwd/$2"
+  cpost "$1" "$(patch_of "*** Add File: $2"$'\n+# spec')" "$(resp_of "A $2")" "$cwd"
+}
+# cups <repo> <prompt> [fixture]: run a UserPromptSubmit.
+cups() { run_gate UserPromptSubmit "" "${3:-codex-ups}" CWD="$1" PROMPT="$2"; }
+
+echo "12. Codex: apply_patch spec add -> pending"
+
+R="$TEST_ROOT/c1"; new_repo "$R"
+ccreate "$R" docs/specs/2026-01-01-cx.md
+expect "v2 Add File docs/specs/*.md" context
+P="$R/.fablepowers/2026-01-01-cx/pending"
+check "pending written" test -f "$P"
+check "pending.spec is the repo-relative path" test "$(json_field "$P" spec)" == '"docs/specs/2026-01-01-cx.md"'
+check "pending context names \$fablepowers:approve and no question path" \
+  bash -c '[[ "$1" == *'\''`$fablepowers:approve`'\''* && "$1" == *"no approval question"* && "$1" != *"/fablepowers:approve"* ]]' _ "$(text_of)"
+cp "$P" "$TEST_ROOT/c1-pending"
+ccreate "$R" docs/specs/2026-01-01-cx.md
+expect "duplicate Post for the same Add (idempotent)" allow
+check "  pending unchanged" cmp -s "$P" "$TEST_ROOT/c1-pending"
+
+R="$TEST_ROOT/c1v1"; new_repo "$R"; printf '# V1\n' > "$R/docs/specs/v1.md"
+cpost "$R" "$(patch_of $'*** Add File: docs/specs/v1.md\n+# V1')" "$(resp_of "A docs/specs/v1.md")" "$R" codex-v1-post-apply_patch
+expect "v1 Add File docs/specs/v1.md" context
+check "  v1: pending written" test -f "$R/.fablepowers/v1/pending"
+
+R="$TEST_ROOT/c1s"; new_repo "$R"; mkdir -p "$R/sub/docs/specs"
+ccreate "$R" docs/specs/t0.md "$R/sub"
+check "subdirectory cwd: docs/specs/t0.md is <cwd>/docs/specs, not a spec" test ! -e "$R/.fablepowers"
+ccreate "$R" ../docs/specs/up.md "$R/sub"
+check "subdirectory cwd: ../docs/specs/up.md pends" test -f "$R/.fablepowers/up/pending"
+check "  its spec field" test "$(json_field "$R/.fablepowers/up/pending" spec)" == '"docs/specs/up.md"'
+
+R="$TEST_ROOT/c1a"; new_repo "$R"; printf 'x' > "$R/docs/specs/sub.md"
+cpost "$R" "$(patch_of $'*** Add File: docs/specs/sub.md\n+x')" "$(resp_of "A docs/specs/sub.md")" "$R" codex-post-apply_patch-subagent
+expect "subagent (agent_id) Add of a spec" allow
+check "  subagent: no pending" test ! -e "$R/.fablepowers"
+cpost "$R" "$(patch_of $'*** Add File: docs/specs/sub.md\n+x')" "Exit code: 1"
+check "Add without an 'A <path>' response line (patch failed): no pending" test ! -e "$R/.fablepowers"
+cpost "$R" "$(patch_of $'*** Update File: docs/specs/sub.md\n@@\n-x\n+y')" "$(resp_of "M docs/specs/sub.md")"
+check "Update of a spec: no pending" test ! -e "$R/.fablepowers"
+cpost "$R" "$(patch_of $'*** Add File: docs/notes.md\n+x\n*** Add File: docs/specs/n.txt\n+x\n*** Add File: docs/specs/d/deep.md\n+x')" \
+  "$(resp_of "A docs/notes.md" "A docs/specs/n.txt" "A docs/specs/d/deep.md")"
+check "Add outside docs/specs, non-.md, nested: no pending" test ! -e "$R/.fablepowers"
+cpost "$R" "*** Begin Patch"$'\n'"*** End Patch" "$(resp_of)"
+expect "Post with no file operation" allow
+check "  logged" grep -q 'PostToolUse Codex apply_patch without a parseable patch' "$R/.fablepowers/gate.log"
+
+R="$TEST_ROOT/c1m"; new_repo "$R"
+cpost "$R" "$(patch_of $'*** Add File: docs/plans/p.md\n+p\n*** Add File: docs/specs/m1.md\n+a\n*** Add File: docs/specs/m2.md\n+b')" \
+  "$(resp_of "A docs/plans/p.md" "A docs/specs/m1.md" "A docs/specs/m2.md")"
+expect "one patch adding two specs" context
+check "  both pending" test -f "$R/.fablepowers/m1/pending" -a -f "$R/.fablepowers/m2/pending"
+# M1: a trailing-space path and CRLF lines are trimmed, as Codex applies them.
+cpost "$R" "$(patch_of $'*** Add File: docs/specs/trail.md   \n+t')" "$(resp_of "A docs/specs/trail.md")"
+check "Add path with trailing spaces: pending under the trimmed key" test -f "$R/.fablepowers/trail/pending"
+cpost "$R" $'*** Begin Patch\r\n  *** Add File: docs/specs/crlf.md\r\n+c\r\n*** End Patch\r\n' "$(resp_of "A docs/specs/crlf.md")"
+check "CRLF patch with an indented Add header: pending" test -f "$R/.fablepowers/crlf/pending"
+
+# S3: Add File overwrites, so on Codex rewriting a marker-less spec re-pends it.
+R="$TEST_ROOT/c1o"; new_repo "$R"; printf '# old\n' > "$R/docs/specs/old.md"
+cpost "$R" "$(patch_of $'*** Add File: docs/specs/old.md\n+# new')" "$(resp_of "A docs/specs/old.md")"
+check "S3: Add File over an existing spec without markers re-pends it" test -f "$R/.fablepowers/old/pending"
+mkdir -p "$R/.fablepowers/done"
+printf '{"spec": "docs/specs/done.md", "approved_at": "2026-01-01T00:00:00+00:00", "via": "command", "spec_sha256": null}' > "$R/.fablepowers/done/approved"
+cpost "$R" "$(patch_of $'*** Add File: docs/specs/done.md\n+# again')" "$(resp_of "A docs/specs/done.md")"
+check "Add of an already approved key does not re-pend" test ! -e "$R/.fablepowers/done/pending"
+
+echo "13. Codex: apply_patch marker writes denied always"
+
+R="$TEST_ROOT/c2"; new_repo "$R"
+check "no pending: code patch allowed" test "$(cpatch "$R" "$(patch_of $'*** Add File: src/x.py\n+x')")" == allow
+for op in "*** Add File: .fablepowers/k/approved" "*** Delete File: .fablepowers/k/pending" \
+          "   *** Add File: .fablepowers/k/approved" $'\t*** Add File: .fablepowers/k/approved' \
+          "*** Add File: .FablePowers/k/Approved." "*** Add File: .fablepowers/k/approved:s" \
+          "*** Add File: /elsewhere/.fablepowers/k/approved"; do
+  check "no pending: '$op' denied" test "$(cpatch "$R" "$(patch_of "*** Add File: docs/plans/ok.md"$'\n+ok\n'"$op"$'\n+x')")" == deny
+done
+check "no pending: Update docs/plans/a.md + Move to .fablepowers/k/approved denied" \
+  test "$(cpatch "$R" "$(patch_of $'*** Update File: docs/plans/a.md\n*** Move to: .fablepowers/k/approved\n@@\n-a\n+a')")" == deny
+check "no pending: Update .fablepowers/k/approved + Move to docs/plans/a.md denied" \
+  test "$(cpatch "$R" "$(patch_of $'*** Update File: .fablepowers/k/approved\n*** Move to: docs/plans/a.md\n@@\n-a\n+a')")" == deny
+cpatch "$R" "$(patch_of $'*** Add File: .fablepowers/k/approved\n+x')" >/dev/null
+check "marker deny reason names \$fablepowers:approve" bash -c '[[ "$1" == *'\''`$fablepowers:approve`'\''* && "$1" == *"Do not retry"* ]]' _ "$(text_of)"
+check "no pending: .fablepowers/k/approved.md allowed" test "$(cpatch "$R" "$(patch_of $'*** Add File: .fablepowers/k/approved.md\n+x')")" == allow
+check "no pending: '+*** Add File: .fablepowers/k/approved' content line allowed" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: docs/plans/x.md\n+*** Add File: .fablepowers/k/approved')")" == allow
+mkdir -p "$R/docs/plans/elsewhere" "$R/.fablepowers"; ln -s ../docs/plans/elsewhere "$R/.fablepowers/lk"
+check "no pending: Add .fablepowers/<symlinked key>/approved denied (lexical path)" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: .fablepowers/lk/approved\n+x')")" == deny
+
+echo "14. Codex: apply_patch while pending"
+
+R="$TEST_ROOT/c3"; new_repo "$R"; mkdir -p "$R/src/deep"
+ccreate "$R" docs/specs/feat.md
+for op in $'*** Add File: src/x.py\n+x' $'*** Update File: src/app.py\n@@\n-hello\n+bye' "*** Delete File: src/app.py" \
+          $'*** Add File: README.md\n+r' $'*** Add File: docs/specsX/a.md\n+a' $'*** Add File: docs/specs/../../src/y.py\n+y' \
+          $'*** Update File: docs/plans/a.md\n*** Move to: src/b.py\n@@\n-a\n+a' \
+          $'*** Update File: src/app.py\n*** Move to: docs/plans/app.py\n@@\n-a\n+a'; do
+  check "pending: '${op%%$'\n'*}' denied" test "$(cpatch "$R" "$(patch_of "$op")")" == deny
+done
+cpatch "$R" "$(patch_of $'*** Add File: src/x.py\n+x')" >/dev/null
+check "deny reason names the spec, \$fablepowers:approve feat and withdraw, no Claude command" \
+  bash -c '[[ "$1" == *docs/specs/feat.md* && "$1" == *'\''$fablepowers:approve feat'\''* && "$1" == *'\''$fablepowers:withdraw feat'\''* && "$1" == *"Do not retry"* && "$1" != *"/fablepowers:approve"* && "$1" != *"answer Approve"* ]]' _ "$(text_of)"
+check "deny reason says how to send it (text or \$ menu; app: text)" \
+  bash -c '[[ "$1" == *'\''pick it from the `$` menu in the CLI'\''* && "$1" == *"in the Codex app, type it as text"* ]]' _ "$(text_of)"
+for op in $'*** Add File: docs/plans/p.md\n+p' $'*** Update File: docs/specs/feat.md\n@@\n-# spec\n+# spec 2' \
+          $'*** Add File: .fablepowers/feat/progress.md\n+p' $'*** Delete File: docs/plans/old.md'; do
+  check "pending: '${op%%$'\n'*}' allowed" test "$(cpatch "$R" "$(patch_of "$op")")" == allow
+done
+check "pending: absolute path outside the repo allowed" test "$(cpatch "$R" "$(patch_of "*** Add File: $TEST_ROOT/elsewhere/x.py"$'\n+x')")" == allow
+check "pending: allowed + disallowed in one patch denied" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: docs/plans/ok.md\n+ok\n*** Add File: src/evil.py\n+e')")" == deny
+cpatch "$R" "$(patch_of $'*** Add File: docs/plans/ok.md\n+ok\n*** Add File: src/evil.py\n+e')" >/dev/null
+check "  the reason names only the disallowed path" bash -c '[[ "$1" == *"\`src/evil.py\`"* && "$1" != *"\`docs/plans/ok.md\`"* ]]' _ "$(text_of)"
+# M1: Codex trims patch lines, so indented headers, CRLF and trailing spaces apply.
+check "pending: second op indented with spaces, disallowed: denied" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: docs/plans/ok.md\n+ok\n   *** Add File: src/evil.py\n+e')")" == deny
+check "pending: second op indented with a tab, disallowed: denied" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: docs/plans/ok.md\n+ok\n\t*** Update File: src/app.py\n@@\n-hello\n+bye')")" == deny
+check "pending: CRLF patch with a disallowed path denied" \
+  test "$(cpatch "$R" $'*** Begin Patch\r\n*** Add File: docs/plans/ok.md\r\n+ok\r\n*** Add File: src/evil.py\r\n+e\r\n*** End Patch\r\n')" == deny
+check "pending: CRLF patch inside the allowlist allowed" \
+  test "$(cpatch "$R" $'*** Begin Patch\r\n*** Add File: docs/plans/crlf.md\r\n+ok\r\n*** End Patch\r\n')" == allow
+check "pending: path with trailing spaces (src/evil.py   ) denied" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: src/evil.py   \n+e')")" == deny
+check "pending: indented '  *** Begin Patch' with a disallowed path denied" \
+  test "$(cpatch "$R" $'  *** Begin Patch\n  *** Add File: src/evil.py\n+e\n  *** End Patch')" == deny
+# Review focus 1: paths are relative to the payload cwd.
+check "pending, cwd src/deep: docs/specs/z.md (= src/deep/docs/specs) denied" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: docs/specs/z.md\n+z')" "$R/src/deep")" == deny
+check "pending, cwd src/deep: ../../docs/plans/q.md allowed" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: ../../docs/plans/q.md\n+q')" "$R/src/deep")" == allow
+ln -s ../../src "$R/docs/plans/srclink"
+check "pending: patch through a symlink from docs/plans to src denied" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: docs/plans/srclink/z.py\n+z')")" == deny
+# The Edit matcher (Codex fires both Write and Edit for apply_patch) gives the same answer.
+cpatch "$R" "$(patch_of $'*** Add File: src/x.py\n+x')" >/dev/null; w="$OUT"
+cpatch "$R" "$(patch_of $'*** Add File: src/x.py\n+x')" "$R" Edit >/dev/null
+check "duplicate invocation (Write and Edit matchers): identical deny" test "$OUT" == "$w"
+# Unparseable patches fail closed while pending (S4).
+check "pending: patch with no file operation denied" test "$(cpatch "$R" $'*** Begin Patch\n*** End Patch')" == deny
+cpatch "$R" $'*** Begin Patch\n*** End Patch' >/dev/null
+check "  the reason says the patch could not be parsed" bash -c '[[ "$1" == *"could not parse"* ]]' _ "$(text_of)"
+check "pending: header with an empty path denied" test "$(cpatch "$R" "$(patch_of $'*** Add File:   \n+x')")" == deny
+check "pending: header with an empty path, cwd docs/plans, denied (not read as the cwd)" \
+  test "$(cpatch "$R" "$(patch_of $'*** Add File: docs/plans/ok.md\n+ok\n*** Delete File:')" "$R/docs/plans")" == deny
+check "pending: tool_input with no patch text denied" test "$(cpatch "$R" "echo hi")" == deny
+run_gate_json PreToolUse Write "$(payload codex-pre-apply_patch CWD="$R" PATCH=x | python3 -c '
+import json,sys; d = json.load(sys.stdin); d["tool_input"] = {"input": sys.argv[1]}; print(json.dumps(d))' "$(patch_of $'*** Add File: src/evil.py\n+e')")"
+note_deny
+expect "pending: patch in another tool_input field (input), disallowed path" deny
+run_gate_json PreToolUse Write "$(payload codex-pre-apply_patch CWD="$R" PATCH=x | python3 -c '
+import json,sys; d = json.load(sys.stdin); d["tool_input"] = {"input": sys.argv[1]}; print(json.dumps(d))' "$(patch_of $'*** Add File: docs/plans/in.md\n+i')")"
+expect "pending: patch in another tool_input field (input), allowed path" allow
+run_gate PreToolUse Write codex-v1-pre-apply_patch CWD="$R" PATCH="$(patch_of $'*** Add File: src/v1.py\n+x')"
+note_deny
+expect "pending: v1 apply_patch code path" deny
+GATE_ENV=(FABLEPOWERS_GATE=off)
+check "off: pending code patch allowed" test "$(cpatch "$R" "$(patch_of $'*** Add File: src/x.py\n+x')")" == allow
+check "off: logged" grep -q 'would deny apply_patch' "$R/.fablepowers/gate.log"
+GATE_ENV=()
+R="$TEST_ROOT/c3n"; new_repo "$R"
+check "no pending: patch with no file operation allowed" test "$(cpatch "$R" $'*** Begin Patch\n*** End Patch')" == allow
+check "  logged" grep -q 'Codex apply_patch without a parseable patch' "$R/.fablepowers/gate.log"
+
+echo "15. Codex: config files while pending"
+
+R="$TEST_ROOT/c4"; new_repo "$R"
+H="$TEST_ROOT/chome"; mkdir -p "$H/.codex"
+check "no pending: ~/.codex/config.toml allowed" test "$(cpatch "$R" "$(patch_of "*** Update File: $H/.codex/config.toml"$'\n@@\n-a\n+b')")" == allow
+check "no pending: <repo>/.codex/rules/x.rules allowed" test "$(cpatch "$R" "$(patch_of $'*** Add File: .codex/rules/x.rules\n+x')")" == allow
+ccreate "$R" docs/specs/cfg.md
+# Outside the repo (under $H) only the config guard denies; inside, the allowlist would too.
+for f in "$H/.codex/config.toml" "$R/.codex/config.toml" .codex/config.toml .codex/rules/fablepowers.rules "$H/.codex/rules/x.rules" \
+         .codex/agents/x.toml "$H/.codex/agents/x.toml" .codex/hooks.json "$H/.codex/hooks.json" "$H/.codex/hooks/x.sh" \
+         docs/plans/.codex/config.toml docs/plans/.codex/rules/x.rules \
+         "$H/.Codex/Config.TOML" "$H/.codex/config.toml." "$H/.codex./rules/x" "$H/.CODEX/Agents/x"; do
+  check "pending: patch '$f' denied" test "$(cpatch "$R" "$(patch_of "*** Add File: $f"$'\n+x')")" == deny
+done
+cpatch "$R" "$(patch_of "*** Update File: $H/.codex/config.toml"$'\n@@\n-a\n+b')" >/dev/null
+check "config deny names the file, the design and \$fablepowers:approve" \
+  bash -c '[[ "$1" == *"Codex config file"* && "$1" == *.codex/config.toml* && "$1" == *docs/specs/cfg.md* && "$1" == *'\''$fablepowers:approve cfg'\''* ]]' _ "$(text_of)"
+ln -s "$H/.codex" "$TEST_ROOT/codexlink"
+check "pending: config.toml through a symlink to ~/.codex denied" test "$(cpatch "$R" "$(patch_of "*** Update File: $TEST_ROOT/codexlink/config.toml"$'\n@@\n-a\n+b')")" == deny
+CH="$TEST_ROOT/codex-home-elsewhere"; mkdir -p "$CH"
+check "pending, CODEX_HOME unset: <dir>/config.toml outside the repo allowed" test "$(cpatch "$R" "$(patch_of "*** Add File: $CH/config.toml"$'\n+x')")" == allow
+GATE_ENV=("CODEX_HOME=$CH")
+check "pending: \$CODEX_HOME/config.toml denied" test "$(cpatch "$R" "$(patch_of "*** Add File: $CH/config.toml"$'\n+x')")" == deny
+GATE_ENV=()
+for f in "$H/.codex/sessions/x.jsonl" "$H/.codex/config.toml.bak" "$H/codex/config.toml" "$H/.codex/notes/rules"; do
+  check "pending: '$f' (not Codex config, outside the repo) allowed" test "$(cpatch "$R" "$(patch_of "*** Add File: $f"$'\n+x')")" == allow
+done
+
+echo "16. Codex: spawns while pending"
+
+R="$TEST_ROOT/c5"; new_repo "$R"
+check "no pending: v2 implementer spawn allowed" test "$(cspawn2 "$R" fablepowers_implementer_t1)" == allow
+check "no pending: v1 implementer spawn allowed" test "$(cspawn1 "$R" $'fablepowers-seat: implementer\nGo.')" == allow
+ccreate "$R" docs/specs/sp.md
+for t in fablepowers_reviewer_t1 fablepowers_reviewer fablepowers_reviewer_t3_r2; do
+  check "pending: v2 task_name $t allowed" test "$(cspawn2 "$R" "$t")" == allow
+done
+for t in fablepowers_implementer_t1 fablepowers_strict_implementer_t1 fablepowers_reviewerx "" worker fablepowers-reviewer-t0 x_fablepowers_reviewer_t1; do
+  check "pending: v2 task_name '$t' denied" test "$(cspawn2 "$R" "$t")" == deny
+done
+run_gate_json PreToolUse collaborationspawn_agent "$(payload codex-v2-pre-spawn CWD="$R" TASK=x | python3 -c '
+import json,sys; d = json.load(sys.stdin); del d["tool_input"]["task_name"]; print(json.dumps(d))')"
+note_deny
+expect "pending: v2 spawn without task_name" deny
+cspawn2 "$R" fablepowers_implementer_t1 >/dev/null
+check "v2 deny names the agent, the design and \$fablepowers:approve sp" \
+  bash -c '[[ "$1" == *fablepowers_implementer_t1* && "$1" == *docs/specs/sp.md* && "$1" == *'\''$fablepowers:approve sp'\''* ]]' _ "$(text_of)"
+check "pending: v1 reviewer seat line allowed" test "$(cspawn1 "$R" $'fablepowers-seat: reviewer\nRead agents/reviewer.md.')" == allow
+check "pending: v1 reviewer seat line with CRLF allowed" test "$(cspawn1 "$R" $'fablepowers-seat: reviewer\r\nGo.')" == allow
+for m in $'fablepowers-seat: implementer\nRead agents/implementer.md.' \
+         $'fablepowers-seat: implementer\nAlso see agents/reviewer.md and fablepowers-seat: reviewer.' \
+         $'Hello\nfablepowers-seat: reviewer' "Read agents/reviewer.md as your role prompt." "" \
+         $'fablepowers-seat: reviewers\nGo.'; do
+  check "pending: v1 message '${m%%$'\n'*}...' denied" test "$(cspawn1 "$R" "$m")" == deny
+done
+check "pending: v1 implementer spawn via the Agent matcher denied too" test "$(cspawn1 "$R" $'fablepowers-seat: implementer\nGo.' Agent)" == deny
+check "pending: Claude Agent dispatch unaffected (implementer denied, Claude wording)" test "$(agent_verdict "$R" fablepowers:implementer)" == deny
+agent_verdict "$R" fablepowers:implementer >/dev/null
+check "  Claude wording kept" bash -c '[[ "$1" == *"/fablepowers:approve sp"* && "$1" != *'\''$fablepowers'\''* ]]' _ "$(text_of)"
+
+echo "17. Codex: \$fablepowers:approve / withdraw"
+
+R="$TEST_ROOT/c6"; new_repo "$R"
+cups "$R" '$fablepowers:approve'
+expect "nothing pending" context
+check "  says so" bash -c '[[ "$1" == *"nothing is pending"* ]]' _ "$(text_of)"
+check "  no marker" test ! -e "$R/.fablepowers"
+ccreate "$R" docs/specs/one.md
+for p in '$fablepowers:approve a b' 'please $fablepowers:approve' $'$fablepowers:approve\nyes' \
+         $'$fablepowers:approve\n' '$fablepowers:approvex' '/fablepowers:approve' '$fablepowers:Approve' 'fablepowers:approve' \
+         '$fablepowers:approve one two' ''; do
+  cups "$R" "$p"
+  check "not an approval: '${p//$'\n'/\\n}' (allowed, nothing recorded)" test "$(verdict)" == allow -a ! -e "$R/.fablepowers/one/approved"
+done
+# One trailing word is the key argument: one that names no pending design records nothing.
+for p in '$fablepowers:approve please' '$fablepowers:approve one.'; do
+  cups "$R" "$p"
+  check "not an approval: '$p' (no such key: context, nothing recorded)" \
+    bash -c '[[ "$1" == context && "$2" == *"no pending design matches"* ]]' _ "$(verdict)" "$(text_of)"
+  check "  nothing recorded" test ! -e "$R/.fablepowers/one/approved"
+done
+cups "$R" '$fablepowers:approve' codex-ups-child
+check "with agent_id (a subagent prompt): nothing recorded" test "$(verdict)" == allow -a ! -e "$R/.fablepowers/one/approved"
+cups "$R" '$fablepowers:approve' ups-claude
+check "Claude Code UserPromptSubmit (no turn_id): nothing recorded" test "$(verdict)" == allow -a ! -e "$R/.fablepowers/one/approved"
+cups "$R" $' \t$fablepowers:approve \t'
+expect "one pending, blanks around the command" context
+A="$R/.fablepowers/one/approved"
+check "  approved written, via command" test "$(json_field "$A" via)" == '"command"'
+check "  approved.spec_sha256 matches the spec" test "$(json_field "$A" spec_sha256)" == "\"$(sha256sum "$R/docs/specs/one.md" | cut -d' ' -f1)\""
+check "  context says it is recorded" bash -c '[[ "$1" == *"approved design \`docs/specs/one.md\`"* ]]' _ "$(text_of)"
+cp "$A" "$TEST_ROOT/c6-approved"
+cups "$R" '$fablepowers:approve'
+expect "duplicate approve (idempotent)" context
+check "  approved unchanged" cmp -s "$A" "$TEST_ROOT/c6-approved"
+check "approved: v2 implementer spawn allowed" test "$(cspawn2 "$R" fablepowers_implementer_t1)" == allow
+check "approved: v1 implementer spawn allowed" test "$(cspawn1 "$R" $'fablepowers-seat: implementer\nGo.')" == allow
+check "approved: code patch allowed" test "$(cpatch "$R" "$(patch_of $'*** Add File: src/x.py\n+x')")" == allow
+
+R="$TEST_ROOT/c6b"; new_repo "$R"
+ccreate "$R" docs/specs/a.md
+ccreate "$R" docs/specs/b.md
+cups "$R" '$fablepowers:approve'
+expect "several pending, no key: context, not a block" context
+check "  lists both keys and the command" bash -c '[[ "$1" == *"a (docs/specs/a.md)"* && "$1" == *"b (docs/specs/b.md)"* && "$1" == *'\''$fablepowers:approve <key>'\''* ]]' _ "$(text_of)"
+check "  nothing recorded" test ! -e "$R/.fablepowers/a/approved" -a ! -e "$R/.fablepowers/b/approved"
+cups "$R" '$fablepowers:approve zzz'
+expect "several pending, unknown key" context
+check "  nothing recorded" test ! -e "$R/.fablepowers/a/approved" -a ! -e "$R/.fablepowers/b/approved"
+cups "$R" '$fablepowers:approve docs/specs/b.md'
+expect "several pending, spec path b" context
+check "  only b approved" test -f "$R/.fablepowers/b/approved" -a ! -e "$R/.fablepowers/a/approved"
+check "one still pending: v2 implementer spawn denied" test "$(cspawn2 "$R" fablepowers_implementer_t1)" == deny
+cups "$R" '$fablepowers:withdraw'
+expect "withdraw, one pending (a)" context
+check "  a/pending removed, spec kept" test ! -e "$R/.fablepowers/a/pending" -a -f "$R/docs/specs/a.md"
+check "after withdraw: v2 implementer spawn allowed" test "$(cspawn2 "$R" fablepowers_implementer_t1)" == allow
+R="$TEST_ROOT/c6c"; new_repo "$R"
+ccreate "$R" docs/specs/a.md
+ccreate "$R" docs/specs/b.md
+cups "$R" '$fablepowers:withdraw'
+expect "withdraw, several pending, no key" context
+check "  both still pending" test -f "$R/.fablepowers/a/pending" -a -f "$R/.fablepowers/b/pending"
+cups "$R" '$fablepowers:withdraw a'
+check "withdraw a: only a removed" test ! -e "$R/.fablepowers/a/pending" -a -f "$R/.fablepowers/b/pending"
+GATE_ENV=("FABLEPOWERS_PYTHON=$(command -v python3)")
+cups "$R" '$fablepowers:approve b'
+expect "UserPromptSubmit through the launcher's payload hand-off to python" context
+check "  b approved" test -f "$R/.fablepowers/b/approved"
+GATE_ENV=()
+PAYLOAD_COMPACT=1
+R="$TEST_ROOT/c6d"; new_repo "$R"
+ccreate "$R" docs/specs/cx.md
+expect "compact JSON: Codex spec add" context
+check "compact JSON: v2 implementer spawn denied" test "$(cspawn2 "$R" fablepowers_implementer_t1)" == deny
+cups "$R" '$fablepowers:approve'
+expect "compact JSON: \$fablepowers:approve" context
+check "compact JSON: approved" test -f "$R/.fablepowers/cx/approved"
+PAYLOAD_COMPACT=0
+
+echo "18. Codex: launcher fast path and no-python warnings"
+
+# UserPromptSubmit without `$fablepowers:` exits before python is looked for.
+printf '#!/bin/sh\ntouch "%s/py-ran"\nexec python3 "$@"\n' "$TEST_ROOT" > "$TEST_ROOT/tracepy"; chmod +x "$TEST_ROOT/tracepy"
+R="$TEST_ROOT/c7"; new_repo "$R"; mkdir -p "$R/.fablepowers"
+GATE_ENV=("FABLEPOWERS_PYTHON=$TEST_ROOT/tracepy")
+rm -f "$TEST_ROOT/py-ran"
+cups "$R" 'Reply with the single word OK.'
+check "UserPromptSubmit without \$fablepowers: allowed" test "$(verdict)" == allow
+check "  python never started" test ! -e "$TEST_ROOT/py-ran"
+cups "$R" 'Reply OK.' ups-claude
+check "Claude Code prompt: python never started" test ! -e "$TEST_ROOT/py-ran"
+cups "$R" '$fablepowers:approve'
+check "UserPromptSubmit with \$fablepowers: starts python" test -e "$TEST_ROOT/py-ran"
+GATE_ENV=()
+
+CWARNED="$GATE_TMP/fablepowers-gate-warned-$UID-01a1408b-1e59-7092-843b-bc23a311d75f"
+cnopy() {  # cnopy <label> <repo>: no-python checks for Codex payloads (repo without .fablepowers/)
+  local L="$1" R="$2"
+  reset_warned
+  cups "$R" 'Reply OK.'
+  expect "no python, $L: prompt without \$fablepowers: silent" allow
+  cups "$R" '$fablepowers:approve' ups-claude
+  expect "no python, $L: Claude prompt '\$fablepowers:approve' (no turn_id) silent" allow
+  cpost "$R" "$(patch_of $'*** Add File: src/new.py\n+x')" "$(resp_of "A src/new.py")"
+  expect "no python, $L: non-spec Add silent" allow
+  cpost "$R" "$(patch_of $'*** Add File: docs/specs/n.txt\n+x\n*** Add File: src/docs/specsx/a.md\n+x')" "$(resp_of)"
+  expect "no python, $L: non-.md / docs/specs-like Adds silent" allow
+  cpost "$R" "$(patch_of $'*** Update File: docs/specs/a.md\n@@\n-a\n+b')" "$(resp_of "M docs/specs/a.md")"
+  expect "no python, $L: spec Update silent" allow
+  run_gate PreToolUse Write codex-pre-apply_patch CWD="$R" PATCH="$(patch_of $'*** Add File: docs/specs/a.md\n+x')"
+  expect "no python, $L: PreToolUse spec Add silent" allow
+  run_gate PreToolUse collaborationspawn_agent codex-v2-pre-spawn CWD="$R" TASK=fablepowers_implementer_t1
+  expect "no python, $L: spawn silent" allow
+  check "  $L: no warn-once marker yet" test ! -e "$CWARNED"
+  cpost "$R" "$(patch_of $'*** Add File: src/x.py\n+x\n  *** Add File: docs/specs/a.md   \n+x')" "$(resp_of)"
+  expect "no python, $L: Post apply_patch adding a spec (second, indented op) warns" warning
+  check "  $L: warning text" test "$OUT" == "$WARNING"
+  check "  $L: warn-once marker" test -f "$CWARNED"
+  cpost "$R" "$(patch_of $'*** Add File: docs/specs/b.md\n+x')" "$(resp_of "A docs/specs/b.md")"
+  expect "no python, $L: second spec Add in the session silent" allow
+  reset_warned
+  cups "$R" '$fablepowers:approve'
+  expect "no python, $L: \$fablepowers:approve warns" warning
+  cups "$R" '$fablepowers:withdraw'
+  expect "no python, $L: \$fablepowers:withdraw once per session" allow
+  reset_warned
+  cups "$R" 'run $fablepowers:withdraw please'
+  expect "no python, $L: prompt holding \$fablepowers: warns" warning
+  check "  $L: no .fablepowers/ created" test ! -e "$R/.fablepowers"
+}
+GATE_ENV=("FABLEPOWERS_PYTHON=/nonexistent")
+RQ="$TEST_ROOT/c8"; new_repo "$RQ"
+cnopy "fresh repo" "$RQ"
+PAYLOAD_COMPACT=1
+RQ="$TEST_ROOT/c8c"; new_repo "$RQ"
+cnopy "compact JSON, fresh repo" "$RQ"
+PAYLOAD_COMPACT=0
+reset_warned
+RQ="$TEST_ROOT/c8f"; new_repo "$RQ"; mkdir -p "$RQ/.fablepowers"
+cups "$RQ" 'Reply OK.'
+expect "no python, repo with .fablepowers/: prompt without \$fablepowers: silent (fast path)" allow
+run_gate PreToolUse collaborationspawn_agent codex-v2-pre-spawn CWD="$RQ" TASK=fablepowers_implementer_t1
+expect "no python, repo with .fablepowers/: spawn warns" warning
+GATE_ENV=()
+reset_warned
+
+echo "19. Codex deny messages carry the recovery line"
+
+n="$(grep -c . "$CODEX_DENIES" || true)"
+check "Codex deny messages collected ($n)" test "$n" -ge 40
+check "every Codex deny message has the /hooks trust + FABLEPOWERS_GATE=off recovery line" \
+  bash -c '! grep -v -F "trust them in \`/hooks\`, or set \`FABLEPOWERS_GATE=off\`" "$1" | grep -q .' _ "$CODEX_DENIES"
+check "no Codex deny message points at the Claude Code command or question" \
+  bash -c '! grep -E "/fablepowers:(approve|withdraw)|answer Approve" "$1" | grep -q .' _ "$CODEX_DENIES"
 
 echo
 if [[ "$FAILURES" -eq 0 ]]; then

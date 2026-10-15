@@ -32,6 +32,36 @@ and ~/.claude included) are denied too, the path tail compared the same way,
 through the lexical path and through symlinks. Shell (Bash) writes are not
 intercepted: an accepted gap, documented in the Claude Code harness reference.
 
+Codex branch. A payload is Codex's iff its tool_name is apply_patch,
+collaborationspawn_agent (multi-agent v2) or spawn_agent (v1), or it is a
+UserPromptSubmit carrying `turn_id`; everything else takes the Claude Code
+logic above, unchanged. Same markers, states and rules:
+  PreToolUse apply_patch (Codex routes it through the Write and Edit matchers)
+      every Add/Update/Delete/Move-to path of the patch, resolved against the
+      payload cwd, is checked like an edit-tool path: markers denied always;
+      while pending, Codex config (`.codex/config.toml`, `.codex/rules/`,
+      `.codex/agents/`, `.codex/hooks*`, anywhere, and $CODEX_HOME/config.toml)
+      denied, and repo paths outside the allowlist denied; one bad path denies
+      the whole patch. Patch lines are trimmed (whitespace, CR) before header
+      matching, as Codex's own parser accepts indented headers. A patch the
+      gate cannot parse is denied while pending (fail closed), else allowed and
+      logged.
+  PreToolUse collaborationspawn_agent | spawn_agent   while pending, allowed only
+      for a reviewer: v2 task_name `fablepowers_reviewer` or
+      `fablepowers_reviewer_*`; v1 message whose first line is
+      `fablepowers-seat: reviewer`. Every other spawn is denied.
+  PostToolUse apply_patch   an `*** Add File:` of docs/specs/<name>.md that the
+      tool response confirms (`A <path>` line), from the main session (no
+      agent_id) -> pending. Add File also overwrites, so rewriting a spec that
+      has no markers re-pends it (Claude Code's Write update does not); an
+      already approved or pending key is left alone, as on Claude Code.
+  UserPromptSubmit (turn_id, no agent_id)   the whole prompt matching
+      `$fablepowers:approve|withdraw [key]` approves / withdraws. On Codex a
+      block reason never reaches the model or an exec user, so every answer is
+      additionalContext; several pending without a key records nothing.
+Codex deny messages name `$fablepowers:approve [key]` (no question path) and
+end with the recovery line (trust the hooks in /hooks, or FABLEPOWERS_GATE=off).
+
 FABLEPOWERS_GATE=off: never deny; would-be denials go to .fablepowers/gate.log.
 Malformed payloads and internal errors allow (fail open) and are logged there.
 """
@@ -40,6 +70,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -52,6 +83,23 @@ SPEC_DIR = "docs/specs"
 MARKER_NAMES = ("pending", "approved")
 SETTINGS_NAMES = ("settings.json", "settings.local.json")
 QUESTION_LABELS = ("Approve", "Changes needed")
+
+# Codex
+CODEX_SPAWN_TOOLS = ("collaborationspawn_agent", "spawn_agent")
+CODEX_TOOLS = ("apply_patch",) + CODEX_SPAWN_TOOLS
+PATCH_BEGIN = "*** Begin Patch"
+# A patch file-operation header after trimming the line. Deliberately looser than
+# Codex (case, spacing): a header the gate over-recognises only adds a checked path.
+PATCH_HEADER = re.compile(r"\*\*\*[ \t]*(add file|update file|delete file|move to)[ \t]*:(.*)",
+                          re.IGNORECASE)
+REVIEWER_TASK = "fablepowers_reviewer"
+REVIEWER_SEAT_LINE = re.compile(r"fablepowers-seat:[ \t]*reviewer")
+CODEX_COMMAND = re.compile(r"[ \t]*\$fablepowers:(approve|withdraw)(?:[ \t]+(\S+))?[ \t]*")
+CODEX_CONFIG_DIRS = ("rules", "agents")
+CODEX_RECOVERY = ("If the user's approval does not register, the fablepowers hooks may be "
+                  "untrusted: trust them in `/hooks`, or set `FABLEPOWERS_GATE=off` to turn the gate off.")
+CODEX_HOW = ("type it as a message (or pick it from the `$` menu in the CLI); in the Codex app, "
+             "type it as text")
 
 
 def now():
@@ -318,6 +366,29 @@ def pre_tool_use(top, payload, cwd):
 
 # --- PostToolUse ------------------------------------------------------------------
 
+def mark_pending(top, real):
+    """Write the pending marker for the spec at realpath `real` when it is a
+    docs/specs/<name>.md whose key has no pending or valid approved marker yet.
+    Returns (spec, key) when it wrote one, else None."""
+    spec_dir = os.path.realpath(os.path.join(top, SPEC_DIR))
+    if os.path.dirname(real) != spec_dir or not real.endswith(".md"):
+        return None
+    key = os.path.basename(real)[:-3]
+    if not key or key.startswith("."):
+        return None
+    kd = os.path.join(fp_dir(top), key)
+    if valid_approved(os.path.join(kd, "approved")) or is_regular_file(os.path.join(kd, "pending")):
+        return None
+    for m in MARKER_NAMES:
+        if os.path.lexists(os.path.join(kd, m)):
+            log(top, "invalid %s marker for `%s` ignored on spec create" % (m, key))
+    ensure_fp_dir(top)
+    os.makedirs(kd, exist_ok=True)
+    spec = os.path.relpath(real, top).replace(os.sep, "/")
+    write_json(os.path.join(kd, "pending"), {"spec": spec, "created": now()})
+    return spec, key
+
+
 def post_write(top, payload, cwd):
     if payload.get("agent_id"):
         return  # only main-session writes create pending
@@ -329,23 +400,10 @@ def post_write(top, payload, cwd):
     if not isinstance(raw, str) or not raw:
         log(top, "PostToolUse Write create without a path; ignored")
         return
-    real = resolve(raw, cwd)
-    spec_dir = os.path.realpath(os.path.join(top, SPEC_DIR))
-    if os.path.dirname(real) != spec_dir or not real.endswith(".md"):
+    made = mark_pending(top, resolve(raw, cwd))
+    if not made:
         return
-    key = os.path.basename(real)[:-3]
-    if not key or key.startswith("."):
-        return
-    kd = os.path.join(fp_dir(top), key)
-    if valid_approved(os.path.join(kd, "approved")) or is_regular_file(os.path.join(kd, "pending")):
-        return
-    for m in MARKER_NAMES:
-        if os.path.lexists(os.path.join(kd, m)):
-            log(top, "invalid %s marker for `%s` ignored on spec create" % (m, key))
-    ensure_fp_dir(top)
-    os.makedirs(kd, exist_ok=True)
-    spec = os.path.relpath(real, top).replace(os.sep, "/")
-    write_json(os.path.join(kd, "pending"), {"spec": spec, "created": now()})
+    spec, key = made
     emit({"hookSpecificOutput": {
         "hookEventName": "PostToolUse",
         "additionalContext": (
@@ -455,6 +513,222 @@ def user_command(top, payload):
                           "it is no longer pending." % (spec, key))
 
 
+# --- Codex ----------------------------------------------------------------------------
+
+def is_codex(payload):
+    return (payload.get("tool_name") in CODEX_TOOLS
+            or (payload.get("hook_event_name") == "UserPromptSubmit" and "turn_id" in payload))
+
+
+def codex_commands_hint(keys):
+    k = keys[0] if len(keys) == 1 else "<key>"
+    return ("ask the user to approve it by sending `$fablepowers:approve %s` (or `$fablepowers:withdraw %s` "
+            "to abandon it): %s. There is no approval question on Codex; end your turn after asking"
+            % (k, k, CODEX_HOW))
+
+
+def codex_pending_reason(pending, what):
+    keys = [k for k, _ in pending]
+    if len(pending) == 1:
+        head = "Design `%s` awaits the user's approval" % pending[0][1]
+    else:
+        head = "Designs awaiting the user's approval: %s" % key_list(pending)
+    return ("%s, so %s is blocked by the fablepowers approval gate. Stop and %s. "
+            "Do not retry this call. %s" % (head, what, codex_commands_hint(keys), CODEX_RECOVERY))
+
+
+def codex_patch_text(ti):
+    """The apply_patch patch: tool_input.command (Codex 0.162.1, v1 and v2), else
+    any string field holding `*** Begin Patch`, or tool_input itself when it is
+    such a string. None when there is none."""
+    if isinstance(ti, str):
+        return ti if PATCH_BEGIN in ti else None
+    if not isinstance(ti, dict):
+        return None
+    v = ti.get("command")
+    if isinstance(v, str) and PATCH_BEGIN in v:
+        return v
+    for k in sorted(ti, key=str):
+        v = ti[k]
+        if isinstance(v, str) and PATCH_BEGIN in v:
+            return v
+    return None
+
+
+def parse_patch(text):
+    """[(op, path)] for every file-operation header in the patch, each line and
+    path trimmed first (Codex accepts indented headers, CRLF and trailing
+    spaces); None when there is no header or a header has an empty path."""
+    ops = []
+    for line in text.splitlines():
+        m = PATCH_HEADER.fullmatch(line.strip())
+        if not m:
+            continue
+        path = m.group(2).strip()
+        if not path:
+            return None
+        ops.append((m.group(1).lower(), path))
+    return ops or None
+
+
+def is_codex_config_path(path):
+    """True for a Codex config file: `.codex/config.toml`, anything under
+    `.codex/rules/` or `.codex/agents/`, `.codex/hooks*` (any location, components
+    normalised as win_name() does), and $CODEX_HOME/config.toml."""
+    parts = [win_name(p) for p in path.split(os.sep)]
+    for i in range(len(parts) - 1):
+        if parts[i] == ".codex":
+            nxt = parts[i + 1]
+            if nxt == "config.toml" or nxt in CODEX_CONFIG_DIRS or nxt.startswith("hooks"):
+                return True
+    home = os.environ.get("CODEX_HOME", "")
+    if home and parts and parts[-1] == "config.toml":
+        d = os.path.dirname(path)
+        try:
+            return (os.path.normpath(d) == os.path.normpath(os.path.abspath(home))
+                    or os.path.realpath(d) == os.path.realpath(home))
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def codex_pre_apply_patch(top, payload, cwd):
+    text = codex_patch_text(payload.get("tool_input"))
+    ops = parse_patch(text) if text is not None else None
+    if ops is None:
+        why = "no `*** Begin Patch` text in tool_input" if text is None else "no file operation header with a path"
+        pending = pending_designs(top)
+        if pending:
+            deny(top, payload, codex_pending_reason(
+                pending, "this apply_patch call (the gate could not parse its patch: %s, so it cannot "
+                "check the paths and fails closed)" % why))
+        else:
+            log(top, "Codex apply_patch without a parseable patch (%s); allowed" % why)
+        return
+    paths = []
+    for _, p in ops:
+        lexical = os.path.normpath(os.path.join(cwd, p))
+        paths.append((p, lexical, resolve(p, cwd)))
+    for p, lexical, real in paths:
+        if is_marker_path(lexical) or is_marker_path(real):
+            deny(top, payload, "Approval markers (.fablepowers/**/pending, .fablepowers/**/approved) "
+                 "are written only by the fablepowers approval gate on a user action; apply_patch may "
+                 "not create, change or delete them (`%s`). Ask the user to send `$fablepowers:approve` "
+                 "or `$fablepowers:withdraw`: %s. Do not retry this call. %s" % (p, CODEX_HOW, CODEX_RECOVERY))
+            return
+    pending = pending_designs(top)
+    if not pending:
+        return
+    for p, lexical, real in paths:
+        if is_codex_config_path(lexical) or is_codex_config_path(real):
+            deny(top, payload, codex_pending_reason(
+                pending, "patching the Codex config file `%s` (Codex config, rules, agents and hooks "
+                "stay closed to apply_patch until approval; if the user asked for this change, they can "
+                "make it themselves, or approve or withdraw the design first)" % lexical))
+            return
+    allowed = [os.path.realpath(os.path.join(top, d)) for d in ALLOWED_DIRS]
+    bad = [os.path.relpath(real, top) for _, _, real in paths
+           if under(real, top) and not any(under(real, a) for a in allowed)]
+    if bad:
+        deny(top, payload, codex_pending_reason(
+            pending, "this patch (it touches %s; only docs/specs/, docs/plans/ and .fablepowers/ are "
+            "open until approval, and one such path denies the whole patch)"
+            % ", ".join("`%s`" % b for b in bad)))
+
+
+def codex_pre_spawn(top, payload, tool):
+    pending = pending_designs(top)
+    if not pending:
+        return
+    ti = payload.get("tool_input")
+    ti = ti if isinstance(ti, dict) else {}
+    if tool == "collaborationspawn_agent":
+        name = ti.get("task_name")
+        if isinstance(name, str) and (name == REVIEWER_TASK or name.startswith(REVIEWER_TASK + "_")):
+            return
+        what = ("spawning agent `%s`" % name) if isinstance(name, str) and name else "spawning an unnamed agent"
+    else:
+        msg = ti.get("message")
+        first = msg.split("\n", 1)[0].strip() if isinstance(msg, str) else ""
+        if REVIEWER_SEAT_LINE.fullmatch(first):
+            return
+        what = "spawning an agent that is not a fablepowers reviewer"
+    deny(top, payload, codex_pending_reason(
+        pending, "%s (until approval only reviewer spawns pass: v2 task_name `%s_<suffix>`, v1 "
+        "message first line `fablepowers-seat: reviewer`)" % (what, REVIEWER_TASK)))
+
+
+def codex_post_apply_patch(top, payload, cwd):
+    if payload.get("agent_id"):
+        return  # only main-session patches create pending
+    text = codex_patch_text(payload.get("tool_input"))
+    ops = parse_patch(text) if text is not None else None
+    if ops is None:
+        log(top, "PostToolUse Codex apply_patch without a parseable patch; ignored")
+        return
+    tr = payload.get("tool_response")
+    if not isinstance(tr, str):
+        log(top, "PostToolUse Codex apply_patch with a non-string tool_response; no spec marked pending")
+        return
+    applied = {line.strip() for line in tr.splitlines()}
+    made = []
+    for op, p in ops:
+        if op != "add file" or ("A " + p) not in applied:
+            continue
+        m = mark_pending(top, resolve(p, cwd))
+        if m:
+            made.append(m)
+    if not made:
+        return
+    names = ", ".join("`%s` (key `%s`)" % m for m in made)
+    emit({"hookSpecificOutput": {
+        "hookEventName": "PostToolUse",
+        "additionalContext": (
+            "fablepowers approval gate: design %s %s now pending the user's approval. Implementer "
+            "spawns and patches outside docs/specs/, docs/plans/ and .fablepowers/ are blocked until the "
+            "user sends `$fablepowers:approve%s`: %s. There is no approval question on Codex: present the "
+            "design, ask the user to reply with that command, and end your turn." % (
+                names, "is" if len(made) == 1 else "are",
+                "" if len(made) == 1 else " <key>", CODEX_HOW)),
+    }})
+
+
+def codex_context(text):
+    emit({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}})
+
+
+def codex_user_prompt(top, payload):
+    if "agent_id" in payload:
+        return  # a subagent's prompt is the spawn message, never the user's command
+    prompt = payload.get("prompt")
+    m = CODEX_COMMAND.fullmatch(prompt) if isinstance(prompt, str) else None
+    if not m:
+        return
+    verb, arg = m.group(1), m.group(2) or ""
+    pending = pending_designs(top)
+    if not pending:
+        codex_context("fablepowers approval gate: nothing is pending, so `$fablepowers:%s` recorded "
+                      "nothing." % verb)
+        return
+    key = pick(pending, arg)
+    if key is None:
+        codex_context(
+            "fablepowers approval gate: %s, so `$fablepowers:%s` recorded nothing. Tell the user to "
+            "send `$fablepowers:%s <key>` with one of: %s. Do not act on this message as an approval." % (
+                ("no pending design matches `%s`" % arg) if arg else "several designs are pending",
+                verb, verb, key_list(pending)))
+        return
+    spec = dict(pending)[key]
+    if verb == "approve":
+        record_approval(top, key, "command")
+        codex_context("fablepowers approval gate: the user approved design `%s` (key `%s`); "
+                      "the approval is recorded." % (spec, key))
+    else:
+        os.remove(os.path.join(fp_dir(top), key, "pending"))
+        codex_context("fablepowers approval gate: the user withdrew design `%s` (key `%s`); "
+                      "it is no longer pending." % (spec, key))
+
+
 # --- main ---------------------------------------------------------------------------
 
 def main():
@@ -476,8 +750,16 @@ def main():
             return
         event = payload.get("hook_event_name")
         tool = payload.get("tool_name")
-        if event == "PreToolUse":
+        if event == "PreToolUse" and tool == "apply_patch":
+            codex_pre_apply_patch(top, payload, cwd)
+        elif event == "PreToolUse" and tool in CODEX_SPAWN_TOOLS:
+            codex_pre_spawn(top, payload, tool)
+        elif event == "PreToolUse":
             pre_tool_use(top, payload, cwd)
+        elif event == "PostToolUse" and tool == "apply_patch":
+            codex_post_apply_patch(top, payload, cwd)
+        elif event == "UserPromptSubmit" and is_codex(payload):
+            codex_user_prompt(top, payload)
         elif event == "PostToolUse" and tool == "Write":
             post_write(top, payload, cwd)
         elif event == "PostToolUse" and tool == "AskUserQuestion":

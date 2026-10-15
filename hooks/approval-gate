@@ -21,6 +21,14 @@
 # bash pattern matches on the raw payload. Once per session means a marker
 # file ${TMPDIR:-/tmp}/fablepowers-gate-warned-<uid>-<session_id>, created with
 # noclobber; a payload with no session_id warns on every qualifying call.
+# Codex: a PostToolUse apply_patch whose patch has an `*** Add File:` of a
+# docs/specs/*.md, and a UserPromptSubmit carrying turn_id whose prompt holds
+# `$fablepowers:`, are gate events too.
+#
+# Fast path: run with the argument `ups` (the UserPromptSubmit group), the
+# launcher reads the payload itself and exits 0 before looking for python unless
+# it contains `$fablepowers:`; the payload then goes to python on stdin. Claude
+# Code fires UserPromptSubmit on every prompt, so this keeps it cheap.
 # Always exits 0.
 
 case "$0" in
@@ -33,6 +41,14 @@ usable() {
         && "$1" -I -c 'import sys; sys.exit(sys.version_info < (3, 8))' </dev/null >/dev/null 2>&1
 }
 
+payload=""
+have_payload=0
+if [[ "${1:-}" == ups ]]; then
+    IFS= read -r -d '' payload || true
+    have_payload=1
+    [[ "$payload" == *'$fablepowers:'* ]] || exit 0
+fi
+
 if [[ -n "${FABLEPOWERS_PYTHON:-}" ]]; then
     candidates=("$FABLEPOWERS_PYTHON")
 else
@@ -43,6 +59,10 @@ fi
 
 for py in "${candidates[@]}"; do
     if usable "$py"; then
+        if (( have_payload )); then
+            printf '%s' "$payload" | "$py" -I "$SCRIPT_DIR/approval_gate.py"
+            exit 0
+        fi
         exec "$py" -I "$SCRIPT_DIR/approval_gate.py"
     fi
 done
@@ -51,8 +71,7 @@ done
 
 warning='{"systemMessage":"fablepowers approval gate disabled: python3 not found"}'
 
-payload=""
-IFS= read -r -d '' payload || true
+(( have_payload )) || { IFS= read -r -d '' payload || true; }
 
 sid=""
 cwd=""
@@ -89,6 +108,24 @@ elif [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"PostToolUse\" \
     case "${BASH_REMATCH[1]}" in
         */docs/specs/*.md|docs/specs/*.md) gate_event=1 ;;
     esac
+elif [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"PostToolUse\" \
+        && "$payload" =~ \"tool_name\"$ws:$ws\"apply_patch\" ]]; then
+    # Every `*** Add File: <path>` in the JSON-encoded patch (a path ends at the
+    # `\n` escape or the closing quote); trailing blanks trimmed.
+    re_add='\*\*\*[[:blank:]]*Add File:[[:blank:]]*([^\"]*)'
+    rest="$payload"
+    while [[ "$rest" =~ $re_add ]]; do
+        p="${BASH_REMATCH[1]}"
+        rest="${rest#*"${BASH_REMATCH[0]}"}"
+        p="${p%"${p##*[![:blank:]]}"}"
+        case "$p" in
+            */docs/specs/*.md|docs/specs/*.md) gate_event=1; break ;;
+        esac
+    done
+elif [[ "$payload" =~ \"hook_event_name\"$ws:$ws\"UserPromptSubmit\" \
+        && "$payload" =~ \"turn_id\"$ws: \
+        && "$payload" == *'$fablepowers:'* ]]; then
+    gate_event=1
 fi
 (( gate_event )) || exit 0
 

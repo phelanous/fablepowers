@@ -1,0 +1,15 @@
+{
+  "session_id": "01a1408c-3129-7042-bd83-8067959268d1",
+  "turn_id": "01a1408c-314b-76d3-b95b-0d9808364765",
+  "transcript_path": "/home/phelanous/.codex/sessions/2026/10/15/rollout-2026-10-15T10-11-31-01a1408c-3129-7042-bd83-8067959268d1.jsonl",
+  "cwd": "__CWD__",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "__PATCH__"
+  },
+  "tool_response": "__RESPONSE__",
+  "tool_use_id": "exec-edef1c57-253c-4b16-9426-2e275b193fd9"
+}

@@ -1,0 +1,9 @@
+{
+  "session_id": "66a63f28-4780-42e9-b97f-0c4cbea391cf",
+  "transcript_path": "/home/phelanous/.claude/projects/-tmp-claude-1000--home-phelanous-Repos-fablepowers--claude-worktrees-superpowers-openai-integration-11a783-20962526-67ce-4c81-9cb9-df84614ff03c-scratchpad-codex-port-t0-repo/66a63f28-4780-42e9-b97f-0c4cbea391cf.jsonl",
+  "cwd": "__CWD__",
+  "prompt_id": "d0c31028-a0fb-41f1-aad9-4514eef286b3",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "__PROMPT__"
+}

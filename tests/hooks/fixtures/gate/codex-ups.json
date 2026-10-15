@@ -1,0 +1,10 @@
+{
+  "session_id": "01a14098-73fc-7733-9da3-d7bf4ee63209",
+  "turn_id": "01a14098-a9c6-77c1-a9bf-c12174aff33b",
+  "transcript_path": "/home/phelanous/.codex/sessions/2026/10/15/rollout-2026-10-15T10-24-55-01a14098-73fc-7733-9da3-d7bf4ee63209.jsonl",
+  "cwd": "__CWD__",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "prompt": "__PROMPT__"
+}

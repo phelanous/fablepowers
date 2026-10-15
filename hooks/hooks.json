@@ -68,6 +68,28 @@
             "async": false
           }
         ]
+      },
+      {
+        "matcher": "collaborationspawn_agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "for b in \"${BASH:-}\" /bin/bash /usr/bin/bash /usr/local/bin/bash /opt/homebrew/bin/bash; do [ -f \"$b\" ] && [ -x \"$b\" ] && exec \"$b\" \"${CLAUDE_PLUGIN_ROOT}/hooks/approval-gate\"; done; exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/approval-gate\"",
+            "shell": "bash",
+            "async": false
+          }
+        ]
+      },
+      {
+        "matcher": "spawn_agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "for b in \"${BASH:-}\" /bin/bash /usr/bin/bash /usr/local/bin/bash /opt/homebrew/bin/bash; do [ -f \"$b\" ] && [ -x \"$b\" ] && exec \"$b\" \"${CLAUDE_PLUGIN_ROOT}/hooks/approval-gate\"; done; exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/approval-gate\"",
+            "shell": "bash",
+            "async": false
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -112,6 +134,18 @@
           {
             "type": "command",
             "command": "for b in \"${BASH:-}\" /bin/bash /usr/bin/bash /usr/local/bin/bash /opt/homebrew/bin/bash; do [ -f \"$b\" ] && [ -x \"$b\" ] && exec \"$b\" \"${CLAUDE_PLUGIN_ROOT}/hooks/approval-gate\"; done; exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/approval-gate\"",
+            "shell": "bash",
+            "async": false
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "for b in \"${BASH:-}\" /bin/bash /usr/bin/bash /usr/local/bin/bash /opt/homebrew/bin/bash; do [ -f \"$b\" ] && [ -x \"$b\" ] && exec \"$b\" \"${CLAUDE_PLUGIN_ROOT}/hooks/approval-gate\" ups; done; exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/approval-gate\" ups",
             "shell": "bash",
             "async": false
           }

@@ -298,3 +298,106 @@ model. OpenCode (0.6.0) and Pi (0.7.0) each get their own design.
 3. **Stray pending designs** (withdrawn, or still pending at session end), which
    would mean `docs/specs/` is being used for non-design notes.
 
+
+## Decisions (2026-10-15): the Codex port
+
+0.5.0 runs the workflow on OpenAI Codex. Evidence: the multi-harness spike
+(`docs/plans/2026-10-14-multi-harness-spike.md`), the Codex gate spike
+(`docs/plans/2026-10-15-codex-gate-spike.md`, Codex CLI 0.162.1) and the port's
+own verification run before any gate code (Task 0 of
+`docs/plans/2026-10-15-codex-port.md`), each point observed by execution unless
+marked otherwise.
+
+### One repository, shared hooks
+
+Codex installs the repository as it is: it reads `.claude-plugin/marketplace.json`
+and `plugin.json`, loads `hooks/hooks.json`, and lists the skills as
+`fablepowers:<skill>`, from a local path and from `owner/repo`. The Claude-format
+hooks run unchanged. So the port adds a Codex branch to the same scripts instead
+of a second plugin, and no `.codex-plugin/` manifest. New `hooks.json` groups are
+appended at the end of each event, because Codex keys hook trust by position:
+an appended group leaves a 0.4.0 install's trusted entries trusted (checked by
+comparing the trust keys and hashes of a 0.4.0 and a 0.5.0 install: the eight
+0.4.0 handlers are unchanged, three are new).
+
+### Detection from the payload, not the environment
+
+Codex passes its launcher's environment to hooks (a run started from Claude Code
+carried `CLAUDECODE=1`), and sets `CLAUDE_PLUGIN_ROOT` as well as its own
+`PLUGIN_ROOT`. The payload is reliable: Codex's SessionStart carries
+`permission_mode` and `model` (Claude Code's has neither) and a
+`rollout-*.jsonl` transcript; its tool and prompt events carry `turn_id`. The
+gate keys on Codex-only tool names (`apply_patch`, `collaborationspawn_agent`,
+`spawn_agent`) and on `turn_id` for `UserPromptSubmit`; everything else takes
+the 0.4.0 code.
+
+### The gate on Codex
+
+- **Deny holds.** The PreToolUse deny JSON blocks `apply_patch` and both spawn
+  tools, in workspace-write, read-only and full-bypass modes, and inside
+  subagents.
+- **Plan mode is not a gate.** It asks a blocking question but lets edits
+  through, so Codex has no question path: approval is the typed
+  `$fablepowers:approve`, read from the user's literal prompt in
+  `UserPromptSubmit` with no `agent_id` (a v1 child's spawn message arrives as
+  that child's prompt, with `agent_id`).
+- **The model can't approve itself.** Codex ignores `disable-model-invocation`;
+  `agents/openai.yaml` with `allow_implicit_invocation: false` removes the
+  approve and withdraw skills from the model's list. The hook reads only the
+  user's prompt, which the model cannot write.
+- **What reaches whom.** A hook's `systemMessage` and a `decision:block` reason
+  reach neither the model nor a `codex exec` user, so the gate speaks only
+  through deny reasons and `additionalContext`, and several pending designs
+  without a key produce context, not a block. The Codex app's skill picker sends
+  a structured item the hook never sees, so the command must arrive as text.
+- **Reviewer identity is a convention.** v2 spawn messages are encrypted; the
+  plaintext `task_name` (lowercase letters, digits and underscores, unique per
+  session) and, on v1, the message's first line identify a reviewer. A custom
+  Codex agent role would be harness-enforced, but whether a plugin can ship one
+  is unverified and dispatch stays by reference, as the user chose; a
+  mislabelled spawn is an accepted gap.
+- **Patch paths are relative to the session's working directory**, not the
+  repository root, and a move appears in the response only as its destination,
+  so the gate parses every header of the patch and resolves it against the
+  payload `cwd`. Patch lines are trimmed before matching, as Codex's own parser
+  accepts indented headers.
+- **A security review of the gate** found that a header path holding a NUL made
+  resolution raise and the whole patch fall through to the fail-open handler.
+  Such paths now fail closed. The same review asked to guard all of `~/.codex`
+  and the plugin cache; that stays an accepted gap, like Claude Code's plugin
+  hook files: the gate guards against momentum, not an adversarial model.
+- **Shell-run `apply_patch`** is reported as a Bash call with no PostToolUse, so
+  it bypasses the gate; with shell writes already an accepted gap, a Bash hook
+  group (another trust entry) was not added.
+
+### Seats and models
+
+Codex picks the multi-agent tool generation per model (v2 `collaborationspawn_agent`
+with `task_name` and `fork_turns`; v1 `spawn_agent` with a plaintext message),
+and each spawn takes an explicit `model` and `reasoning_effort`, which the
+rollout's `turn_context` confirms. The test account had no Sol model
+(`gpt-6-sol` failed "Unknown model"), so the seat mapping is per-user
+configuration (`models.toml`) over defaults from the binary's catalog, and the
+session-start hook injects the effective table so the orchestrator never guesses
+an id. A failed spawn stops for the user instead of retrying without a model,
+which would run on the inherited model, the defect the seats exist to prevent.
+Codex's default agent depth already gives children no spawn tool.
+
+### Commits
+
+Under `workspace-write`, `.git` is read-only. An execpolicy rules file allowing
+plain `git add`, `git commit` and `git worktree add` lets the session and its
+subagents commit, from a trusted project's `.codex/rules/` or from
+`~/.codex/rules/` (both verified); `git push` and `git -c … commit` do not match.
+It ships opt-in. Codex also records project trust in `config.toml` on its own
+during normal sessions, which test procedures must undo.
+
+### What to watch next audit
+
+1. **Seat models actually used** on Codex (rollout `turn_context`), against the
+   injected table: any spawn without the table's model is the inheritance
+   defect again.
+2. **Gate denials on Codex per design session**, and whether the model relays
+   the reason and ends its turn, or retries.
+3. **Approvals that never registered** (users typing "approve" in chat, or
+   picking the skill in the app), which would mean the ask's wording needs work.

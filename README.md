@@ -33,6 +33,71 @@ directory, and elsewhere in a repository on the calls where the gate would have
 acted (creating a spec under `docs/specs/`, the approval question, and
 `/fablepowers:approve` or `/fablepowers:withdraw`).
 
+## Codex
+
+fablepowers also runs in OpenAI Codex (CLI and app; tested with Codex CLI
+0.162.1), from the same repository: the same skills, seats, approval gate and
+workflow map. What the skills' actions resolve to on Codex is in
+[`skills/workflow/references/codex.md`](skills/workflow/references/codex.md).
+
+**Install.**
+
+```
+codex plugin marketplace add phelanous/fablepowers
+codex plugin add fablepowers@fablepowers
+```
+
+**Trust the hooks once.** Codex runs a plugin's hooks only after you trust them:
+open `/hooks` in the Codex CLI and trust the fablepowers entries. Until then
+there is no workflow map and no approval gate. Trust is kept per hook entry, so
+trust again after an update that changes `hooks/hooks.json`. Upgrading from
+0.4.0 keeps the eight entries you already trusted and adds three new ones (the
+two spawn tools and `UserPromptSubmit`) to trust. For headless runs,
+`scripts/codex-hook-trust.sh` prints a one-run override instead:
+`codex -c "$(scripts/codex-hook-trust.sh)" exec …` (read-only; it never writes
+your config).
+
+**Let agents commit (optional).** Under Codex's `workspace-write` sandbox `.git`
+is read-only, so each `git add` and `git commit` asks for approval. Copy
+[`codex/rules/fablepowers.rules`](codex/rules/fablepowers.rules) to your
+project's `.codex/rules/` (the project must be trusted) or to `~/.codex/rules/`
+to allow plain `git add`, `git commit` and `git worktree add`. `git push`,
+`git -c … commit` and other git commands still ask.
+
+**Seat models (optional).** By default the implementer and reviewer run on
+`gpt-6.1-sol` (effort high) and the strict implementer on `gpt-5.6-terra`
+(effort medium). Sol needs an account with Sol access, and the Sol id comes from
+the Codex binary's catalog, so verify it with `codex debug models`. Override any
+seat in `~/.config/fablepowers/models.toml` (or under `$XDG_CONFIG_HOME`):
+
+```toml
+[codex]
+implementer = "gpt-6-luna"
+implementer_effort = "medium"
+reviewer = "gpt-6-luna"
+```
+
+Keys are `implementer`, `strict_implementer`, `reviewer` and `<seat>_effort`;
+values are double-quoted; efforts are `low`, `medium`, `high`, `xhigh`, `max` or
+`ultra`. A bad entry falls back to the default and shows a warning in the
+session's injected context. If a seat's model is unavailable, the session stops
+and asks you to set it here.
+
+**Approving a design.** There is no approval question on Codex. Reply with
+`$fablepowers:approve` as the whole message (add the spec's key when several
+designs are pending); `$fablepowers:withdraw [key]` drops one. Type it, or pick
+it from the `$` menu in the CLI; in the Codex app, type it as text, since a
+skill picked from the app's menu does not reach the gate. In `codex exec`, the
+run ends at the ask; continue with
+`codex exec resume <session-id> '$fablepowers:approve'`. While a design is
+pending, every spawn except a fablepowers reviewer is denied, as are patches
+outside `docs/specs/`, `docs/plans/` and `.fablepowers/` and patches to Codex
+config (`.codex/config.toml`, `.codex/rules/`, `.codex/agents/`,
+`.codex/hooks*`). If an approval doesn't register, check that the hooks are
+trusted, or set `FABLEPOWERS_GATE=off`. The accepted gaps (shell writes, a
+spawn mislabelled as a reviewer, the rest of `~/.codex` and the plugin cache)
+are listed in the Codex reference.
+
 ## How it works
 
 Ten workflow skills, invoked through the Skill tool as `fablepowers:<name>`, plus
@@ -45,7 +110,10 @@ implementer seat", "ask the user a two-option question"). What those resolve to
 on Claude Code — tools, models, hooks, the approval mechanism, where session
 logs live — is in
 [`skills/workflow/references/claude-code.md`](skills/workflow/references/claude-code.md).
-Other harnesses get a sibling reference when their support lands.
+On Codex they resolve as described in
+[`skills/workflow/references/codex.md`](skills/workflow/references/codex.md)
+(see [Codex](#codex)); other harnesses get a sibling reference when their
+support lands.
 
 | | |
 |---|---|

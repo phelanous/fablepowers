@@ -11,9 +11,12 @@
 # /usr/local/bin/python3, /opt/homebrew/bin/python3. A candidate must be
 # Python 3.8+. The hook payload on stdin passes straight through to python.
 #
-# No usable python: the gate is disabled (every call allowed) with a warning,
-# once per session when the repo's .fablepowers/ can hold the marker
-# .gate-warned-<session_id>, else on every call. Always exits 0.
+# No usable python: the gate is disabled (every call allowed). The warning is
+# shown only in a repo whose <toplevel>/.fablepowers/ exists: without python no
+# pending marker can ever be created, so elsewhere (repos that never used
+# fablepowers, and outside git) the gate cannot matter and stays silent. There
+# it is shown once per session (marker .fablepowers/.gate-warned-<session_id>),
+# or on every call when the payload has no session_id. Always exits 0.
 
 case "$0" in
     */*) SCRIPT_DIR="${0%/*}"; SCRIPT_DIR="${SCRIPT_DIR:-/}" ;;
@@ -63,7 +66,9 @@ if [[ "$cwd" == /* ]]; then
     done
 fi
 
-if [[ -n "$sid" && -n "$top" && -d "$top/.fablepowers" ]]; then
+[[ -n "$top" && -d "$top/.fablepowers" ]] || exit 0
+
+if [[ -n "$sid" ]]; then
     marker="$top/.fablepowers/.gate-warned-$sid"
     [[ -e "$marker" ]] && exit 0
     : > "$marker" 2>/dev/null || true

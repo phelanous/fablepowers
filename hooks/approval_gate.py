@@ -25,9 +25,12 @@ Events (see hooks/hooks.json for the matchers):
 
 Edit-tool writes through any path with a marker-named component under a
 `.fablepowers` component are denied, names compared case-insensitively and
-NTFS-normalised (trailing dots/spaces and `:stream` suffixes ignored). Shell
-(Bash) writes to markers are not intercepted: an accepted gap, documented in the
-Claude Code harness reference.
+NTFS-normalised (trailing dots/spaces and `:stream` suffixes ignored). While any
+design is pending, edit-tool writes to a Claude Code settings file
+(`.claude/settings.json` or `.claude/settings.local.json`, anywhere, the repo
+and ~/.claude included) are denied too, the path tail compared the same way,
+through the lexical path and through symlinks. Shell (Bash) writes are not
+intercepted: an accepted gap, documented in the Claude Code harness reference.
 
 FABLEPOWERS_GATE=off: never deny; would-be denials go to .fablepowers/gate.log.
 Malformed payloads and internal errors allow (fail open) and are logged there.
@@ -47,6 +50,7 @@ EDIT_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 ALLOWED_DIRS = ("docs/specs", "docs/plans", ".fablepowers")
 SPEC_DIR = "docs/specs"
 MARKER_NAMES = ("pending", "approved")
+SETTINGS_NAMES = ("settings.json", "settings.local.json")
 QUESTION_LABELS = ("Approve", "Changes needed")
 
 
@@ -209,6 +213,14 @@ def is_marker_path(path):
     return any(p in markers for p in parts[parts.index(fp) + 1:])
 
 
+def is_settings_path(path):
+    """True when the path ends in `.claude/settings.json` or
+    `.claude/settings.local.json`, components normalised as win_name() does."""
+    parts = [win_name(p) for p in path.split(os.sep)]
+    return (len(parts) >= 2 and parts[-2] == ".claude".casefold()
+            and parts[-1] in {n.casefold() for n in SETTINGS_NAMES})
+
+
 def spec_sha256(top, spec):
     try:
         with open(os.path.join(top, spec), "rb") as f:
@@ -281,7 +293,14 @@ def pre_tool_use(top, payload, cwd):
                  "`/fablepowers:withdraw`. Do not retry this call.")
             return
         pending = pending_designs(top)
-        if not pending or not under(real, top):
+        if not pending:
+            return
+        if is_settings_path(lexical) or is_settings_path(real):
+            deny(top, payload, pending_reason(
+                pending, "editing the Claude Code settings file `%s` (settings files stay closed "
+                "to the edit tools until approval)" % lexical))
+            return
+        if not under(real, top):
             return
         if any(under(real, os.path.realpath(os.path.join(top, d))) for d in ALLOWED_DIRS):
             return

@@ -1,0 +1,18 @@
+{
+  "session_id": "76496df1-bffc-49e9-96ae-c92ee405caf7",
+  "transcript_path": "/home/user/.claude/projects/-repo/76496df1-bffc-49e9-96ae-c92ee405caf7.jsonl",
+  "cwd": "__CWD__",
+  "prompt_id": "c4c83d36-1b9b-4cc8-90b1-bcdb0c85d68a",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Task 1",
+    "prompt": "Implement task 1",
+    "subagent_type": "__SUBAGENT__"
+  },
+  "tool_use_id": "toolu_011tTdUUJpZWG4bx9gVobyHn"
+}

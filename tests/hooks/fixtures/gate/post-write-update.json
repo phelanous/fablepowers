@@ -1,0 +1,37 @@
+{
+  "session_id": "76496df1-bffc-49e9-96ae-c92ee405caf7",
+  "transcript_path": "/home/user/.claude/projects/-repo/76496df1-bffc-49e9-96ae-c92ee405caf7.jsonl",
+  "cwd": "__CWD__",
+  "prompt_id": "c4c83d36-1b9b-4cc8-90b1-bcdb0c85d68a",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "__FILE__",
+    "content": "spec v2"
+  },
+  "tool_response": {
+    "type": "update",
+    "filePath": "__FILE__",
+    "content": "spec v2",
+    "structuredPatch": [
+      {
+        "oldStart": 1,
+        "oldLines": 1,
+        "newStart": 1,
+        "newLines": 1,
+        "lines": [
+          "-spec",
+          "+spec v2"
+        ]
+      }
+    ],
+    "originalFile": "spec",
+    "userModified": false
+  },
+  "tool_use_id": "toolu_01Update00000000000000",
+  "duration_ms": 3
+}

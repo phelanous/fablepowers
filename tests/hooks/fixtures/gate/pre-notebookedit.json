@@ -1,0 +1,18 @@
+{
+  "session_id": "76496df1-bffc-49e9-96ae-c92ee405caf7",
+  "transcript_path": "/home/user/.claude/projects/-repo/76496df1-bffc-49e9-96ae-c92ee405caf7.jsonl",
+  "cwd": "__CWD__",
+  "prompt_id": "c4c83d36-1b9b-4cc8-90b1-bcdb0c85d68a",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "NotebookEdit",
+  "tool_input": {
+    "notebook_path": "__FILE__",
+    "new_source": "print(1)",
+    "edit_mode": "replace"
+  },
+  "tool_use_id": "toolu_01NotebookEdit0000000000"
+}

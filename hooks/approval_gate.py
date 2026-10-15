@@ -8,7 +8,11 @@ Markers live in <toplevel>/.fablepowers/<key>/, <key> being the spec's basename
 without .md:
   pending   {"spec", "created"}                       written on a spec create
   approved  {"spec", "approved_at", "via", "spec_sha256"}
-A design is pending iff `pending` exists and `approved` does not. <toplevel> is
+A design is pending iff `pending` is a regular file (not a symlink) and there
+is no valid `approved`: a regular, non-symlink file holding a JSON object with
+`via` ("command" or "question"), a non-empty string `approved_at` and a `spec`
+(string or null). Anything else named `approved` (a directory, a symlink,
+invalid JSON) is a forgery: it is ignored and logged. <toplevel> is
 the nearest ancestor of the payload's cwd holding a `.git` entry (a directory,
 or a file in a linked worktree); outside a git repo the gate is inert.
 
@@ -19,6 +23,11 @@ Events (see hooks/hooks.json for the matchers):
   PostToolUse AskUserQuestion                         Approve answer -> approved
   UserPromptExpansion fablepowers:approve|withdraw    user commands
 
+Edit-tool writes through any path with a marker-named component under a
+`.fablepowers` component (case-insensitive) are denied. Shell (Bash) writes to
+markers are not intercepted: an accepted gap, documented in the Claude Code
+harness reference.
+
 FABLEPOWERS_GATE=off: never deny; would-be denials go to .fablepowers/gate.log.
 Malformed payloads and internal errors allow (fail open) and are logged there.
 """
@@ -27,6 +36,7 @@ import datetime
 import hashlib
 import json
 import os
+import stat
 import sys
 import tempfile
 import traceback
@@ -118,8 +128,33 @@ def read_json(path):
         return {}
 
 
+def is_regular_file(path):
+    """True for a regular file that is not a symlink."""
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def valid_approved(path):
+    """True iff `path` is a gate-written approval: a regular, non-symlink file
+    holding a JSON object with the expected fields."""
+    if not is_regular_file(path):
+        return False
+    try:
+        with open(path, encoding="utf-8") as f:
+            v = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return (isinstance(v, dict)
+            and v.get("via") in ("command", "question")
+            and isinstance(v.get("approved_at"), str) and bool(v["approved_at"])
+            and "spec" in v and (v["spec"] is None or isinstance(v["spec"], str)))
+
+
 def pending_designs(top):
-    """[(key, spec)] for every design with pending and no approved, sorted."""
+    """[(key, spec)] for every design with a pending file and no valid approved, sorted.
+    An invalid `approved` (forged) does not count and is logged."""
     d = fp_dir(top)
     try:
         names = sorted(os.listdir(d))
@@ -128,11 +163,16 @@ def pending_designs(top):
     out = []
     for key in names:
         kd = os.path.join(d, key)
-        if not os.path.isdir(kd):
+        if not os.path.isdir(kd) or not is_regular_file(os.path.join(kd, "pending")):
             continue
-        if os.path.lexists(os.path.join(kd, "pending")) and not os.path.lexists(os.path.join(kd, "approved")):
-            spec = read_json(os.path.join(kd, "pending")).get("spec")
-            out.append((key, spec if isinstance(spec, str) and spec else key))
+        a = os.path.join(kd, "approved")
+        if valid_approved(a):
+            continue
+        if os.path.lexists(a):
+            log(top, "invalid approved marker for `%s` ignored (not a regular file with the "
+                     "gate's JSON); the design stays pending" % key)
+        spec = read_json(os.path.join(kd, "pending")).get("spec")
+        out.append((key, spec if isinstance(spec, str) and spec else key))
     return out
 
 
@@ -147,8 +187,16 @@ def resolve(path, cwd):
 
 
 def is_marker_path(path):
-    parts = path.split(os.sep)
-    return len(parts) >= 2 and parts[-1] in MARKER_NAMES and ".fablepowers" in parts[:-1]
+    """True when any component after a `.fablepowers` component is a marker name,
+    compared case-insensitively (case-insensitive filesystems resolve
+    `.FablePowers/k/Approved` to the marker; `approved/x` would create a directory
+    named like it)."""
+    parts = [p.casefold() for p in path.split(os.sep)]
+    fp = ".fablepowers".casefold()
+    markers = {m.casefold() for m in MARKER_NAMES}
+    if fp not in parts:
+        return False
+    return any(p in markers for p in parts[parts.index(fp) + 1:])
 
 
 def spec_sha256(top, spec):
@@ -259,8 +307,11 @@ def post_write(top, payload, cwd):
     if not key or key.startswith("."):
         return
     kd = os.path.join(fp_dir(top), key)
-    if os.path.lexists(os.path.join(kd, "approved")) or os.path.lexists(os.path.join(kd, "pending")):
+    if valid_approved(os.path.join(kd, "approved")) or is_regular_file(os.path.join(kd, "pending")):
         return
+    for m in MARKER_NAMES:
+        if os.path.lexists(os.path.join(kd, m)):
+            log(top, "invalid %s marker for `%s` ignored on spec create" % (m, key))
     ensure_fp_dir(top)
     os.makedirs(kd, exist_ok=True)
     spec = os.path.relpath(real, top).replace(os.sep, "/")

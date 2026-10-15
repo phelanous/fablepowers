@@ -56,10 +56,14 @@ print(entries[0]["hooks"][0]["command"])
 EOF
 }
 
-# payload <fixture> NAME=value...: the fixture with placeholders __NAME__ replaced.
+# payload <fixture> NAME=value...: the fixture with placeholders __NAME__ replaced,
+# on one line with ", " and ": " separators; with PAYLOAD_COMPACT=1, compact JSON
+# with no whitespace at all (",", ":"), the shape Claude Code sends.
+PAYLOAD_COMPACT=0
 payload() {
-  python3 - "$FIXTURES/$1.json" "${@:2}" <<'EOF'
-import json, sys
+  PAYLOAD_COMPACT="$PAYLOAD_COMPACT" python3 - "$FIXTURES/$1.json" "${@:2}" <<'EOF'
+import json, os, sys
+seps = (",", ":") if os.environ.get("PAYLOAD_COMPACT") == "1" else None
 subs = dict(a.split("=", 1) for a in sys.argv[2:])
 def walk(v):
     if isinstance(v, str):
@@ -71,7 +75,7 @@ def walk(v):
     if isinstance(v, list):
         return [walk(x) for x in v]
     return v
-print(json.dumps(walk(json.load(open(sys.argv[1])))))
+print(json.dumps(walk(json.load(open(sys.argv[1]))), separators=seps))
 EOF
 }
 
@@ -718,6 +722,14 @@ git -C "$RQ" worktree add -q "$TEST_ROOT/r8q-wt" -b wt8
 mkdir -p "$TEST_ROOT/r8q-wt/docs/specs" "$TEST_ROOT/r8q-wt/src"
 mkdir -p "$RQ/.fablepowers"   # the main checkout has one; the worktree does not
 nopy_gate_events "linked worktree without .fablepowers/" "$TEST_ROOT/r8q-wt"
+# Compact JSON (no whitespace), as Claude Code sends it: the launcher's raw
+# payload classification must not depend on spaces around ':'.
+PAYLOAD_COMPACT=1
+check "compact payloads have no whitespace after ':'" \
+  test "$(payload post-ask CWD=/x ANSWER=Approve | grep -c '"tool_name":"AskUserQuestion"')" == 1
+RC8="$TEST_ROOT/r8c"; new_repo "$RC8"
+nopy_gate_events "compact JSON, fresh repo without .fablepowers/" "$RC8"
+PAYLOAD_COMPACT=0
 # A payload without session_id warns on every qualifying call.
 reset_warned
 for n in 1 2; do
@@ -741,6 +753,19 @@ expect "broken python, repo with .fablepowers/ (subdirectory cwd): warns" warnin
 reset_warned
 GATE_ENV=("FABLEPOWERS_PYTHON=$(command -v python3)")
 check "FABLEPOWERS_PYTHON=<real python3> runs the gate" test "$(agent_verdict "$R" fablepowers:implementer)" == deny
+# The core flow with compact payloads through the real python gate.
+PAYLOAD_COMPACT=1
+RCF="$TEST_ROOT/r8cf"; new_repo "$RCF"
+create_spec "$RCF" docs/specs/feat.md
+expect "compact JSON: spec create" context
+check "  compact JSON: pending written" test -f "$RCF/.fablepowers/feat/pending"
+check "compact JSON: implementer dispatch denied while pending" test "$(agent_verdict "$RCF" fablepowers:implementer)" == deny
+run_gate UserPromptExpansion fablepowers:approve expansion CWD="$RCF" COMMAND=fablepowers:approve ARGS=""
+expect "compact JSON: /fablepowers:approve" context
+check "  compact JSON: approved written" test -f "$RCF/.fablepowers/feat/approved"
+check "compact JSON: implementer dispatch allowed after approval" test "$(agent_verdict "$RCF" fablepowers:implementer)" == allow
+check "compact JSON: code edit allowed after approval" test "$(edit_verdict pre-edit "$RCF" "$RCF/src/app.py")" == allow
+PAYLOAD_COMPACT=0
 # A python below 3.8 fails the launcher's version check: fake one by making
 # sys.version_info's check exit 1 (as "import sys; sys.exit(True)" would).
 printf '#!/bin/sh\ncase "$*" in *version_info*) exit 1 ;; esac\nexec python3 "$@"\n' > "$TEST_ROOT/py37"; chmod +x "$TEST_ROOT/py37"

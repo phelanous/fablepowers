@@ -173,16 +173,25 @@ test('skills: every skills/*/SKILL.md except approve/withdraw, as fablepowers:<n
   assert.ok(!ctx.skills.has('fablepowers:approve') && !ctx.skills.has('fablepowers:withdraw'));
 });
 
-test('agents: three subagent seats, role file by reference, no sub-spawn, plugin root readable; built-ins untouched', async () => {
+const SEAT_FILES = [['fablepowers-implementer', 'implementer.md'], ['fablepowers-strict-implementer', 'strict-implementer.md'], ['fablepowers-reviewer', 'reviewer.md']];
+const roleBody = (file) => fs.readFileSync(path.join(ROOT, 'agents', file), 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
+
+test('agents: three subagent seats, role prompt inlined, no sub-spawn, no external_directory grant; built-ins untouched', async () => {
   const { ctx } = await boot();
-  for (const [id, file] of [['fablepowers-implementer', 'implementer.md'], ['fablepowers-strict-implementer', 'strict-implementer.md'], ['fablepowers-reviewer', 'reviewer.md']]) {
+  for (const [id, file] of SEAT_FILES) {
     const a = ctx.agents.get(id);
     assert.ok(a, id);
     assert.equal(a.mode, 'subagent');
-    assert.ok(a.system.includes(path.join(ROOT, 'agents', file)), `${id} system points at its role file`);
+    assert.ok(a.system.includes(path.join(ROOT, 'agents', file)), `${id} system names its role file`);
+    const body = roleBody(file);
+    assert.ok(body.length > 200, `${id} role body is substantial`);
+    assert.ok(a.system.includes(body), `${id} system carries the role prompt body`);
+    assert.ok(!/^---$/m.test(a.system) && !/^(model|disallowedTools):/m.test(a.system), `${id} frontmatter stripped`);
+    assert.ok(!/read that file first/.test(a.system), `${id} no read-the-file instruction when inlined`);
     assert.ok(a.description && a.description.length > 20);
     assert.ok(a.permissions.some((p) => p.action === 'subagent' && p.resource === '*' && p.effect === 'deny'));
-    assert.ok(a.permissions.some((p) => p.action === 'external_directory' && p.resource === `${ROOT}/*` && p.effect === 'allow'));
+    assert.ok(!a.permissions.some((p) => p.action === 'external_directory' && p.effect === 'allow'), `${id} has no external_directory allow`);
+    assert.ok(!a.permissions.some((p) => typeof p.resource === 'string' && p.resource.startsWith(ROOT)), `${id} has no plugin-root rule`);
     // the deny comes after the default `* allow` (last match wins)
     const iAllow = a.permissions.findIndex((p) => p.action === '*' && p.effect === 'allow');
     const iDeny = a.permissions.findIndex((p) => p.action === 'subagent' && p.effect === 'deny');
@@ -191,6 +200,37 @@ test('agents: three subagent seats, role file by reference, no sub-spawn, plugin
   }
   // Task 0: built-in agents already allow external access; C9 changes nothing there.
   for (const b of ctx.builtinsBefore) assert.deepEqual(ctx.agents.get(b.id), b);
+});
+
+test('agents: a missing or unreadable role file falls back to the pointer text, logged; others still inlined (fail open)', async () => {
+  const root = tmpdir('plugin-root');
+  for (const d of ['skills', 'hooks']) fs.symlinkSync(path.join(ROOT, d), path.join(root, d));
+  fs.mkdirSync(path.join(root, 'agents'));
+  fs.copyFileSync(path.join(ROOT, 'agents', 'reviewer.md'), path.join(root, 'agents', 'reviewer.md'));
+  fs.mkdirSync(path.join(root, 'agents', 'strict-implementer.md')); // unreadable as a file (EISDIR)
+  // implementer.md missing (ENOENT)
+  const repo = newRepo();
+  const { ctx } = await boot({ root }, { repo, locationDir: repo });
+  for (const [id, file] of [['fablepowers-implementer', 'implementer.md'], ['fablepowers-strict-implementer', 'strict-implementer.md']]) {
+    const a = ctx.agents.get(id);
+    assert.ok(a, `${id} still registered`);
+    assert.equal(a.mode, 'subagent');
+    assert.ok(a.system.includes(`Your role instructions are in \`${path.join(root, 'agents', file)}\`: read that file first`), `${id} pointer fallback`);
+    assert.ok(!a.permissions.some((p) => p.action === 'external_directory'), `${id} fallback adds no grant`);
+    assert.ok(a.permissions.some((p) => p.action === 'subagent' && p.effect === 'deny'));
+  }
+  const rev = ctx.agents.get('fablepowers-reviewer');
+  assert.ok(rev.system.includes(roleBody('reviewer.md')), 'reviewer still inlined');
+  const log = fs.readFileSync(path.join(repo, '.fablepowers', 'gate.log'), 'utf8');
+  assert.match(log, /seat fablepowers-implementer: could not read role file .*implementer\.md \(ENOENT\)/);
+  assert.match(log, /seat fablepowers-strict-implementer: could not read role file .*strict-implementer\.md \(EISDIR\)/);
+  assert.ok(!/seat fablepowers-reviewer/.test(log), 'no warning for a readable role file');
+  // A role file with frontmatter but an empty body: pointer fallback too, logged.
+  fs.writeFileSync(path.join(root, 'agents', 'implementer.md'), '---\nname: implementer\ndescription: Empty-body implementer role file for the test.\n---\n\n');
+  const repo2 = newRepo();
+  const { ctx: ctx2 } = await boot({ root }, { repo: repo2, locationDir: repo2 });
+  assert.match(ctx2.agents.get('fablepowers-implementer').system, /: read that file first and follow it\.$/);
+  assert.match(fs.readFileSync(path.join(repo2, '.fablepowers', 'gate.log'), 'utf8'), /seat fablepowers-implementer: role file .*implementer\.md has an empty body/);
 });
 
 test('agents: pinned seats get model {providerID, id, variant} from models.toml [opencode] (C1)', async () => {

@@ -20,7 +20,7 @@ Tool names are OpenCode 2.x's own: `shell` (not bash), `write` / `edit` (`patch`
 
 ## Seats → agents and models
 
-The plugin registers one agent per seat, with `mode: "subagent"`. Its system prompt points at the seat's role file (`<plugin-root>/agents/<seat>.md`; follow its body, the frontmatter is Claude Code's). Each seat also gets two permissions: `subagent` denied (no sub-spawns) and `external_directory` allowed on the plugin root (so it can read its role file and the skills).
+The plugin registers one agent per seat, with `mode: "subagent"`. Its system prompt carries the seat's role prompt inline: the body of `<plugin-root>/agents/<seat>.md`, frontmatter stripped (that is Claude Code's), read once when the plugin starts, with the file path named for humans. If the role file can't be read, the system prompt points at the file instead and the plugin logs a warning to `.fablepowers/gate.log`. Each seat gets one added permission: `subagent` denied (no sub-spawns). The plugin grants no `external_directory` access: skills arrive through the skill tool, which needs none, and OpenCode can't scope that permission to reads only. A seat that reads another file under the plugin root (a skill's `references/`, or the role file in the fallback case) follows your own `external_directory` rules. OpenCode's defaults allow it; an `ask` rule makes the seat ask.
 
 | Seat | Tier | Agent | Role prompt | Model |
 |---|---|---|---|---|
@@ -57,7 +57,7 @@ subagent {
 }
 ```
 
-The seat's system prompt already names its role file. The prompt carries the dispatch only.
+The seat's system prompt already carries its role prompt. The prompt carries the dispatch only.
 
 - **No sub-spawns.** Seats have `subagent` denied, and OpenCode's default subagent depth gives children no `subagent` or `question` tool.
 - **Continuing a child.** `subagent` with an existing child's `sessionID` continues that child as the `agent` you pass: OpenCode switches the child to that agent (and to its model, when the agent has one). Continue a child only as its own seat. Never hand an implementer's session to the reviewer, or the reverse.

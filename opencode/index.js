@@ -295,9 +295,23 @@ export function createPlugin(options = {}) {
     });
 
     await guard('agent registration', async () => {
+      // Each seat's role prompt is inlined into its system text (read once here), so a
+      // seat needs no read outside the project and gets no external_directory grant.
+      // A missing or unreadable role file falls back to a pointer (fail open, logged).
       const descs = {};
+      const bodies = {};
       for (const [k, v] of Object.entries(SEATS)) {
-        try { descs[k] = stripFrontmatter(fs.readFileSync(path.join(ROOT, 'agents', v.file), 'utf8')).meta.description; } catch { descs[k] = ''; }
+        const role = path.join(ROOT, 'agents', v.file);
+        try {
+          const { meta, body } = stripFrontmatter(fs.readFileSync(role, 'utf8'));
+          descs[k] = meta.description || '';
+          bodies[k] = body.trim() ? body.trim() : null;
+          if (!bodies[k]) logAt(locationDir, `seat ${v.agent}: role file ${role} has an empty body; system prompt points at the file instead`);
+        } catch (e) {
+          descs[k] = '';
+          bodies[k] = null;
+          logAt(locationDir, `seat ${v.agent}: could not read role file ${role} (${e && e.code ? e.code : e}); system prompt points at the file instead`);
+        }
       }
       await ctx.agent.transform((d) => {
         for (const [k, v] of Object.entries(SEATS)) {
@@ -306,15 +320,13 @@ export function createPlugin(options = {}) {
               const role = path.join(ROOT, 'agents', v.file);
               a.mode = 'subagent';
               a.description = descs[k] || `fablepowers ${k} seat.`;
-              a.system = `You are the fablepowers ${k.replace('_', '-')} agent (\`${v.agent}\`). Your role instructions are in \`${role}\`: read that file first and follow it. Plugin root: \`${ROOT}\`; fablepowers skills load through the skill tool as \`fablepowers:<name>\`. You cannot dispatch subagents.`;
+              const head = `You are the fablepowers ${k.replace('_', '-')} agent (\`${v.agent}\`). Plugin root: \`${ROOT}\`; fablepowers skills load through the skill tool as \`fablepowers:<name>\`. You cannot dispatch subagents.`;
+              a.system = bodies[k]
+                ? `${head}\nYour role instructions follow (source: \`${role}\`).\n\n${bodies[k]}`
+                : `${head}\nYour role instructions are in \`${role}\`: read that file first and follow it.`;
               const perms = Array.isArray(a.permissions) ? a.permissions : [];
-              const want = [
-                { action: 'subagent', resource: '*', effect: 'deny' },
-                { action: 'external_directory', resource: `${ROOT}/*`, effect: 'allow' },
-              ];
-              for (const w of want) {
-                if (!perms.some((p) => p && p.action === w.action && p.resource === w.resource && p.effect === w.effect)) perms.push(w);
-              }
+              const deny = { action: 'subagent', resource: '*', effect: 'deny' };
+              if (!perms.some((p) => p && p.action === deny.action && p.resource === deny.resource && p.effect === deny.effect)) perms.push(deny);
               a.permissions = perms;
               const seat = seats[k];
               if (seat) a.model = { providerID: seat.providerID, id: seat.id, ...(seat.variant ? { variant: seat.variant } : {}) };

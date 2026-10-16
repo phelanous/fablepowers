@@ -1743,6 +1743,26 @@ check "patch move into docs/plans: no pending" test ! -e "$R/.fablepowers/mvp"
 OC_EDIT='d["input"]["patchText"] = "*** Begin Patch\n*** Update File: docs/specs/mu.md\n@@\n-a\n+b\n*** End Patch"; d["output"]["applied"][0]["type"] = "update"; d["existed"] = {}'
 occreate "$R" docs/specs/mu.md "$R" after-patch-add; OC_EDIT=""
 check "patch update in place (no Move to): no pending" test ! -e "$R/.fablepowers/mu"
+# N-a: Move-to as OpenCode parses it: only the line directly after `*** Update File:`,
+# its path trimmed at both ends (two spaces after the colon still name docs/specs/m2.md).
+OC_EDIT='d["input"]["patchText"] = "*** Begin Patch\n*** Update File: docs/plans/draft.md\n*** Move to:  docs/specs/m2.md\n@@\n-a\n+b\n*** End Patch"; d["output"]["applied"][0]["type"] = "update"; d["existed"] = {}'
+occreate "$R" docs/specs/m2.md "$R" after-patch-add; OC_EDIT=""
+check "patch move, two spaces before the Move-to path: pending" test -f "$R/.fablepowers/m2/pending"
+OC_EDIT='d["input"]["patchText"] = "*** Begin Patch\n*** Update File: docs/specs/mq.md\n@@\n *** Move to: docs/specs/mq.md\n-a\n+b\n*** End Patch"; d["output"]["applied"][0]["type"] = "update"; d["existed"] = {}'
+occreate "$R" docs/specs/mq.md "$R" after-patch-add; OC_EDIT=""
+check "patch update in place whose hunk context quotes a Move-to line: no pending" test ! -e "$R/.fablepowers/mq"
+OC_EDIT='d["input"]["patchText"] = "*** Begin Patch\n*** Update File: docs/specs/mr.md\n@@\n-a\n+b\n*** Move to: docs/specs/mr.md\n*** End Patch"; d["output"]["applied"][0]["type"] = "update"; d["existed"] = {}'
+occreate "$R" docs/specs/mr.md "$R" after-patch-add; OC_EDIT=""
+check "patch update in place, a Move-to line not directly after its Update header: no pending" test ! -e "$R/.fablepowers/mr"
+OC_EDIT='d["input"]["patchText"] = "*** Begin Patch\n*** Update File: docs/specs/ms.md\n *** Move to: docs/specs/ms.md\n-a\n+b\n*** End Patch"; d["output"]["applied"][0]["type"] = "update"; d["existed"] = {}'
+occreate "$R" docs/specs/ms.md "$R" after-patch-add; OC_EDIT=""
+check "patch update in place, an indented Move-to line right after its Update header: no pending" test ! -e "$R/.fablepowers/ms"
+# N-b: a pre-existing symlink zz.md -> docs/specs/nb.md listed before the new spec in
+# `existed`: its realpath form must not shadow the spec's own lexical key.
+ln -s docs/specs/nb.md "$R/zz.md"
+OC_EDIT='d["existed"] = {"zz.md": True, "docs/specs/nb.md": False}'
+occreate "$R" docs/specs/nb.md "$R" after-patch-add; OC_EDIT=""
+check "patch add, symlink to the new spec listed first in existed: pending" test -f "$R/.fablepowers/nb/pending"
 
 # C11: a subdirectory session writes docs/specs/s.md into <root>/sub/docs/specs: not a design.
 R="$TEST_ROOT/o2s"; new_repo "$R"; mkdir -p "$R/sub"

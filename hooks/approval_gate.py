@@ -1114,6 +1114,27 @@ def oc_path_forms(p, cwd):
         return [lexical]
 
 
+JS_WS = ("\t\n\x0b\x0c\r \xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007"
+         "\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff")
+OC_UPDATE = "*** Update File:"
+OC_MOVE = "*** Move to:"
+
+
+def oc_patch_moves(text):
+    """Move-to destinations as OpenCode's patch parser reads them (checked against
+    its binary): a `*** Move to:` line counts only directly after an
+    `*** Update File:` header line, both matched with startsWith on the raw line,
+    and the path is the rest of the line trimmed at both ends (JS String.trim)."""
+    lines = text.split("\n")
+    out = []
+    for prev, line in zip(lines, lines[1:]):
+        if prev.startswith(OC_UPDATE) and line.startswith(OC_MOVE):
+            p = line[len(OC_MOVE):].strip(JS_WS)
+            if p:
+                out.append(p)
+    return out
+
+
 def oc_after_pending(top, payload, cwd, tool, output):
     """[(spec, key)] made pending by a root-session create of a docs/specs/*.md."""
     targets = []
@@ -1138,19 +1159,22 @@ def oc_after_pending(top, payload, cwd, tool, output):
         # text vs OpenCode's target, e.g. through a symlinked session directory): each
         # side is compared lexically (joined to cwd) and by realpath.
         existed = payload.get("existed")
+        # Lexical forms go in first, so no key's realpath form can shadow another key's
+        # lexical form (a symlink listed before the new file it points at).
         known = {}
         if isinstance(existed, dict):
-            for k, v in existed.items():
-                if isinstance(k, str) and k:
-                    for f in oc_path_forms(k, cwd):
-                        known.setdefault(f, v)
+            items = [(k, v) for k, v in existed.items() if isinstance(k, str) and k]
+            forms = [(oc_path_forms(k, cwd), v) for k, v in items]
+            for pf, v in forms:
+                known.setdefault(pf[0], v)
+            for pf, v in forms:
+                for f in pf[1:]:
+                    known.setdefault(f, v)
         ti = payload.get("input")
         text = ti.get("patchText") if isinstance(ti, dict) else None
-        ops = parse_patch(text) if isinstance(text, str) else None
         moves = set()
-        for op, p in ops or []:
-            if op == "move to":
-                moves.update(oc_path_forms(p, cwd))
+        for p in oc_patch_moves(text) if isinstance(text, str) else []:
+            moves.update(oc_path_forms(p, cwd))
         applied = output.get("applied")
         for a in applied if isinstance(applied, list) else []:
             if not isinstance(a, dict) or a.get("type") not in ("add", "update"):

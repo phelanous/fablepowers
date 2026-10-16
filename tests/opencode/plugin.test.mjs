@@ -589,30 +589,38 @@ test('command approve / withdraw -> markers + synthetic message to the session',
   assert.match(ctx.synthetic[1].text, /withdrew design `docs\/specs\/c2.md`/);
 });
 
-test('command (N4): gate timeout, bad gate output or a plugin error -> a visible "not recorded" message with the reason', async () => {
+test('command (N4, N-c): gate timeout, bad gate output or a plugin error -> a visible "may not have been recorded" message with the reason', async () => {
   const slow = fakePython({ sleep: 3, out: '{"context":"late"}' });
   const t = await boot({ env: envWith({ FABLEPOWERS_PYTHON: slow.python }), gateTimeoutMs: 300 });
   await t.ctx.commands.get('fablepowers:approve').execute(fixture('command-approve', t.repo));
   assert.equal(t.ctx.synthetic.length, 1);
   assert.equal(t.ctx.synthetic[0].sessionID, SERVE_SID);
-  assert.match(t.ctx.synthetic[0].text, /`\/fablepowers:approve` was not recorded: the gate call timed out after 300 ms/);
+  assert.match(t.ctx.synthetic[0].text, /`\/fablepowers:approve` may not have been recorded: the gate call timed out after 300 ms/);
   const bad = fakePython({ out: 'not json' });
   const b = await boot({ env: envWith({ FABLEPOWERS_PYTHON: bad.python }) });
   await b.ctx.commands.get('fablepowers:withdraw').execute(fixture('command-withdraw', b.repo));
-  assert.match(b.ctx.synthetic[0].text, /`\/fablepowers:withdraw` was not recorded: the gate call returned no JSON object/);
+  assert.match(b.ctx.synthetic[0].text, /`\/fablepowers:withdraw` may not have been recorded: the gate call returned no JSON object/);
   const empty = fakePython({ out: '{}' });
   const e = await boot({ env: envWith({ FABLEPOWERS_PYTHON: empty.python }) });
   await e.ctx.commands.get('fablepowers:approve').execute(fixture('command-approve', e.repo));
-  assert.match(e.ctx.synthetic[0].text, /was not recorded: the gate gave no answer/);
+  assert.match(e.ctx.synthetic[0].text, /may not have been recorded: the gate gave no answer/);
   const { ctx, repo } = await boot();
   await ctx.commands.get('fablepowers:approve').execute(throwing(fixture('command-approve', repo), 'prompt'));
-  assert.match(ctx.synthetic[0].text, /was not recorded: the plugin hit an error \(boom prompt\)/);
+  assert.match(ctx.synthetic[0].text, /may not have been recorded: the plugin hit an error \(boom prompt\)/);
   // No session directory at all (lookup failed, no ctx.location): said so, not silent.
   const nd = fakeCtx({ repo: newRepo(), getFails: true });
   nd.location = {};
   await createPlugin({ env: envWith() }).setup(nd);
   await nd.commands.get('fablepowers:approve').execute(fixture('command-approve', '/x'));
-  assert.match(nd.synthetic[0].text, /was not recorded: the session directory is unknown/);
+  assert.match(nd.synthetic[0].text, /`\/fablepowers:approve` was not recorded: the session directory is unknown/);
+});
+
+test('command (N-c): posting the message itself throws -> logged in the session repo, not ctx.location', async () => {
+  const { ctx, repo } = await boot({}, { locationDir: newRepo() });
+  ctx.session.synthetic = async () => { throw new Error('post failed'); };
+  await ctx.commands.get('fablepowers:approve').execute(fixture('command-approve', repo));
+  assert.match(readLog(repo), /opencode plugin: command approve message failed, allowed: Error: post failed/);
+  assert.equal(readLog(ctx.location.directory), '');
 });
 
 test('command (N4): no sessionID -> nothing recorded, the command fails with a visible reason; logged', async () => {

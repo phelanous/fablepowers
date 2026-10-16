@@ -65,7 +65,7 @@ The seat's system prompt already carries its role prompt. The prompt carries the
 
 ## Bootstrap
 
-The plugin's `context` hook prepends the bootstrap to the first user message of each **root** session, inside `<fablepowers-bootstrap>…</fablepowers-bootstrap>`. It is applied on every model step and never doubled. Child sessions are skipped. After compaction it is added back. The bootstrap comes from `hooks/session-start --opencode`, run once when the plugin loads (3 s timeout). It holds:
+The plugin's `context` hook prepends the bootstrap to the first user message of each **root** session, inside `<fablepowers-bootstrap>…</fablepowers-bootstrap>`. It is applied on every model step and never doubled: the plugin skips a step only when its own bootstrap already leads the first user message, so a message that merely mentions the tag (your reasoning or reply, a quoted file) does not suppress it. Child sessions are skipped. After compaction it is added back. The bootstrap comes from `hooks/session-start --opencode`, run once when the plugin loads (3 s timeout). It holds:
 
 - a preamble naming OpenCode, this file and the plugin root;
 - the seat table and its warnings;
@@ -84,7 +84,7 @@ Same markers, states and rules as on Claude Code (`.fablepowers/<key>/pending` a
 
 **Paths.** OpenCode reports edit paths relative to the **session directory**, the directory the session was started in, which may be a subdirectory of the repo. The gate resolves them against the session directory, then judges them against the git toplevel. A spec written from a session started in `sub/` lands in `sub/docs/specs/`. That file is not a design, so it is not gated, and while another design is pending it is outside the allowlist and denied. Start OpenCode from the repository root.
 
-**Pending.** A root session's `write` that creates `docs/specs/<name>.md` (the tool reports `existed: false`) marks the design pending. So does an `edit` whose file status is `added`, or a `patch` `Add File` whose target the plugin found missing just before the call. Overwrites, and writes from a child session, don't. The pending notice is appended to the tool result the model sees. Create the spec with `write` (or `patch`), never through the shell.
+**Pending.** A root session's `write` that creates `docs/specs/<name>.md` (the tool reports `existed: false`) marks the design pending. So does an `edit` whose file status is `added`, or a `patch` `Add File` whose target the plugin found missing just before the call, or a `patch` `Update File` with `*** Move to: docs/specs/<name>.md` (as on Codex). Patch paths are matched as written and by real path, so a session started through a symlinked checkout counts too. Overwrites, and writes from a child session, don't. The pending notice is appended to the tool result the model sees. Create the spec with `write` (or `patch`), never through the shell.
 
 **What it blocks** (`permission.evaluate`, `effect = "deny"`, plus a second check in `tool.execute.before` for `subagent`). The deny reason reaches the model as the tool's error:
 
@@ -97,7 +97,7 @@ Same markers, states and rules as on Claude Code (`.fablepowers/<key>/pending` a
 **Approving.** Only the user approves, in one of three ways, and only from the **main (root) session**:
 
 1. **Answer Approve** to design-spec's question in the TUI or app. The gate records it from the `question` tool's result only when the call holds exactly one question, the options are exactly **Approve** and **Changes needed**, the answer is exactly `Approve`, and exactly one design is pending. A free-text answer reading exactly `Approve` counts the same, since it is the user's own answer.
-2. **Type `/fablepowers:approve [key]`** in the TUI or app (the key is the spec's file name, with or without `.md`; one pending design needs none). This runs the plugin's command, not a model turn. The gate's answer is posted to the session as a message, which starts a turn.
+2. **Type `/fablepowers:approve [key]`** in the TUI or app (the key is the spec's file name, with or without `.md`; one pending design needs none). This runs the plugin's command, not a model turn. The gate's answer is posted to the session as a message, which starts a turn. When the gate gives no answer (timeout, error), the message says the command was not recorded and why; a command without a session id fails with that text instead.
 3. **In `opencode run`**, which does not route slash commands: send the command as the whole message of the root session, `opencode run -s <session-id> /fablepowers:approve [key]`. Pass it as separate arguments, or quoted: `opencode run` wraps an argument holding a space in quotes, and the plugin strips one wrapping pair. Blanks around it and one trailing newline are fine. Trailing words, text before it, or "yes" are not the command. A message that starts like the command but isn't gets a "not recognised" answer and records nothing. The gate's answer is appended to the message, so the model relays it.
 
 With several designs pending and no key, or an unknown key, nothing is recorded and the answer lists the keys. An approval's answer names the next step (`fablepowers:implementation-plan`). The model has no command tool, so it cannot run the command.

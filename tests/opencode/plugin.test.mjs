@@ -300,6 +300,7 @@ test('context: bootstrap (preamble, seat table, workflow map) prepended to the f
   assert.ok(first.includes('Seat table'));
   assert.ok(first.includes('# Workflow Map'));
   assert.ok(first.includes('unpinned seats run on the session model'));
+  assert.ok(first.includes('on OpenCode `fablepowers-<agent>`'), 'N1: the map names the OpenCode seat ids');
   assert.equal(ev.messages[0].content[1].text, 'hi');
   assert.equal(ev.messages[2].content.length, 1, 'only the first user message');
   await hook('session.context')(ev);
@@ -309,6 +310,31 @@ test('context: bootstrap (preamble, seat table, workflow map) prepended to the f
   assert.equal(child.messages[0].content.length, 1, 'child sessions get no bootstrap');
 });
 
+test('context (SF-A): a tag mention in reasoning, assistant text or a later user message does not suppress the bootstrap; never doubled', async () => {
+  const { hook, repo } = await boot();
+  const tag = `<${BOOTSTRAP_TAG}>`;
+  const ev = ctxEvent(repo, ROOT_SID, [
+    userMsg('design a feature'),
+    { role: 'assistant', content: [{ type: 'reasoning', text: `The ${tag} block says to read opencode.md first.` }] },
+    { role: 'assistant', content: [{ type: 'text', text: `Per the ${tag} block, I start with design-spec.` }] },
+    userMsg(`${tag} quoted by the user`),
+  ]);
+  await hook('session.context')(ev);
+  const first = ev.messages[0].content;
+  assert.ok(first[0].text.startsWith(tag) && first[0].text.includes('Seat table'), 'bootstrap injected');
+  assert.equal(first[1].text, 'design a feature');
+  assert.equal(ev.messages[3].content.length, 1, 'the later user message is untouched');
+  await hook('session.context')(ev);
+  await hook('session.context')(ev);
+  const count = ev.messages.flatMap((m) => m.content).filter((p) => p.text.startsWith(tag) && p.text.includes('Seat table')).length;
+  assert.equal(count, 1, 'not doubled across steps');
+  // A user message that starts with the tag but is not the plugin's part does not count as applied.
+  const fake = ctxEvent(repo, ROOT_SID, [userMsg(`${tag}\nnot the real bootstrap\n</${BOOTSTRAP_TAG}>`)]);
+  await hook('session.context')(fake);
+  assert.equal(fake.messages[0].content.length, 2);
+  assert.ok(fake.messages[0].content[0].text.includes('Seat table'));
+});
+
 test('context: re-applied after compaction (no user message left: appended)', async () => {
   const { hook, repo } = await boot();
   const ev = ctxEvent(repo, ROOT_SID, [{ role: 'assistant', content: [{ type: 'text', text: 'summary checkpoint' }] }]);
@@ -316,6 +342,9 @@ test('context: re-applied after compaction (no user message left: appended)', as
   assert.equal(ev.messages.length, 2);
   assert.equal(ev.messages[1].role, 'user');
   assert.ok(ev.messages[1].content[0].text.includes('You have fablepowers on OpenCode'));
+  await hook('session.context')(ev);
+  assert.equal(ev.messages.length, 2, 'appended once, not again on the same step view');
+  assert.equal(ev.messages[1].content.length, 1);
   // A fresh message array of the next step (OpenCode reloads from the DB): applied again.
   const next = ctxEvent(repo, ROOT_SID, [userMsg('after compaction')]);
   await hook('session.context')(next);
@@ -560,6 +589,45 @@ test('command approve / withdraw -> markers + synthetic message to the session',
   assert.match(ctx.synthetic[1].text, /withdrew design `docs\/specs\/c2.md`/);
 });
 
+test('command (N4): gate timeout, bad gate output or a plugin error -> a visible "not recorded" message with the reason', async () => {
+  const slow = fakePython({ sleep: 3, out: '{"context":"late"}' });
+  const t = await boot({ env: envWith({ FABLEPOWERS_PYTHON: slow.python }), gateTimeoutMs: 300 });
+  await t.ctx.commands.get('fablepowers:approve').execute(fixture('command-approve', t.repo));
+  assert.equal(t.ctx.synthetic.length, 1);
+  assert.equal(t.ctx.synthetic[0].sessionID, SERVE_SID);
+  assert.match(t.ctx.synthetic[0].text, /`\/fablepowers:approve` was not recorded: the gate call timed out after 300 ms/);
+  const bad = fakePython({ out: 'not json' });
+  const b = await boot({ env: envWith({ FABLEPOWERS_PYTHON: bad.python }) });
+  await b.ctx.commands.get('fablepowers:withdraw').execute(fixture('command-withdraw', b.repo));
+  assert.match(b.ctx.synthetic[0].text, /`\/fablepowers:withdraw` was not recorded: the gate call returned no JSON object/);
+  const empty = fakePython({ out: '{}' });
+  const e = await boot({ env: envWith({ FABLEPOWERS_PYTHON: empty.python }) });
+  await e.ctx.commands.get('fablepowers:approve').execute(fixture('command-approve', e.repo));
+  assert.match(e.ctx.synthetic[0].text, /was not recorded: the gate gave no answer/);
+  const { ctx, repo } = await boot();
+  await ctx.commands.get('fablepowers:approve').execute(throwing(fixture('command-approve', repo), 'prompt'));
+  assert.match(ctx.synthetic[0].text, /was not recorded: the plugin hit an error \(boom prompt\)/);
+  // No session directory at all (lookup failed, no ctx.location): said so, not silent.
+  const nd = fakeCtx({ repo: newRepo(), getFails: true });
+  nd.location = {};
+  await createPlugin({ env: envWith() }).setup(nd);
+  await nd.commands.get('fablepowers:approve').execute(fixture('command-approve', '/x'));
+  assert.match(nd.synthetic[0].text, /was not recorded: the session directory is unknown/);
+});
+
+test('command (N4): no sessionID -> nothing recorded, the command fails with a visible reason; logged', async () => {
+  const r = newRepo();
+  const { hook, ctx, repo } = await boot({}, { repo: r, locationDir: r });
+  await createSpec(hook, repo, 'docs/specs/ns.md');
+  const input = fixture('command-approve', repo);
+  delete input.sessionID;
+  input.prompt.text = 'ns';
+  await assert.rejects(ctx.commands.get('fablepowers:approve').execute(input), /`\/fablepowers:approve` was not recorded: the command arrived without a session id/);
+  assert.ok(!exists(fp(repo, 'ns', 'approved')));
+  assert.equal(ctx.synthetic.length, 0);
+  assert.match(readLog(repo), /command approve without a sessionID; nothing recorded/);
+});
+
 test('question path: Approve answer to the two-option question -> approved via question; context appended', async () => {
   const { hook, repo } = await boot();
   await createSpec(hook, repo, 'docs/specs/qq.md');
@@ -597,6 +665,43 @@ test('patch adds (C12): existed stat in before, consumed in after; entry dropped
   await after(patchEv('call_err', 'docs/specs/err.md'));
   assert.ok(!exists(fp(repo, 'err')), 'no existed record -> no pending');
   assert.match(readLog(repo), /without an existed record/);
+});
+
+test('patch (SF-B): symlinked session directory, OpenCode reports the realpath target -> pending', async () => {
+  const real = newRepo();
+  const link = path.join(tmpdir('lnk'), 'repo-link');
+  fs.symlinkSync(real, link);
+  const { hook } = await boot({}, { repo: link });
+  const rel = 'docs/specs/sl.md';
+  const ev = (status) => ({
+    tool: 'patch', sessionID: ROOT_SID, id: 'call_sl', input: { patchText: `*** Begin Patch\n*** Add File: ${rel}\n+alpha\n*** End Patch` },
+    status, result: { output: { applied: [{ type: 'add', resource: rel, target: path.join(real, rel) }], files: [] }, content: [] },
+  });
+  await hook('tool.execute.before')(ev('running'));
+  fs.writeFileSync(path.join(real, rel), 'alpha\n');
+  const after = ev('completed');
+  await hook('tool.execute.after')(after);
+  assert.ok(exists(fp(real, 'sl', 'pending')), readLog(real));
+  assert.match(after.result.content.at(-1).text, /now pending/);
+});
+
+test('patch (N2): Update File + Move to docs/specs/<name>.md from a root session -> pending; from a child, not', async () => {
+  const { hook, repo } = await boot();
+  const mv = (sid, id, dest) => ({
+    tool: 'patch', sessionID: sid, id,
+    input: { patchText: `*** Begin Patch\n*** Update File: docs/plans/draft.md\n*** Move to: ${dest}\n@@\n-a\n+b\n*** End Patch` },
+    status: 'completed', result: { output: { applied: [{ type: 'update', resource: dest, target: path.join(repo, dest) }], files: [] }, content: [] },
+  });
+  fs.writeFileSync(path.join(repo, 'docs/specs/moved.md'), 'b\n');
+  const e = mv(ROOT_SID, 'call_mv', 'docs/specs/moved.md');
+  await hook('tool.execute.before')(e);
+  await hook('tool.execute.after')(e);
+  assert.ok(exists(fp(repo, 'moved', 'pending')));
+  assert.match(e.result.content.at(-1).text, /now pending/);
+  fs.writeFileSync(path.join(repo, 'docs/specs/moved2.md'), 'b\n');
+  const c = mv(CHILD_SID, 'call_mv2', 'docs/specs/moved2.md');
+  await hook('tool.execute.after')(c);
+  assert.ok(!exists(fp(repo, 'moved2')));
 });
 
 // --- fail open ------------------------------------------------------------------------------------

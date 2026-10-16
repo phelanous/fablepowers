@@ -1701,6 +1701,48 @@ OC_EDIT='d["output"]["applied"][0]["type"] = "update"'; occreate "$R" docs/specs
 check "patch update (not add): no pending" test ! -e "$R/.fablepowers/pu"
 OC_EDIT='d["parent_id"] = "ses_parent"'; occreate "$R" docs/specs/pc.md "$R" after-patch-add; OC_EDIT=""
 check "patch add from a child session: no pending" test ! -e "$R/.fablepowers/pc"
+# SF-B: the session directory is a symlink to the repo; the adapter keys `existed` by the
+# patch-text path (lexical under the symlink), OpenCode reports the realpath target.
+ln -s "$R" "$TEST_ROOT/o2p-link"
+L="$TEST_ROOT/o2p-link"
+OC_EDIT='d["existed"] = {"docs/specs/ps.md": False}'
+occreate "$R" docs/specs/ps.md "$L" after-patch-add; OC_EDIT=""
+check "patch add, symlinked session dir, target spelled through the symlink: pending" test -f "$R/.fablepowers/ps/pending"
+OC_EDIT='d["existed"] = {"docs/specs/ps2.md": False}; d["output"]["applied"][0]["target"] = d["output"]["applied"][0]["target"].replace(d["cwd"], os.path.realpath(d["cwd"]))'
+occreate "$R" docs/specs/ps2.md "$L" after-patch-add; OC_EDIT=""
+oc_expect "patch add, symlinked session dir, realpath target, relative existed key" context
+check "  pending written" test -f "$R/.fablepowers/ps2/pending"
+OC_EDIT='d["existed"] = {d["cwd"] + "/docs/specs/ps3.md": False}; d["output"]["applied"][0]["target"] = os.path.realpath(d["cwd"]) + "/docs/specs/ps3.md"'
+occreate "$R" docs/specs/ps3.md "$L" after-patch-add; OC_EDIT=""
+check "patch add, symlinked session dir, realpath target, absolute symlink existed key: pending" test -f "$R/.fablepowers/ps3/pending"
+OC_EDIT='d["existed"] = {"docs/specs/ps4.md": False}; a = d["output"]["applied"][0]; a["target"] = os.path.realpath(d["cwd"]) + "/docs/specs/ps4.md"; a["resource"] = a["target"]'
+occreate "$R" docs/specs/ps4.md "$L" after-patch-add; OC_EDIT=""
+check "patch add, symlinked session dir, target and resource both realpath (only the realpath matches): pending" test -f "$R/.fablepowers/ps4/pending"
+OC_EDIT='d["existed"] = {"docs/specs/pq.md": False}; d["output"]["applied"][0]["target"] = "/nonexistent-elsewhere/pq.md"'
+occreate "$R" docs/specs/pq.md "$R" after-patch-add; OC_EDIT=""
+check "patch add, target unmatched but resource matches existed: pending" test -f "$R/.fablepowers/pq/pending"
+OC_EDIT='d["existed"] = {"docs/specs/px.md": True}; d["output"]["applied"][0]["target"] = os.path.realpath(d["cwd"]) + "/docs/specs/px.md"'
+occreate "$R" docs/specs/px.md "$L" after-patch-add; OC_EDIT=""
+check "patch add, symlinked session dir, existed true: no pending" test ! -e "$R/.fablepowers/px"
+# N2: `*** Update File` + `*** Move to: docs/specs/<name>.md` (applied type "update" with
+# the destination as target) marks pending from a root session, as on Codex.
+MV='d["input"]["patchText"] = "*** Begin Patch\n*** Update File: docs/plans/draft.md\n*** Move to: %s\n@@\n-a\n+b\n*** End Patch" % d["output"]["applied"][0]["resource"]; d["output"]["applied"][0]["type"] = "update"; d["existed"] = {}'
+OC_EDIT="$MV"; occreate "$R" docs/specs/mv.md "$R" after-patch-add; OC_EDIT=""
+oc_expect "patch move to docs/specs/mv.md" context
+check "  pending written" test -f "$R/.fablepowers/mv/pending"
+OC_EDIT="$MV"'; d["output"]["applied"][0]["target"] = os.path.realpath(d["cwd"]) + "/docs/specs/mv2.md"'
+occreate "$R" docs/specs/mv2.md "$L" after-patch-add; OC_EDIT=""
+check "patch move, symlinked session dir, realpath target: pending" test -f "$R/.fablepowers/mv2/pending"
+OC_EDIT="$MV"'; a = d["output"]["applied"][0]; a["target"] = os.path.realpath(d["cwd"]) + "/docs/specs/mv3.md"; a["resource"] = a["target"]'
+occreate "$R" docs/specs/mv3.md "$L" after-patch-add; OC_EDIT=""
+check "patch move, symlinked session dir, target and resource both realpath: pending" test -f "$R/.fablepowers/mv3/pending"
+OC_EDIT="$MV"'; d["parent_id"] = "ses_parent"'; occreate "$R" docs/specs/mvc.md "$R" after-patch-add; OC_EDIT=""
+check "patch move from a child session: no pending" test ! -e "$R/.fablepowers/mvc"
+OC_EDIT="$MV"; occreate "$R" docs/plans/mvp.md "$R" after-patch-add; OC_EDIT=""
+check "patch move into docs/plans: no pending" test ! -e "$R/.fablepowers/mvp"
+OC_EDIT='d["input"]["patchText"] = "*** Begin Patch\n*** Update File: docs/specs/mu.md\n@@\n-a\n+b\n*** End Patch"; d["output"]["applied"][0]["type"] = "update"; d["existed"] = {}'
+occreate "$R" docs/specs/mu.md "$R" after-patch-add; OC_EDIT=""
+check "patch update in place (no Move to): no pending" test ! -e "$R/.fablepowers/mu"
 
 # C11: a subdirectory session writes docs/specs/s.md into <root>/sub/docs/specs: not a design.
 R="$TEST_ROOT/o2s"; new_repo "$R"; mkdir -p "$R/sub"

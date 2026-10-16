@@ -41,6 +41,7 @@ const BOOTSTRAP_TAG = 'fablepowers-bootstrap';
 const SESSION_CACHE_MAX = 512;
 const EXISTED_MAX = 256;
 const COMMAND_TEXT = /\/fablepowers:(approve|withdraw)/;
+const GATE_FAILED = Symbol('fablepowers gate call failed'); // on gate()'s {} result: why
 
 // --- small helpers -----------------------------------------------------------------
 
@@ -254,7 +255,8 @@ export function createPlugin(options = {}) {
     // --- the gate call ---------------------------------------------------------------
     async function gate(hook, sid, fields) {
       const info = await sessionInfo(sid);
-      if (!python || !info.dir) return {};
+      if (!python) return {};
+      if (!info.dir) return { [GATE_FAILED]: 'the session directory is unknown' };
       const payload = {
         harness: 'opencode', hook, cwd: info.dir, session_id: sid ?? null,
         parent_id: info.parentID, plugin_root: ROOT, ...fields,
@@ -264,8 +266,9 @@ export function createPlugin(options = {}) {
         { input: JSON.stringify(payload), timeoutMs: gateTimeoutMs, env });
       const out = r.ok ? parseObject(r.stdout) : null;
       if (!out) {
-        logAt(info.dir, `gate call (${hook}) ${r.ok ? 'returned no JSON object' : r.why}; allowed`);
-        return {};
+        const why = r.ok ? 'returned no JSON object' : r.why;
+        logAt(info.dir, `gate call (${hook}) ${why}; allowed`);
+        return { [GATE_FAILED]: `the gate call ${why}` };
       }
       return out;
     }
@@ -341,8 +344,17 @@ export function createPlugin(options = {}) {
       description: verb === 'approve'
         ? 'Record your approval of the pending design (/fablepowers:approve [spec key or path]).'
         : 'Withdraw a pending design you abandoned (/fablepowers:withdraw [spec key or path]).',
+      // Fails open but visibly (N4): when the gate gives no answer, the session gets a
+      // message saying nothing was recorded and why; with no sessionID there is no
+      // session to post to, so the command itself fails with that text.
       execute: async (input) => {
-        const sid = input?.sessionID;
+        let sid = null;
+        try { sid = typeof input?.sessionID === 'string' && input.sessionID ? input.sessionID : null; } catch { /* none */ }
+        const notRecorded = (why) => `fablepowers approval gate: \`/fablepowers:${verb}\` was not recorded: ${why}. Tell the user, and ask them to run \`/fablepowers:${verb}\` again (details in .fablepowers/gate.log).`;
+        if (!sid) {
+          logAt(locationDir, `command ${verb} without a sessionID; nothing recorded`);
+          throw new Error(notRecorded('the command arrived without a session id, so the gate could not tell which session sent it'));
+        }
         let text = null;
         try {
           if (!python) {
@@ -351,15 +363,17 @@ export function createPlugin(options = {}) {
             const args = typeof input?.prompt?.text === 'string' ? input.prompt.text : '';
             const out = await gate('command', sid, { verb, args });
             if (typeof out.context === 'string' && out.context) text = out.context;
-          }
-          if (text && sid && typeof ctx.session?.synthetic === 'function') {
-            await ctx.session.synthetic({ sessionID: sid, text });
+            else text = notRecorded(out[GATE_FAILED] || 'the gate gave no answer');
           }
         } catch (e) {
           let dir = null;
           try { dir = (await sessionInfo(sid)).dir; } catch { /* none */ }
           report(`command ${verb}`, dir, e);
+          text = notRecorded(`the plugin hit an error (${e && e.message ? e.message : e})`);
         }
+        try {
+          if (typeof ctx.session?.synthetic === 'function') await ctx.session.synthetic({ sessionID: sid, text });
+        } catch (e) { report(`command ${verb} message`, null, e); }
       },
     });
     await guard('command registration', async () => {
@@ -460,11 +474,11 @@ export function createPlugin(options = {}) {
       if (!Array.isArray(ev.messages)) return;
       const info = await sessionInfo(ev.sessionID);
       if (info.parentID) return; // root sessions only (a failed lookup injects)
-      const has = (m) => (Array.isArray(m.content)
-        ? m.content.some((p) => p && typeof p.text === 'string' && p.text.includes(`<${BOOTSTRAP_TAG}>`))
-        : typeof m.content === 'string' && m.content.includes(`<${BOOTSTRAP_TAG}>`));
-      if (ev.messages.some((m) => m && has(m))) return;
+      // Already applied only when the plugin's own part (exact text) leads the first user
+      // message. A message that merely mentions the tag (the model's reasoning or reply,
+      // a quoted file) never suppresses it.
       const first = ev.messages.find((m) => m && m.role === 'user');
+      if (first && Array.isArray(first.content) && first.content[0]?.text === bootstrap) return;
       const part = { type: 'text', text: bootstrap };
       if (!first) {
         // After compaction only a checkpoint may remain: append the bootstrap.

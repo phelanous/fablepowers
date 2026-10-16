@@ -27,7 +27,7 @@ Constrain **outcomes**, not process. You (a frontier model) get checkpoints and 
 | Strict implementer | `fablepowers:strict-implementer` | mid | mechanical, fully specified tasks under the imperative red-green prompt; followed by a spec-check |
 | Reviewer | `fablepowers:reviewer` | frontier | plan review, integration review, spec-check, builder check of a substantial spec; fresh context; never an agent that implemented anything in the feature |
 
-Invoke skills by name (`fablepowers:<skill>`); dispatch each seat as its named agent (`fablepowers:<agent>`), never a generic agent that inherits your model. Tools, models and mechanisms per harness: `references/<harness>.md` beside this skill (Claude Code: `references/claude-code.md`; Codex: `references/codex.md`; OpenCode: `references/opencode.md`).
+Invoke skills by name (`fablepowers:<skill>`); dispatch each seat as its named agent (`fablepowers:<agent>`; on OpenCode `fablepowers-<agent>`), never a generic agent that inherits your model. Tools, models and mechanisms per harness: `references/<harness>.md` beside this skill (Claude Code: `references/claude-code.md`; Codex: `references/codex.md`; OpenCode: `references/opencode.md`).
 
 A task you could do yourself in this session is still dispatched: a fully briefed single-session task dispatches implementers like any other. Your job is the plan, the dispatch and the judgment calls.
 

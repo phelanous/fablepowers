@@ -1,0 +1,22 @@
+{
+  "_source": {
+    "log": "r2",
+    "kind": "tool.before",
+    "opencode": "2.0.29"
+  },
+  "payload": {
+    "ev": {
+      "tool": "subagent",
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "agent": "build",
+      "messageID": "msg_142a727dd001C5SEwVm4G7wXFE",
+      "id": "call_98d1d325711045b89b45b195",
+      "input": {
+        "agent": "fp-seat-varmodel",
+        "description": "seat1",
+        "prompt": "Say hi."
+      }
+    },
+    "parentID": null
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "_source": {
+    "log": "s1",
+    "kind": "tool.before",
+    "opencode": "2.0.29"
+  },
+  "payload": {
+    "ev": {
+      "tool": "question",
+      "sessionID": "ses_ebd57ee19ffedY6kFQQpZ9Vhxd",
+      "agent": "build",
+      "messageID": "msg_142a82b2500165LTE9iHIGR1cX",
+      "id": "call_7d37e4bc319d41c98d52538d",
+      "input": {
+        "questions": [
+          {
+            "header": "Design",
+            "question": "Approve the design?",
+            "options": [
+              {
+                "label": "Approve",
+                "description": "approve"
+              },
+              {
+                "label": "Changes needed",
+                "description": "changes"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "parentID": null
+  }
+}

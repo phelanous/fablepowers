@@ -1,0 +1,57 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "session.context",
+    "opencode": "2.0.29",
+    "note": "probe logged keys, roles and the last 4 messages only"
+  },
+  "payload": {
+    "sessionID": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+    "agent": "general",
+    "model": {
+      "id": "big-pickle",
+      "providerID": "opencode",
+      "variant": "default"
+    },
+    "keys": [
+      "sessionID",
+      "model",
+      "system",
+      "messages",
+      "options",
+      "agent",
+      "tools"
+    ],
+    "nmsg": 1,
+    "parentID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+    "roles": [
+      "user"
+    ],
+    "tail": [
+      {
+        "id": "msg_142a5a2ef0022Q1bp5yBqBvUN5",
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are a subagent spawned by another session.\nUse the write tool to create notes/child.txt containing the word child. Then reply DONE."
+          }
+        ],
+        "metadata": {},
+        "__class": "lH"
+      }
+    ],
+    "tools": [
+      "edit",
+      "glob",
+      "grep",
+      "read",
+      "shell",
+      "skill",
+      "webfetch",
+      "websearch",
+      "write",
+      "execute"
+    ]
+  }
+}

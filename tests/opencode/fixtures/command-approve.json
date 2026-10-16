@@ -1,0 +1,19 @@
+{
+  "_source": {
+    "log": "s1",
+    "kind": "command.execute",
+    "opencode": "2.0.29",
+    "note": "POST /api/session/:id/command {\"name\":\"fablepowers:approve\",\"text\":\"foo bar\"}; input has args only, no command name"
+  },
+  "payload": {
+    "verb": "approve",
+    "input": {
+      "sessionID": "ses_ebd57ee19ffedY6kFQQpZ9Vhxd",
+      "prompt": {
+        "text": "foo bar"
+      },
+      "delivery": "steer"
+    },
+    "parentID": null
+  }
+}

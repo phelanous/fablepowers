@@ -1,0 +1,21 @@
+{
+  "_source": {
+    "log": "r3b",
+    "kind": "tool.before",
+    "opencode": "2.0.29"
+  },
+  "payload": {
+    "ev": {
+      "tool": "write",
+      "sessionID": "ses_ebd5464c2ffeEHo3jKR3OZm3PT",
+      "agent": "build",
+      "messageID": "msg_142abd845001fMjit1lcapZb9T",
+      "id": "call_78cab7b7b4744bf8a5a203b5",
+      "input": {
+        "content": "y",
+        "path": "__ROOT__/ok.txt"
+      }
+    },
+    "parentID": null
+  }
+}

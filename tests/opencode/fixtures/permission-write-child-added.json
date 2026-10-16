@@ -1,0 +1,36 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "permission.evaluate",
+    "opencode": "2.0.29",
+    "note": "child session (agent general) writing notes/child.txt: evaluate fires for child sessions; parentID from session.get"
+  },
+  "payload": {
+    "ev": {
+      "sessionID": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+      "agent": "general",
+      "action": "edit",
+      "resources": [
+        "notes/child.txt"
+      ],
+      "metadata": {
+        "files": [
+          {
+            "file": "notes/child.txt",
+            "patch": "Index: notes/child.txt\n===================================================================\n--- notes/child.txt\n+++ notes/child.txt\n@@ -0,0 +1,1 @@\n+child\n\\ No newline at end of file\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0
+          }
+        ]
+      },
+      "source": {
+        "type": "tool",
+        "messageID": "msg_142a5a2fa0012VqrNdcXa6j1de",
+        "id": "call_d384e18f9d584580b1c47695"
+      },
+      "effect": "allow"
+    },
+    "parentID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "tool.after",
+    "opencode": "2.0.29",
+    "note": "result.output.existed false; model-visible text is result.content[].text"
+  },
+  "payload": {
+    "ev": {
+      "tool": "write",
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "agent": "build",
+      "messageID": "msg_142a567a0001qyBYoxXFhP0bDz",
+      "id": "call_adce0d5bae11441db8a7fe6a",
+      "input": {
+        "path": "docs/specs/a.md",
+        "content": "alpha\n"
+      },
+      "status": "completed",
+      "result": {
+        "output": {
+          "operation": "write",
+          "target": "__ROOT__/docs/specs/a.md",
+          "resource": "docs/specs/a.md",
+          "existed": false
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "Created file successfully: docs/specs/a.md"
+          }
+        ]
+      }
+    },
+    "parentID": null
+  }
+}

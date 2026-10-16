@@ -1,0 +1,30 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "tool.after.marked",
+    "opencode": "2.0.29",
+    "note": "same write result after the probe mutated every candidate field; only result.content[] markers reached the model (see README)"
+  },
+  "payload": {
+    "id": "call_adce0d5bae11441db8a7fe6a",
+    "result": {
+      "output": {
+        "operation": "write",
+        "target": "__ROOT__/docs/specs/a.md",
+        "resource": "docs/specs/a.md",
+        "existed": false,
+        "fp_mark": "MARK-output-objfield"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Created file successfully: docs/specs/a.md [MARK-content-parttext]"
+        },
+        {
+          "type": "text",
+          "text": "[MARK-content-pushed]"
+        }
+      ]
+    }
+  }
+}

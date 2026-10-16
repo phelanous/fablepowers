@@ -1,0 +1,64 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "agent.builtin.before",
+    "opencode": "2.0.29",
+    "note": "agent draft passed to d.update(id, fn) before the probe pushed external_directory allow"
+  },
+  "payload": {
+    "id": "general",
+    "keys": [
+      "id",
+      "name",
+      "request",
+      "mode",
+      "hidden",
+      "permissions",
+      "description"
+    ],
+    "a": {
+      "id": "general",
+      "name": "General",
+      "request": {
+        "settings": {},
+        "headers": {},
+        "body": {}
+      },
+      "mode": "subagent",
+      "hidden": false,
+      "permissions": [
+        {
+          "action": "*",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "read",
+          "resource": "*.env",
+          "effect": "ask"
+        },
+        {
+          "action": "read",
+          "resource": "*.env.*",
+          "effect": "ask"
+        },
+        {
+          "action": "read",
+          "resource": "*.env.example",
+          "effect": "allow"
+        },
+        {
+          "action": "question",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "subagent",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ],
+      "description": "General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel."
+    }
+  }
+}

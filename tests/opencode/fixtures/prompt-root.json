@@ -1,0 +1,20 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "session.prompt",
+    "opencode": "2.0.29",
+    "note": "opencode run with a single argv containing spaces: text arrives wrapped in one pair of double quotes"
+  },
+  "payload": {
+    "ev": {
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "messageID": "msg_142a56725001vwrAtl3ExGNps6",
+      "prompt": {
+        "text": "\"Do these steps in order using tools, then stop. 1) Use the write tool to create docs/specs/a.md containing the single line: alpha. 2) Use the edit tool on docs/specs/a.md to replace alpha with beta. 3) Use the subagent tool with agent general and this prompt: 'Use the write tool to create notes/child.txt containing the word child. Then reply DONE.' 4) Use the skill tool to load the skill fp-probe:base. 5) Use the read tool to read __PLUGIN__/skills/base/SKILL.md. 6) Finally, quote verbatim every bracketed text starting with MARK that appeared in any tool result you received (or say NONE), then say FINISHED.\"",
+        "files": []
+      },
+      "delivery": "steer"
+    },
+    "parentID": null
+  }
+}

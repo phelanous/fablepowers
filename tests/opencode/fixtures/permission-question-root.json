@@ -1,0 +1,24 @@
+{
+  "_source": {
+    "log": "s1",
+    "kind": "permission.evaluate",
+    "opencode": "2.0.29"
+  },
+  "payload": {
+    "ev": {
+      "sessionID": "ses_ebd57ee19ffedY6kFQQpZ9Vhxd",
+      "agent": "build",
+      "action": "question",
+      "resources": [
+        "*"
+      ],
+      "source": {
+        "type": "tool",
+        "messageID": "msg_142a82b2500165LTE9iHIGR1cX",
+        "id": "call_7d37e4bc319d41c98d52538d"
+      },
+      "effect": "allow"
+    },
+    "parentID": null
+  }
+}

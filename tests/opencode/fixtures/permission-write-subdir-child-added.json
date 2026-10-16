@@ -1,0 +1,36 @@
+{
+  "_source": {
+    "log": "s1",
+    "kind": "permission.evaluate",
+    "opencode": "2.0.29",
+    "note": "child of the subdirectory session; child inherits location.directory <root>/sub"
+  },
+  "payload": {
+    "ev": {
+      "sessionID": "ses_ebd55ea66ffeUQCl4BU8o3VQmU",
+      "agent": "general",
+      "action": "edit",
+      "resources": [
+        "docs/specs/child-s.md"
+      ],
+      "metadata": {
+        "files": [
+          {
+            "file": "docs/specs/child-s.md",
+            "patch": "Index: docs/specs/child-s.md\n===================================================================\n--- docs/specs/child-s.md\n+++ docs/specs/child-s.md\n@@ -0,0 +1,1 @@\n+c\n\\ No newline at end of file\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0
+          }
+        ]
+      },
+      "source": {
+        "type": "tool",
+        "messageID": "msg_142aa15ae001PWqXOFKSVTQgLy",
+        "id": "call_2424007874ad431ba48ff576"
+      },
+      "effect": "allow"
+    },
+    "parentID": "ses_ebd577f95ffenYU7AKsfdowk3L"
+  }
+}

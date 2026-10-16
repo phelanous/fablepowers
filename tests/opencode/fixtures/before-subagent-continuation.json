@@ -1,0 +1,24 @@
+{
+  "_source": {
+    "log": "r2",
+    "kind": "tool.before",
+    "opencode": "2.0.29",
+    "note": "input carries sessionID of an existing child plus agent"
+  },
+  "payload": {
+    "ev": {
+      "tool": "subagent",
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "agent": "build",
+      "messageID": "msg_142a70116001gZogFmJk7hNLhD",
+      "id": "call_b349b453ad6b46adbe886e07",
+      "input": {
+        "agent": "explore",
+        "sessionID": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+        "description": "resume",
+        "prompt": "Reply with the name of the agent you are running as, then DONE."
+      }
+    },
+    "parentID": null
+  }
+}

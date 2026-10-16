@@ -1,0 +1,24 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "permission.evaluate",
+    "opencode": "2.0.29"
+  },
+  "payload": {
+    "ev": {
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "agent": "build",
+      "action": "read",
+      "resources": [
+        "__PLUGIN__/skills/base/SKILL.md"
+      ],
+      "source": {
+        "type": "tool",
+        "messageID": "msg_142a6035e001EP4nhfGMFpZ7n2",
+        "id": "call_e220c5afadb74dcd88afe8f0"
+      },
+      "effect": "allow"
+    },
+    "parentID": null
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "_source": {
+    "log": "r5",
+    "kind": "session.prompt",
+    "opencode": "2.0.29",
+    "note": "opencode run -s <id> /fablepowers:approve foo (separate argv): no quotes"
+  },
+  "payload": {
+    "ev": {
+      "sessionID": "ses_ebd4ce46dffexDLOaC0SNjZINC",
+      "messageID": "msg_142b38d74001t8DxQi5FokboZ4",
+      "prompt": {
+        "text": "/fablepowers:approve foo",
+        "files": []
+      },
+      "delivery": "steer"
+    },
+    "parentID": null
+  }
+}

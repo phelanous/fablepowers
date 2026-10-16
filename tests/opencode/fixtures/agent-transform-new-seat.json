@@ -1,0 +1,56 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "agent.seat.after",
+    "opencode": "2.0.29",
+    "note": "d.update(newId, fn) creates the agent; defaults mode primary + default permissions; after the probe set mode/system/model"
+  },
+  "payload": {
+    "id": "fp-seat-varmodel",
+    "a": {
+      "id": "fp-seat-varmodel",
+      "name": "fp-seat-varmodel",
+      "request": {
+        "settings": {},
+        "headers": {},
+        "body": {}
+      },
+      "mode": "subagent",
+      "hidden": false,
+      "permissions": [
+        {
+          "action": "*",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "read",
+          "resource": "*.env",
+          "effect": "ask"
+        },
+        {
+          "action": "read",
+          "resource": "*.env.*",
+          "effect": "ask"
+        },
+        {
+          "action": "read",
+          "resource": "*.env.example",
+          "effect": "allow"
+        },
+        {
+          "action": "subagent",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ],
+      "description": "Probe seat fp-seat-varmodel. Use only when explicitly asked to dispatch fp-seat-varmodel.",
+      "system": "You are a probe subagent. Reply with exactly: SEAT-OK",
+      "model": {
+        "providerID": "opencode",
+        "id": "cat-jam-free",
+        "variant": "high"
+      }
+    }
+  }
+}

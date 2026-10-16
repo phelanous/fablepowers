@@ -1,0 +1,69 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "agent.builtin.before",
+    "opencode": "2.0.29",
+    "note": "agent draft passed to d.update(id, fn) before the probe pushed external_directory allow"
+  },
+  "payload": {
+    "id": "plan",
+    "keys": [
+      "id",
+      "name",
+      "request",
+      "mode",
+      "hidden",
+      "permissions",
+      "description"
+    ],
+    "a": {
+      "id": "plan",
+      "name": "Plan",
+      "request": {
+        "settings": {},
+        "headers": {},
+        "body": {}
+      },
+      "mode": "primary",
+      "hidden": false,
+      "permissions": [
+        {
+          "action": "*",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "read",
+          "resource": "*.env",
+          "effect": "ask"
+        },
+        {
+          "action": "read",
+          "resource": "*.env.*",
+          "effect": "ask"
+        },
+        {
+          "action": "read",
+          "resource": "*.env.example",
+          "effect": "allow"
+        },
+        {
+          "action": "question",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "edit",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "edit",
+          "resource": "__HOME__/.opencode/plan/*",
+          "effect": "allow"
+        }
+      ],
+      "description": "Read-only agent for exploring the codebase and planning work before implementation."
+    }
+  }
+}

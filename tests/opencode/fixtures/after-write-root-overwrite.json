@@ -1,0 +1,37 @@
+{
+  "_source": {
+    "log": "r4",
+    "kind": "tool.after",
+    "opencode": "2.0.29",
+    "note": "write over an existing file: existed true"
+  },
+  "payload": {
+    "ev": {
+      "tool": "write",
+      "sessionID": "ses_ebd4ce46dffexDLOaC0SNjZINC",
+      "agent": "build",
+      "messageID": "msg_142b31d25001iF1nYM2IVH07yf",
+      "id": "call_e75c7ca5fbec4f189c3271de",
+      "input": {
+        "path": "README.md",
+        "content": "hello2"
+      },
+      "status": "completed",
+      "result": {
+        "output": {
+          "operation": "write",
+          "target": "__ROOT__/README.md",
+          "resource": "README.md",
+          "existed": true
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "Wrote file successfully: README.md"
+          }
+        ]
+      }
+    },
+    "parentID": null
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "tool.before",
+    "opencode": "2.0.29"
+  },
+  "payload": {
+    "ev": {
+      "tool": "skill",
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "agent": "build",
+      "messageID": "msg_142a5f837001qQ6PXrcwCzbAt7",
+      "id": "call_452d5b429e444754ae287adf",
+      "input": {
+        "id": "fp-probe:base"
+      }
+    },
+    "parentID": null
+  }
+}

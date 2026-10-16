@@ -1,0 +1,42 @@
+{
+  "_source": {
+    "log": "r4",
+    "kind": "tool.after",
+    "opencode": "2.0.29",
+    "note": "question in non-interactive opencode run: status error"
+  },
+  "payload": {
+    "ev": {
+      "tool": "question",
+      "sessionID": "ses_ebd4ce46dffexDLOaC0SNjZINC",
+      "agent": "build",
+      "messageID": "msg_142b3364b001CenlBZr722kk5S",
+      "id": "call_9f38938095504f7986eca04d",
+      "input": {
+        "questions": [
+          {
+            "question": "Approve the design?",
+            "header": "Design",
+            "options": [
+              {
+                "label": "Approve",
+                "description": "Approve the design as-is"
+              },
+              {
+                "label": "Changes needed",
+                "description": "Request changes to the design"
+              }
+            ]
+          }
+        ]
+      },
+      "status": "error",
+      "error": {
+        "error": "This non-interactive run cannot ask the user questions, so the question was cancelled. Continue without an answer; make reasonable assumptions and state them.",
+        "name": "Tool.Error",
+        "tag": "Tool.Error"
+      }
+    },
+    "parentID": null
+  }
+}

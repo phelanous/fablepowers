@@ -1,0 +1,21 @@
+{
+  "_source": {
+    "log": "s1",
+    "kind": "tool.before",
+    "opencode": "2.0.29"
+  },
+  "payload": {
+    "ev": {
+      "tool": "write",
+      "sessionID": "ses_ebd577f95ffenYU7AKsfdowk3L",
+      "agent": "build",
+      "messageID": "msg_142a881b2001n7msR2B9FYDFIq",
+      "id": "call_20d395e52dfd497394986e50",
+      "input": {
+        "path": "docs/specs/s.md",
+        "content": "sub"
+      }
+    },
+    "parentID": null
+  }
+}

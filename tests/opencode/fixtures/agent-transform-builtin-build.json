@@ -1,0 +1,59 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "agent.builtin.before",
+    "opencode": "2.0.29",
+    "note": "agent draft passed to d.update(id, fn) before the probe pushed external_directory allow"
+  },
+  "payload": {
+    "id": "build",
+    "keys": [
+      "id",
+      "name",
+      "request",
+      "mode",
+      "hidden",
+      "permissions",
+      "description"
+    ],
+    "a": {
+      "id": "build",
+      "name": "Build",
+      "request": {
+        "settings": {},
+        "headers": {},
+        "body": {}
+      },
+      "mode": "primary",
+      "hidden": false,
+      "permissions": [
+        {
+          "action": "*",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "read",
+          "resource": "*.env",
+          "effect": "ask"
+        },
+        {
+          "action": "read",
+          "resource": "*.env.*",
+          "effect": "ask"
+        },
+        {
+          "action": "read",
+          "resource": "*.env.example",
+          "effect": "allow"
+        },
+        {
+          "action": "question",
+          "resource": "*",
+          "effect": "allow"
+        }
+      ],
+      "description": "The default agent. Executes tools based on configured permissions."
+    }
+  }
+}

@@ -1,0 +1,165 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "session.context",
+    "opencode": "2.0.29",
+    "note": "probe logged keys, roles and the last 4 messages only"
+  },
+  "payload": {
+    "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+    "agent": "build",
+    "model": {
+      "id": "big-pickle",
+      "providerID": "opencode",
+      "variant": "default"
+    },
+    "keys": [
+      "sessionID",
+      "model",
+      "system",
+      "messages",
+      "options",
+      "agent",
+      "tools"
+    ],
+    "nmsg": 11,
+    "parentID": null,
+    "roles": [
+      "user",
+      "assistant",
+      "tool",
+      "assistant",
+      "tool",
+      "assistant",
+      "tool",
+      "assistant",
+      "tool",
+      "assistant",
+      "tool"
+    ],
+    "tail": [
+      {
+        "id": "msg_142a5f837001qQ6PXrcwCzbAt7",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "reasoning",
+            "text": "Step 3 done. Step 4: load skill fp-probe:base.",
+            "providerMetadata": {
+              "opencode": {
+                "reasoningField": "reasoning_content"
+              }
+            }
+          },
+          {
+            "type": "text",
+            "text": "Step 3 done (subagent replied DONE). Now step 4 — loading the skill:"
+          },
+          {
+            "type": "tool-call",
+            "id": "call_452d5b429e444754ae287adf",
+            "name": "skill",
+            "input": {
+              "id": "fp-probe:base"
+            },
+            "providerExecuted": false
+          }
+        ],
+        "__class": "lH"
+      },
+      {
+        "role": "tool",
+        "content": [
+          {
+            "type": "tool-result",
+            "id": "call_452d5b429e444754ae287adf",
+            "name": "skill",
+            "result": {
+              "type": "content",
+              "value": [
+                {
+                  "type": "text",
+                  "text": "<skill_content name=\"fp-probe:base\">\n# Skill: fp-probe:base\n\n---\nname: fp-probe:base\ndescription: Probe skill. Load it only when explicitly asked to load fp-probe:base.\n---\n# Probe skill\nWhen loaded, reply with the literal text SKILL-LOADED followed by the base directory you were given, if any.\n\nBase directory for this skill: __PLUGIN__/skills/base\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n</skill_files>\n</skill_content> [MARK-content-parttext]"
+                },
+                {
+                  "type": "text",
+                  "text": "[MARK-content-pushed]"
+                }
+              ]
+            },
+            "providerExecuted": false
+          }
+        ],
+        "__class": "lH"
+      },
+      {
+        "id": "msg_142a6035e001EP4nhfGMFpZ7n2",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "reasoning",
+            "text": "Step 4 done. Now step 5: read the SKILL.md file.",
+            "providerMetadata": {
+              "opencode": {
+                "reasoningField": "reasoning_content"
+              }
+            }
+          },
+          {
+            "type": "text",
+            "text": "Step 4 done. Now step 5 — reading the SKILL.md file:"
+          },
+          {
+            "type": "tool-call",
+            "id": "call_e220c5afadb74dcd88afe8f0",
+            "name": "read",
+            "input": {
+              "path": "__PLUGIN__/skills/base/SKILL.md"
+            },
+            "providerExecuted": false
+          }
+        ],
+        "__class": "lH"
+      },
+      {
+        "role": "tool",
+        "content": [
+          {
+            "type": "tool-result",
+            "id": "call_e220c5afadb74dcd88afe8f0",
+            "name": "read",
+            "result": {
+              "type": "content",
+              "value": [
+                {
+                  "type": "text",
+                  "text": "Read file __PLUGIN__/skills/base/SKILL.md, lines 1-6\n1: ---\n2: name: fp-probe:base\n3: description: Probe skill. Load it only when explicitly asked to load fp-probe:base.\n4: ---\n5: # Probe skill\n6: When loaded, reply with the literal text SKILL-LOADED followed by the base directory you were given, if any. [MARK-content-parttext]"
+                },
+                {
+                  "type": "text",
+                  "text": "[MARK-content-pushed]"
+                }
+              ]
+            },
+            "providerExecuted": false
+          }
+        ],
+        "__class": "lH"
+      }
+    ],
+    "tools": [
+      "edit",
+      "glob",
+      "grep",
+      "question",
+      "read",
+      "shell",
+      "skill",
+      "subagent",
+      "webfetch",
+      "websearch",
+      "write",
+      "execute"
+    ]
+  }
+}

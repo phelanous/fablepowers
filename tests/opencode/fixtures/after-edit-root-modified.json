@@ -1,0 +1,54 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "tool.after",
+    "opencode": "2.0.29"
+  },
+  "payload": {
+    "ev": {
+      "tool": "edit",
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "agent": "build",
+      "messageID": "msg_142a571de001YZBs6u3nXvyZnD",
+      "id": "call_45e62694b90f467fbe595fe5",
+      "input": {
+        "path": "docs/specs/a.md",
+        "oldString": "alpha",
+        "newString": "beta"
+      },
+      "status": "completed",
+      "result": {
+        "output": {
+          "files": [
+            {
+              "file": "docs/specs/a.md",
+              "patch": "Index: docs/specs/a.md\n===================================================================\n--- docs/specs/a.md\n+++ docs/specs/a.md\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+              "additions": 1,
+              "deletions": 1,
+              "status": "modified"
+            }
+          ],
+          "replacements": 1
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "Edited docs/specs/a.md (1 replacement)"
+          }
+        ],
+        "metadata": {
+          "files": [
+            {
+              "file": "docs/specs/a.md",
+              "patch": "Index: docs/specs/a.md\n===================================================================\n--- docs/specs/a.md\n+++ docs/specs/a.md\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+              "status": "modified",
+              "additions": 1,
+              "deletions": 1
+            }
+          ]
+        }
+      }
+    },
+    "parentID": null
+  }
+}

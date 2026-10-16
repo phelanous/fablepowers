@@ -1,0 +1,40 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "session.get",
+    "opencode": "2.0.29",
+    "note": "child record: parentID + agent"
+  },
+  "payload": {
+    "sid": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+    "record": {
+      "id": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+      "parentID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "projectID": "9d911ab5800a7701dd28c1696bb4a0455754919a",
+      "agent": "general",
+      "model": {
+        "id": "big-pickle",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "time": {
+        "created": 1792119513838,
+        "updated": 1792119513838
+      },
+      "title": "Create notes/child.txt file",
+      "location": {
+        "directory": "__ROOT__"
+      }
+    }
+  }
+}

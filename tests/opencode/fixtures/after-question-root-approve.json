@@ -1,0 +1,59 @@
+{
+  "_source": {
+    "log": "s1",
+    "kind": "tool.after",
+    "opencode": "2.0.29",
+    "note": "question answered \"Approve\" through the form API on a private opencode serve"
+  },
+  "payload": {
+    "ev": {
+      "tool": "question",
+      "sessionID": "ses_ebd57ee19ffedY6kFQQpZ9Vhxd",
+      "agent": "build",
+      "messageID": "msg_142a82b2500165LTE9iHIGR1cX",
+      "id": "call_7d37e4bc319d41c98d52538d",
+      "input": {
+        "questions": [
+          {
+            "header": "Design",
+            "question": "Approve the design?",
+            "options": [
+              {
+                "label": "Approve",
+                "description": "approve"
+              },
+              {
+                "label": "Changes needed",
+                "description": "changes"
+              }
+            ]
+          }
+        ]
+      },
+      "status": "completed",
+      "result": {
+        "output": {
+          "answers": [
+            [
+              "Approve"
+            ]
+          ]
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "User has answered your questions: \"Approve the design?\"=\"Approve\". You can now continue with the user's answers in mind."
+          }
+        ],
+        "metadata": {
+          "answers": [
+            [
+              "Approve"
+            ]
+          ]
+        }
+      }
+    },
+    "parentID": null
+  }
+}

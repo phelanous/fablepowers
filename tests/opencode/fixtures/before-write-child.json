@@ -1,0 +1,21 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "tool.before",
+    "opencode": "2.0.29"
+  },
+  "payload": {
+    "ev": {
+      "tool": "write",
+      "sessionID": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+      "agent": "general",
+      "messageID": "msg_142a5a2fa0012VqrNdcXa6j1de",
+      "id": "call_d384e18f9d584580b1c47695",
+      "input": {
+        "path": "notes/child.txt",
+        "content": "child"
+      }
+    },
+    "parentID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "tool.after",
+    "opencode": "2.0.29",
+    "note": "plugin-registered skill: content carries \"Base directory for this skill: <dir>\"; output.directory and metadata.directory too"
+  },
+  "payload": {
+    "ev": {
+      "tool": "skill",
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "agent": "build",
+      "messageID": "msg_142a5f837001qQ6PXrcwCzbAt7",
+      "id": "call_452d5b429e444754ae287adf",
+      "input": {
+        "id": "fp-probe:base"
+      },
+      "status": "completed",
+      "result": {
+        "output": {
+          "name": "fp-probe:base",
+          "directory": "__PLUGIN__/skills/base",
+          "output": "<skill_content name=\"fp-probe:base\">\n# Skill: fp-probe:base\n\n---\nname: fp-probe:base\ndescription: Probe skill. Load it only when explicitly asked to load fp-probe:base.\n---\n# Probe skill\nWhen loaded, reply with the literal text SKILL-LOADED followed by the base directory you were given, if any.\n\nBase directory for this skill: __PLUGIN__/skills/base\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n</skill_files>\n</skill_content>"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "<skill_content name=\"fp-probe:base\">\n# Skill: fp-probe:base\n\n---\nname: fp-probe:base\ndescription: Probe skill. Load it only when explicitly asked to load fp-probe:base.\n---\n# Probe skill\nWhen loaded, reply with the literal text SKILL-LOADED followed by the base directory you were given, if any.\n\nBase directory for this skill: __PLUGIN__/skills/base\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n</skill_files>\n</skill_content>"
+          }
+        ],
+        "metadata": {
+          "name": "fp-probe:base",
+          "directory": "__PLUGIN__/skills/base"
+        }
+      }
+    },
+    "parentID": null
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "permission.evaluate",
+    "opencode": "2.0.29",
+    "note": "root session dispatching agent \"general\"; resources = [target agent id]"
+  },
+  "payload": {
+    "ev": {
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "agent": "build",
+      "action": "subagent",
+      "resources": [
+        "general"
+      ],
+      "source": {
+        "type": "tool",
+        "messageID": "msg_142a59726001A5b4efZ7lN1Qmq",
+        "id": "call_df950432542448f6a24d84ec"
+      },
+      "effect": "allow"
+    },
+    "parentID": null
+  }
+}

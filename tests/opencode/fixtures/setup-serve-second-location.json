@@ -1,0 +1,82 @@
+{
+  "_source": {
+    "log": "s1",
+    "kind": "setup",
+    "opencode": "2.0.29",
+    "note": "second instance in the same server process for location <root>/sub (globalCount 2)"
+  },
+  "payload": {
+    "globalCount": 2,
+    "file": "__PLUGIN__/opencode/index.js",
+    "root": "__PLUGIN__",
+    "ctxKeys": [
+      "app",
+      "location",
+      "options",
+      "agent",
+      "aisdk",
+      "command",
+      "credential",
+      "event",
+      "experimental",
+      "generate",
+      "model",
+      "provider",
+      "integration",
+      "mcp",
+      "permission",
+      "plugin",
+      "reference",
+      "rpc",
+      "skill",
+      "storage",
+      "tool",
+      "vcs",
+      "websearch",
+      "worktree",
+      "session",
+      "shell"
+    ],
+    "ctxDirectory": "undefined",
+    "ctxWorktree": "object",
+    "location": {
+      "directory": "__ROOT__/sub",
+      "project": {
+        "id": "9d911ab5800a7701dd28c1696bb4a0455754919a",
+        "directory": "__ROOT__",
+        "canonical": "__ROOT__"
+      },
+      "__class": "Yh"
+    },
+    "which": {
+      "python3": "/usr/bin/python3",
+      "bash": "/usr/bin/bash",
+      "sh": "/usr/bin/sh",
+      "git": "/usr/bin/git"
+    },
+    "py": {
+      "status": 0,
+      "out": "/usr/bin/python3 (3, 14)",
+      "err": ""
+    },
+    "bash": {
+      "status": 0,
+      "out": "/usr/bin/bash 5.3.20(1)-release",
+      "err": ""
+    },
+    "env": {
+      "PATH": "/usr/bin:/bin",
+      "HOME": "__HOME__",
+      "cwd": "__CWD__",
+      "node": "v26.3.0",
+      "bun": "1.4.3",
+      "envKeys": [
+        "HOME",
+        "OPENCODE_SERVER_PASSWORD",
+        "PATH",
+        "PROBE_LOG",
+        "PROBE_MODE"
+      ]
+    }
+  }
+}

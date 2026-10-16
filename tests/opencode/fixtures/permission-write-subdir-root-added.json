@@ -1,0 +1,36 @@
+{
+  "_source": {
+    "log": "s1",
+    "kind": "permission.evaluate",
+    "opencode": "2.0.29",
+    "note": "root session whose directory is <root>/sub; resources relative to the session directory (file landed in sub/docs/specs/s.md); server launched outside the repo"
+  },
+  "payload": {
+    "ev": {
+      "sessionID": "ses_ebd577f95ffenYU7AKsfdowk3L",
+      "agent": "build",
+      "action": "edit",
+      "resources": [
+        "docs/specs/s.md"
+      ],
+      "metadata": {
+        "files": [
+          {
+            "file": "docs/specs/s.md",
+            "patch": "Index: docs/specs/s.md\n===================================================================\n--- docs/specs/s.md\n+++ docs/specs/s.md\n@@ -0,0 +1,1 @@\n+sub\n\\ No newline at end of file\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0
+          }
+        ]
+      },
+      "source": {
+        "type": "tool",
+        "messageID": "msg_142a881b2001n7msR2B9FYDFIq",
+        "id": "call_20d395e52dfd497394986e50"
+      },
+      "effect": "allow"
+    },
+    "parentID": null
+  }
+}

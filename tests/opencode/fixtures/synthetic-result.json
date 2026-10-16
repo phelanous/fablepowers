@@ -1,0 +1,20 @@
+{
+  "_source": {
+    "log": "s1",
+    "kind": "synthetic.ok",
+    "opencode": "2.0.29",
+    "note": "return value of ctx.session.synthetic(); the model then answered it in a new turn"
+  },
+  "payload": {
+    "id": "msg_142aaac68001SRAbmWoRHj5RKr",
+    "sessionID": "ses_ebd57ee19ffedY6kFQQpZ9Vhxd",
+    "time": {
+      "created": 1792119843945
+    },
+    "type": "synthetic",
+    "payload": {
+      "text": "[probe] /fablepowers:approve recorded (probe). Reply with exactly: SYNTH-ACK-approve"
+    },
+    "delivery": "steer"
+  }
+}

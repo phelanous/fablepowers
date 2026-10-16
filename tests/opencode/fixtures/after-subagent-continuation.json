@@ -1,0 +1,42 @@
+{
+  "_source": {
+    "log": "r2",
+    "kind": "tool.after",
+    "opencode": "2.0.29",
+    "note": "child replied as explore (\"FileSearchSpecialist\"): the agent argument replaced the child's original agent"
+  },
+  "payload": {
+    "ev": {
+      "tool": "subagent",
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "agent": "build",
+      "messageID": "msg_142a70116001gZogFmJk7hNLhD",
+      "id": "call_b349b453ad6b46adbe886e07",
+      "input": {
+        "agent": "explore",
+        "sessionID": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+        "description": "resume",
+        "prompt": "Reply with the name of the agent you are running as, then DONE."
+      },
+      "status": "completed",
+      "result": {
+        "output": {
+          "sessionID": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+          "status": "completed",
+          "output": "FileSearchSpecialist\nDONE"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "<subagent sessionID=\"ses_ebd5a5d19ffeeuCWPM7BMia7Gz\" state=\"completed\">\nFileSearchSpecialist\nDONE\n</subagent>"
+          }
+        ],
+        "metadata": {
+          "sessionID": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+          "status": "completed"
+        }
+      }
+    },
+    "parentID": null
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "_source": {
+    "log": "s1",
+    "kind": "command.execute",
+    "opencode": "2.0.29",
+    "note": "empty args"
+  },
+  "payload": {
+    "verb": "withdraw",
+    "input": {
+      "sessionID": "ses_ebd57ee19ffedY6kFQQpZ9Vhxd",
+      "prompt": {
+        "text": ""
+      },
+      "delivery": "steer"
+    },
+    "parentID": null
+  }
+}

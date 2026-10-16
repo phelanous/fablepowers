@@ -1,0 +1,36 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "permission.evaluate",
+    "opencode": "2.0.29",
+    "note": "edit tool on an existing file in a root session (status \"modified\")"
+  },
+  "payload": {
+    "ev": {
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "agent": "build",
+      "action": "edit",
+      "resources": [
+        "docs/specs/a.md"
+      ],
+      "metadata": {
+        "files": [
+          {
+            "file": "docs/specs/a.md",
+            "patch": "Index: docs/specs/a.md\n===================================================================\n--- docs/specs/a.md\n+++ docs/specs/a.md\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1
+          }
+        ]
+      },
+      "source": {
+        "type": "tool",
+        "messageID": "msg_142a571de001YZBs6u3nXvyZnD",
+        "id": "call_45e62694b90f467fbe595fe5"
+      },
+      "effect": "allow"
+    },
+    "parentID": null
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "_source": {
+    "log": "r2",
+    "kind": "session.prompt",
+    "opencode": "2.0.29",
+    "note": "continued child: no subagent preamble"
+  },
+  "payload": {
+    "ev": {
+      "sessionID": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+      "messageID": "msg_142a7190a002n5WYyTSBMLeV5J",
+      "prompt": {
+        "text": "Reply with the name of the agent you are running as, then DONE."
+      },
+      "delivery": "steer"
+    },
+    "parentID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv"
+  }
+}

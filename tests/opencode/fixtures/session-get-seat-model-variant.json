@@ -1,0 +1,40 @@
+{
+  "_source": {
+    "log": "r2",
+    "kind": "session.get",
+    "opencode": "2.0.29",
+    "note": "agent.transform model {providerID,id,variant:\"high\"} -> child model variant high"
+  },
+  "payload": {
+    "sid": "ses_ebd579f0fffejtYO5duzN5Ysij",
+    "record": {
+      "id": "ses_ebd579f0fffejtYO5duzN5Ysij",
+      "parentID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "projectID": "9d911ab5800a7701dd28c1696bb4a0455754919a",
+      "agent": "fp-seat-varmodel",
+      "model": {
+        "id": "cat-jam-free",
+        "providerID": "opencode",
+        "variant": "high"
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "time": {
+        "created": 1792119693559,
+        "updated": 1792119693559
+      },
+      "title": "seat1",
+      "location": {
+        "directory": "__ROOT__"
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "_source": {
+    "log": "r1",
+    "kind": "tool.after",
+    "opencode": "2.0.29"
+  },
+  "payload": {
+    "ev": {
+      "tool": "subagent",
+      "sessionID": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+      "agent": "build",
+      "messageID": "msg_142a59726001A5b4efZ7lN1Qmq",
+      "id": "call_df950432542448f6a24d84ec",
+      "input": {
+        "agent": "general",
+        "description": "Create notes/child.txt file",
+        "prompt": "Use the write tool to create notes/child.txt containing the word child. Then reply DONE."
+      },
+      "status": "completed",
+      "result": {
+        "output": {
+          "sessionID": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+          "status": "completed",
+          "output": "DONE"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "<subagent sessionID=\"ses_ebd5a5d19ffeeuCWPM7BMia7Gz\" state=\"completed\">\nDONE\n</subagent>"
+          }
+        ],
+        "metadata": {
+          "sessionID": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+          "status": "completed"
+        }
+      }
+    },
+    "parentID": null
+  }
+}

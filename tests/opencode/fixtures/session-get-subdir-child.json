@@ -1,0 +1,40 @@
+{
+  "_source": {
+    "log": "s1",
+    "kind": "session.get",
+    "opencode": "2.0.29"
+  },
+  "payload": {
+    "sid": "ses_ebd55ea66ffeUQCl4BU8o3VQmU",
+    "record": {
+      "id": "ses_ebd55ea66ffeUQCl4BU8o3VQmU",
+      "parentID": "ses_ebd577f95ffenYU7AKsfdowk3L",
+      "projectID": "9d911ab5800a7701dd28c1696bb4a0455754919a",
+      "agent": "general",
+      "model": {
+        "id": "big-pickle",
+        "providerID": "opencode",
+        "variant": "default"
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "time": {
+        "created": 1792119805344,
+        "updated": 1792119805344
+      },
+      "title": "Create child spec file",
+      "subpath": "sub",
+      "location": {
+        "directory": "__ROOT__/sub"
+      }
+    }
+  }
+}

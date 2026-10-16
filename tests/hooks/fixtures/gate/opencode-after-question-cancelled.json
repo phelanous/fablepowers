@@ -1,0 +1,30 @@
+{
+  "harness": "opencode",
+  "hook": "after",
+  "cwd": "__CWD__",
+  "session_id": "ses_ebd4ce46dffexDLOaC0SNjZINC",
+  "parent_id": null,
+  "plugin_root": "__PLUGIN__",
+  "tool": "question",
+  "input": {
+    "questions": [
+      {
+        "question": "Approve the design?",
+        "header": "Design",
+        "options": [
+          {
+            "label": "Approve",
+            "description": "Approve the design as-is"
+          },
+          {
+            "label": "Changes needed",
+            "description": "Request changes to the design"
+          }
+        ]
+      }
+    ]
+  },
+  "status": "error",
+  "output": null,
+  "existed": {}
+}

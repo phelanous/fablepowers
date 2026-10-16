@@ -1,0 +1,33 @@
+{
+  "harness": "opencode",
+  "hook": "after",
+  "cwd": "__CWD__",
+  "session_id": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+  "parent_id": null,
+  "plugin_root": "__PLUGIN__",
+  "tool": "patch",
+  "input": {
+    "patchText": "*** Begin Patch\n*** Add File: __FILE__\n+alpha\n*** End Patch"
+  },
+  "status": "completed",
+  "output": {
+    "applied": [
+      {
+        "type": "add",
+        "resource": "__FILE__",
+        "target": "__TARGET__"
+      }
+    ],
+    "files": [
+      {
+        "file": "__FILE__",
+        "status": "added",
+        "additions": 1,
+        "deletions": 0
+      }
+    ]
+  },
+  "existed": {
+    "__TARGET__": false
+  }
+}

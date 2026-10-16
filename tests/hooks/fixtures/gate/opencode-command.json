@@ -1,0 +1,10 @@
+{
+  "harness": "opencode",
+  "hook": "command",
+  "cwd": "__CWD__",
+  "session_id": "ses_ebd57ee19ffedY6kFQQpZ9Vhxd",
+  "parent_id": null,
+  "plugin_root": "__PLUGIN__",
+  "verb": "__VERB__",
+  "args": "__ARGS__"
+}

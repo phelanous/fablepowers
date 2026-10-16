@@ -1,0 +1,13 @@
+{
+  "harness": "opencode",
+  "hook": "permission",
+  "cwd": "__CWD__",
+  "session_id": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+  "parent_id": null,
+  "plugin_root": "__PLUGIN__",
+  "action": "subagent",
+  "resources": [
+    "__AGENT__"
+  ],
+  "files": []
+}

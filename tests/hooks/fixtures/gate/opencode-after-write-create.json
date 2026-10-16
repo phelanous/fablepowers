@@ -1,0 +1,21 @@
+{
+  "harness": "opencode",
+  "hook": "after",
+  "cwd": "__CWD__",
+  "session_id": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+  "parent_id": null,
+  "plugin_root": "__PLUGIN__",
+  "tool": "write",
+  "input": {
+    "path": "__FILE__",
+    "content": "alpha\n"
+  },
+  "status": "completed",
+  "output": {
+    "operation": "write",
+    "target": "__TARGET__",
+    "resource": "__FILE__",
+    "existed": false
+  },
+  "existed": {}
+}

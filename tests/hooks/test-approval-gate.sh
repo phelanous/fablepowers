@@ -1545,6 +1545,478 @@ check "codex not on PATH: non-zero exit, empty stdout" bash -c '[[ "$1" != 0 && 
 out="$(STUB_MODE=die PATH="$STUB:$PATH" bash -c 'trust="$(bash "$1" fablepowers@fablepowers)" || exit 1; echo "ran codex with: $trust"' _ "$TRUST_SH" 2>/dev/null)" && rc=0 || rc=$?
 check "documented usage: helper error stops before codex runs" test "$rc:$out" == "1:"
 
+# --- 21+. OpenCode branch -----------------------------------------------------------------------
+#
+# The OpenCode adapter (opencode/index.js) runs approval_gate.py directly as
+# `python3 -I <plugin_root>/hooks/approval_gate.py` with a `harness: "opencode"`
+# payload (the plan's gate payload contract), so these tests do the same.
+# Fixtures tests/hooks/fixtures/gate/opencode-*.json are built from the real
+# OpenCode 2.0.29 payloads in tests/opencode/fixtures/ (opencode-after-patch-add
+# from the gate spike's source reading: the patch tool exists only for gpt-*).
+# OC_EDIT: an optional python statement run on the payload dict `d` before it
+# is sent (for variants the placeholders cannot express). OC_RUN_DIR: the
+# directory python runs in (default $TEST_ROOT, which is not a git repo).
+
+OC_EDIT=""
+oc() {  # oc <fixture-suffix> NAME=value...: stdout -> $OUT, exit -> $RC
+  local input; input="$(payload "opencode-$1" "${@:2}")"
+  if [[ -n "$OC_EDIT" ]]; then
+    input="$(printf '%s' "$input" | OC_EDIT="$OC_EDIT" python3 -c '
+import json, os, sys
+d = json.load(sys.stdin); exec(os.environ["OC_EDIT"]); print(json.dumps(d))')"
+  fi
+  RC=0
+  OUT="$(cd "${OC_RUN_DIR:-$TEST_ROOT}" && printf '%s' "$input" | env -u BASH TMPDIR="$GATE_TMP" ${GATE_ENV[@]+"${GATE_ENV[@]}"} \
+    python3 -I "$PLUGIN/hooks/approval_gate.py" 2>"$TEST_ROOT/stderr")" || RC=$?
+}
+# oc_verdict: none = exactly `{}`; deny = exactly {decision: deny, reason: <non-empty>};
+# context = exactly {context: <non-empty>}; always one JSON line, exit 0.
+oc_verdict() {
+  if [[ "$RC" != 0 ]]; then echo "rc$RC"; return; fi
+  printf '%s' "$OUT" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+lines = raw.split("\n")
+if len([l for l in lines if l]) != 1:
+    print("other(%d lines)" % len([l for l in lines if l])); sys.exit()
+try:
+    d = json.loads(raw)
+except ValueError:
+    print("other(not json)"); sys.exit()
+if d == {}:
+    print("none")
+elif set(d) == {"decision", "reason"} and d["decision"] == "deny" and isinstance(d["reason"], str) and d["reason"]:
+    print("deny")
+elif set(d) == {"context"} and isinstance(d["context"], str) and d["context"]:
+    print("context")
+else:
+    print("other(%s)" % json.dumps(d)[:120])'
+}
+oc_text() { printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("reason") or d.get("context") or "")' 2>/dev/null; }
+oc_expect() {  # oc_expect <label> <verdict>
+  local got; got="$(oc_verdict)"
+  if [[ "$got" == "$2" ]]; then pass "$1: $2"; else fail "$1: expected $2, got $got ($(head -c 200 "$TEST_ROOT/stderr"))"; fi
+}
+OCPLUG="$TEST_ROOT/ocplugin"; mkdir -p "$OCPLUG/hooks"; cp "$GATE_PY" "$OCPLUG/hooks/approval_gate.py"
+# ocperm <repo> <path> [cwd] [plugin_root]: verdict of a permission `edit`.
+ocperm() { oc permission-edit CWD="${3:-$1}" FILE="$2" PLUGIN="${4:-$OCPLUG}"; oc_verdict; }
+# ocsub <repo> <agent> [fixture]: verdict of a permission `subagent`.
+ocsub() { oc "${3:-permission-subagent}" CWD="$1" AGENT="$2" PLUGIN="$OCPLUG"; oc_verdict; }
+# ocbefore <repo> <agent> [fixture]: verdict of a before `subagent`.
+ocbefore() { oc "${3:-before-subagent}" CWD="$1" AGENT="$2" PLUGIN="$OCPLUG"; oc_verdict; }
+# occreate <repo> <path-from-cwd> [cwd] [fixture]: write the file, then its after-call.
+occreate() {
+  local cwd="${3:-$1}"
+  mkdir -p "$(dirname "$cwd/$2")"; printf '# spec\n' > "$cwd/$2"
+  oc "${4:-after-write-create}" CWD="$cwd" FILE="$2" TARGET="$cwd/$2" PLUGIN="$OCPLUG"
+}
+ocprompt() { oc "${3:-prompt}" CWD="$1" PROMPT="$2" PLUGIN="$OCPLUG"; }
+occmd() { oc command CWD="$1" VERB="$2" ARGS="$3" PLUGIN="$OCPLUG"; }
+ocq() { oc after-question CWD="$1" ANSWER="$2" PLUGIN="$OCPLUG"; }
+
+echo "21. OpenCode: no pending, inert cases"
+
+R="$TEST_ROOT/o1"; new_repo "$R"
+check "code edit allowed (exactly {})" test "$(ocperm "$R" src/app.py)" == none
+check "implementer dispatch allowed" test "$(ocsub "$R" fablepowers-implementer)" == none
+check "before: implementer dispatch allowed" test "$(ocbefore "$R" fablepowers-implementer)" == none
+check "no .fablepowers created" test ! -e "$R/.fablepowers"
+NR="$TEST_ROOT/o1-not-a-repo"; mkdir -p "$NR/docs/specs"
+occreate "$NR" docs/specs/x.md
+oc_expect "outside a git repo: spec create" none
+check "  no marker" test ! -e "$NR/.fablepowers"
+mkdir -p "$R/.fablepowers"
+# A relative cwd that would resolve into the repo from the gate's own cwd, and a
+# missing cwd with the gate running inside the repo: inert all the same.
+OC_EDIT='d["cwd"] = "o1"'; oc permission-edit CWD="$R" FILE=.fablepowers/k/approved PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "cwd not absolute: inert (even a marker path)" none
+OC_RUN_DIR="$R"; OC_EDIT='del d["cwd"]'; oc permission-edit CWD="$R" FILE=.fablepowers/k/approved PLUGIN="$OCPLUG"; OC_EDIT=""; OC_RUN_DIR=""
+oc_expect "cwd missing: inert (the server's own cwd is never used)" none
+OC_EDIT='d["hook"] = "tool.after"'; oc permission-edit CWD="$R" FILE=.fablepowers/k/approved PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "unknown hook name: no decision" none
+check "  logged" grep -q "OpenCode payload with an unknown hook 'tool.after'" "$R/.fablepowers/gate.log"
+OC_EDIT='d["harness"] = "OpenCode"'; oc permission-edit CWD="$R" FILE=.fablepowers/k/approved PLUGIN="$OCPLUG"; OC_EDIT=""
+check "harness other than exactly 'opencode': not the OpenCode branch (Claude path, no output)" test "$RC:$OUT" == "0:"
+
+echo "22. OpenCode: spec create -> pending (root sessions only)"
+
+R="$TEST_ROOT/o2"; new_repo "$R"
+occreate "$R" docs/specs/2026-01-01-oc.md
+oc_expect "write existed:false docs/specs/*.md" context
+P="$R/.fablepowers/2026-01-01-oc/pending"
+check "  pending written" test -f "$P"
+check "  pending.spec is the repo-relative path" test "$(json_field "$P" spec)" == '"docs/specs/2026-01-01-oc.md"'
+check "  notice names the spec, the question, /fablepowers:approve and the reviewer exception" \
+  bash -c '[[ "$1" == *"docs/specs/2026-01-01-oc.md"* && "$1" == *"answers Approve"* && "$1" == *'\''`/fablepowers:approve`'\''* && "$1" == *fablepowers-reviewer* && "$1" != *'\''$fablepowers'\''* ]]' _ "$(oc_text)"
+cp "$P" "$TEST_ROOT/o2-pending"
+occreate "$R" docs/specs/2026-01-01-oc.md
+oc_expect "duplicate after-call for the same spec" none
+check "  pending unchanged" cmp -s "$P" "$TEST_ROOT/o2-pending"
+
+R="$TEST_ROOT/o2b"; new_repo "$R"
+occreate "$R" docs/specs/over.md "$R" after-write-overwrite
+oc_expect "write over an existing file (existed:true)" none
+check "  no pending" test ! -e "$R/.fablepowers"
+OC_EDIT='del d["output"]["existed"]'; occreate "$R" docs/specs/noex.md; OC_EDIT=""
+check "write without output.existed: no pending" test ! -e "$R/.fablepowers"
+occreate "$R" docs/specs/child.md "$R" after-write-child
+oc_expect "child-session write (parent_id set)" none
+check "  no pending" test ! -e "$R/.fablepowers"
+OC_EDIT='d["status"] = "error"'; occreate "$R" docs/specs/err.md; OC_EDIT=""
+check "status error: no pending" test ! -e "$R/.fablepowers"
+OC_EDIT='del d["parent_id"]'; occreate "$R" docs/specs/noparent.md; OC_EDIT=""
+check "SF9: parent_id absent (lookup failed) counts as root: pending" test -f "$R/.fablepowers/noparent/pending"
+OC_EDIT='del d["output"]["target"]; d["input"]["path"] = "elsewhere/x.md"'; occreate "$R" docs/specs/rel.md; OC_EDIT=""
+check "write without output.target: output.resource resolved against cwd -> pending" test -f "$R/.fablepowers/rel/pending"
+OC_EDIT='del d["output"]["target"]; del d["output"]["resource"]'; occreate "$R" docs/specs/inp.md; OC_EDIT=""
+check "write with neither: input.path -> pending" test -f "$R/.fablepowers/inp/pending"
+for f in docs/notes.md docs/specs/n.txt docs/specs/d/deep.md; do
+  rm -rf "$R/.fablepowers"
+  occreate "$R" "$f"
+  check "write $f: no pending" test ! -e "$R/.fablepowers"
+done
+
+R="$TEST_ROOT/o2e"; new_repo "$R"
+occreate "$R" docs/specs/ed.md "$R" after-edit-added
+oc_expect "edit with a files[] status 'added' docs/specs/*.md" context
+check "  pending written" test -f "$R/.fablepowers/ed/pending"
+occreate "$R" docs/specs/mod.md "$R" after-edit-modified
+oc_expect "edit with status 'modified'" none
+check "  no pending" test ! -e "$R/.fablepowers/mod"
+OC_EDIT='d["parent_id"] = "ses_parent"'; occreate "$R" docs/specs/edc.md "$R" after-edit-added; OC_EDIT=""
+check "edit 'added' from a child session: no pending" test ! -e "$R/.fablepowers/edc"
+
+R="$TEST_ROOT/o2p"; new_repo "$R"
+occreate "$R" docs/specs/pa.md "$R" after-patch-add
+oc_expect "patch add with existed {target: false}" context
+check "  pending written" test -f "$R/.fablepowers/pa/pending"
+OC_EDIT='d["existed"] = {k: True for k in d["existed"]}'; occreate "$R" docs/specs/pt.md "$R" after-patch-add; OC_EDIT=""
+check "patch add over an existing file (existed true): no pending" test ! -e "$R/.fablepowers/pt"
+OC_EDIT='d["existed"] = {}'; occreate "$R" docs/specs/pn.md "$R" after-patch-add; OC_EDIT=""
+check "patch add with no existed record: no pending" test ! -e "$R/.fablepowers/pn"
+check "  logged" grep -q 'OpenCode patch add of `.*pn.md` without an existed record' "$R/.fablepowers/gate.log"
+OC_EDIT='d["existed"] = {"docs/specs/pr.md": False}'; occreate "$R" docs/specs/pr.md "$R" after-patch-add; OC_EDIT=""
+check "patch existed key relative to cwd: pending" test -f "$R/.fablepowers/pr/pending"
+OC_EDIT='d["output"]["applied"][0]["type"] = "update"'; occreate "$R" docs/specs/pu.md "$R" after-patch-add; OC_EDIT=""
+check "patch update (not add): no pending" test ! -e "$R/.fablepowers/pu"
+OC_EDIT='d["parent_id"] = "ses_parent"'; occreate "$R" docs/specs/pc.md "$R" after-patch-add; OC_EDIT=""
+check "patch add from a child session: no pending" test ! -e "$R/.fablepowers/pc"
+
+# C11: a subdirectory session writes docs/specs/s.md into <root>/sub/docs/specs: not a design.
+R="$TEST_ROOT/o2s"; new_repo "$R"; mkdir -p "$R/sub"
+occreate "$R" docs/specs/s.md "$R/sub"
+oc_expect "subdirectory session: docs/specs/s.md lands in sub/docs/specs" none
+check "  no pending" test ! -e "$R/.fablepowers"
+occreate "$R" ../docs/specs/up.md "$R/sub"
+check "subdirectory session: ../docs/specs/up.md pends" test -f "$R/.fablepowers/up/pending"
+check "  its spec field" test "$(json_field "$R/.fablepowers/up/pending" spec)" == '"docs/specs/up.md"'
+OC_EDIT='del d["output"]["target"]'; occreate "$R" docs/specs/s2.md "$R/sub"; OC_EDIT=""
+check "subdirectory session, relative output.resource docs/specs/s2.md: resolved against cwd, no pending" \
+  test ! -e "$R/.fablepowers/s2"
+check "while pending, a subdirectory session's docs/specs/s.md is outside the allowlist: denied" \
+  test "$(ocperm "$R" docs/specs/s.md "$R/sub")" == deny
+check "  and ../docs/specs/x.md from it allowed" test "$(ocperm "$R" ../docs/specs/x.md "$R/sub")" == none
+
+echo "23. OpenCode: dispatch while pending"
+
+R="$TEST_ROOT/o3"; new_repo "$R"
+occreate "$R" docs/specs/sp.md
+for a in fablepowers-implementer fablepowers-strict-implementer general build plan fablepowers-reviewerx Explore ""; do
+  check "permission subagent '$a' denied" test "$(ocsub "$R" "$a")" == deny
+  check "before subagent '$a' denied" test "$(ocbefore "$R" "$a")" == deny
+done
+for a in fablepowers-reviewer explore; do
+  check "permission subagent '$a' allowed" test "$(ocsub "$R" "$a")" == none
+  check "before subagent '$a' allowed" test "$(ocbefore "$R" "$a")" == none
+done
+ocsub "$R" fablepowers-implementer >/dev/null
+check "deny names the agent, the design, the question and /fablepowers:approve sp" \
+  bash -c '[[ "$1" == *fablepowers-implementer* && "$1" == *docs/specs/sp.md* && "$1" == *"answer Approve"* && "$1" == *"/fablepowers:approve sp"* && "$1" == *"Do not retry"* ]]' _ "$(oc_text)"
+# Continuation: OpenCode runs the child as resources[0] / input.agent, whatever it was before.
+check "continuation judged by resources[0]: fablepowers-implementer denied" \
+  test "$(ocsub "$R" fablepowers-implementer permission-subagent-continuation)" == deny
+check "continuation judged by resources[0]: explore allowed" \
+  test "$(ocsub "$R" explore permission-subagent-continuation)" == none
+check "before continuation (input.sessionID): implementer denied" \
+  test "$(ocbefore "$R" fablepowers-implementer before-subagent-continuation)" == deny
+check "before continuation: fablepowers-reviewer allowed" \
+  test "$(ocbefore "$R" fablepowers-reviewer before-subagent-continuation)" == none
+OC_EDIT='d["resources"] = []'; oc permission-subagent CWD="$R" AGENT=x PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "permission subagent with no resource" deny
+OC_EDIT='d["resources"] = ["fablepowers-reviewer", "fablepowers-implementer"]'; oc permission-subagent CWD="$R" AGENT=x PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "permission subagent with a reviewer and an implementer resource" deny
+OC_EDIT='del d["input"]["agent"]'; oc before-subagent CWD="$R" AGENT=x PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "before subagent without input.agent" deny
+oc before-write CWD="$R" FILE=src/app.py PLUGIN="$OCPLUG"
+oc_expect "before write (paths are judged in permission)" none
+oc permission-external_directory CWD="$R" FILE="$OCPLUG/skills/x/*" PLUGIN="$OCPLUG"
+oc_expect "permission external_directory (a read) while pending" none
+OC_EDIT='d["action"] = "shell"; d["resources"] = ["echo x > src/app.py"]'; oc permission-subagent CWD="$R" AGENT=x PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "permission shell while pending (accepted gap)" none
+
+echo "24. OpenCode: edits while pending"
+
+R="$TEST_ROOT/o4"; new_repo "$R"
+check "no pending: src edit allowed" test "$(ocperm "$R" src/app.py)" == none
+occreate "$R" docs/specs/ed.md
+check "relative src/app.py denied" test "$(ocperm "$R" src/app.py)" == deny
+ocperm "$R" src/app.py >/dev/null
+check "  deny names the path, the allowlist and the commands" \
+  bash -c '[[ "$1" == *"editing \`src/app.py\`"* && "$1" == *"docs/plans/"* && "$1" == *"/fablepowers:approve ed"* ]]' _ "$(oc_text)"
+check "absolute src path denied" test "$(ocperm "$R" "$R/src/app.py")" == deny
+check "README at toplevel denied" test "$(ocperm "$R" README.md)" == deny
+check "docs/specs allowed" test "$(ocperm "$R" docs/specs/ed.md)" == none
+check "docs/plans allowed" test "$(ocperm "$R" docs/plans/p.md)" == none
+check ".fablepowers/ed/progress.md allowed" test "$(ocperm "$R" .fablepowers/ed/progress.md)" == none
+check "path outside the toplevel allowed" test "$(ocperm "$R" "$TEST_ROOT/elsewhere/x.py")" == none
+check "docs/specsX denied" test "$(ocperm "$R" docs/specsX/a.md)" == deny
+check ".. traversal out of docs/specs denied" test "$(ocperm "$R" docs/specs/../../src/app.py)" == deny
+ln -s ../../src "$R/docs/plans/srclink"
+check "symlink from docs/plans to src denied" test "$(ocperm "$R" docs/plans/srclink/app.py)" == deny
+OC_EDIT='d["files"][0]["file"] = "src/app.py"'; oc permission-edit CWD="$R" FILE=docs/plans/ok.md PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "allowed resource but a files[] path in src: one bad path denies" deny
+OC_EDIT='d["resources"] = ["docs/plans/ok.md", "src/app.py"]'; oc permission-edit CWD="$R" FILE=docs/plans/ok.md PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "two resources, one in src" deny
+OC_EDIT='d["resources"] = []; d["files"] = []'; oc permission-edit CWD="$R" FILE=x PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "edit with no path while pending (fails closed)" deny
+OC_EDIT='d["resources"] = "src/app.py"; d["files"] = None'; oc permission-edit CWD="$R" FILE=x PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "edit with malformed resources while pending (fails closed)" deny
+OC_EDIT='d["resources"] = ["docs/plans/a\u0000b.md"]; d["files"] = []'; oc permission-edit CWD="$R" FILE=x PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "edit with an unresolvable path (NUL) while pending (fails closed)" deny
+OC_EDIT='d["resources"] = ["docs/plans/ok.md", "docs/plans/a\u0000b.md"]; d["files"] = []'; oc permission-edit CWD="$R" FILE=x PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "an allowed path plus an unresolvable one while pending (fails closed)" deny
+oc permission-edit-child CWD="$R" FILE=src/app.py PLUGIN="$OCPLUG"
+oc_expect "child session edit of src/app.py" deny
+R2="$TEST_ROOT/o4b"; new_repo "$R2"
+OC_EDIT='d["resources"] = []; d["files"] = []'; oc permission-edit CWD="$R2" FILE=x PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "edit with no path, nothing pending" none
+
+echo "25. OpenCode: plugin root closed while pending (SF2)"
+
+R="$TEST_ROOT/o5"; new_repo "$R"
+check "no pending: edit under the plugin root allowed" test "$(ocperm "$R" "$OCPLUG/hooks/approval_gate.py")" == none
+occreate "$R" docs/specs/pr.md
+check "pending: absolute path under the plugin root denied" test "$(ocperm "$R" "$OCPLUG/hooks/approval_gate.py")" == deny
+ocperm "$R" "$OCPLUG/hooks/approval_gate.py" >/dev/null
+check "  deny names the plugin directory" bash -c '[[ "$1" == *"under the fablepowers plugin directory"* ]]' _ "$(oc_text)"
+check "pending: relative ../ path into the plugin root denied" \
+  test "$(ocperm "$R" "../ocplugin/hooks/approval_gate.py")" == deny
+ln -s "$OCPLUG" "$TEST_ROOT/ocplugin-link"
+check "pending: path through a symlink to the plugin root denied" \
+  test "$(ocperm "$R" "$TEST_ROOT/ocplugin-link/hooks/x.py")" == deny
+check "pending: plugin_root given through a symlink, edit by its real path denied" \
+  test "$(ocperm "$R" "$OCPLUG/hooks/approval_gate.py" "$R" "$TEST_ROOT/ocplugin-link")" == deny
+check "pending: plugin root itself denied" test "$(ocperm "$R" "$OCPLUG")" == deny
+check "pending: sibling of the plugin root (prefix only) allowed" test "$(ocperm "$R" "$TEST_ROOT/ocplugin2/x")" == none
+OC_EDIT='del d["plugin_root"]'; oc permission-edit CWD="$R" FILE="$OCPLUG/hooks/approval_gate.py"; OC_EDIT=""
+oc_expect "no plugin_root in the payload: outside the toplevel, allowed" none
+# The plugin loaded from the repo it gates (dogfooding): the design dirs stay open.
+check "plugin root == toplevel: docs/specs allowed" test "$(ocperm "$R" docs/specs/pr.md "$R" "$R")" == none
+check "plugin root == toplevel: .fablepowers/pr/notes.md allowed" test "$(ocperm "$R" .fablepowers/pr/notes.md "$R" "$R")" == none
+check "plugin root == toplevel: hooks/approval_gate.py denied" test "$(ocperm "$R" hooks/approval_gate.py "$R" "$R")" == deny
+
+echo "26. OpenCode: config guard while pending (C14)"
+
+R="$TEST_ROOT/o6"; new_repo "$R"
+OCHOME="$TEST_ROOT/ochome"; OCXDG="$TEST_ROOT/ocxdg"; mkdir -p "$OCHOME/.config" "$OCXDG"
+GATE_ENV=("HOME=$OCHOME" "XDG_CONFIG_HOME=$OCXDG")
+CFG=(opencode.json sub/opencode.jsonc .opencode/plugins/x.js docs/plans/.opencode/agents/a.md docs/plans/opencode.json
+     .OpenCode/agents/a.md OPENCODE.JSON "$OCHOME/.config/opencode/tui.json" "$OCHOME/.config/opencode/agents/a.md"
+     "$OCXDG/opencode/opencode.json" "$OCXDG/opencode/plugins/p.js" "$OCHOME/.config/fablepowers/models.toml"
+     "$OCXDG/fablepowers/models.toml" "$TEST_ROOT/other/.opencode/x" "$TEST_ROOT/other/opencode.json")
+for f in "${CFG[@]}"; do
+  check "no pending: $f allowed" test "$(ocperm "$R" "$f")" == none
+done
+occreate "$R" docs/specs/cf.md
+for f in "${CFG[@]}"; do
+  check "pending: $f denied" test "$(ocperm "$R" "$f")" == deny
+done
+ocperm "$R" opencode.json >/dev/null
+check "  deny names the OpenCode config file" bash -c '[[ "$1" == *"OpenCode config file"* ]]' _ "$(oc_text)"
+for f in "$OCHOME/.config/other/x" "$OCHOME/.config/fablepowers/other.toml" "$OCXDG/opencode-notes/x" \
+         "$TEST_ROOT/other/opencode.json.bak" "$TEST_ROOT/other/.opencode"; do
+  check "pending: $f (not config, outside the repo) allowed" test "$(ocperm "$R" "$f")" == none
+done
+mkdir -p "$OCXDG/opencode"; ln -s "$OCXDG/opencode" "$TEST_ROOT/oc-cfglink"
+check "pending: symlink into the config home denied" test "$(ocperm "$R" "$TEST_ROOT/oc-cfglink/x.json")" == deny
+ln -s "$OCXDG" "$TEST_ROOT/oc-xdglink"
+GATE_ENV=("HOME=$OCHOME" "XDG_CONFIG_HOME=$TEST_ROOT/oc-xdglink")
+check "XDG_CONFIG_HOME a symlink: the real path of its opencode/ denied" test "$(ocperm "$R" "$OCXDG/opencode/y.json")" == deny
+check "XDG_CONFIG_HOME a symlink: the lexical path denied" test "$(ocperm "$R" "$TEST_ROOT/oc-xdglink/fablepowers/models.toml")" == deny
+GATE_ENV=("HOME=$OCHOME")
+check "XDG_CONFIG_HOME unset: ~/.config/opencode/x denied" test "$(ocperm "$R" "$OCHOME/.config/opencode/x")" == deny
+check "XDG_CONFIG_HOME unset: the former XDG dir is not config" test "$(ocperm "$R" "$OCXDG/opencode/x")" == none
+GATE_ENV=()
+
+echo "27. OpenCode: marker writes denied always"
+
+R="$TEST_ROOT/o7"; new_repo "$R"
+for f in .fablepowers/k/approved .fablepowers/k/pending "$R/.fablepowers/k/approved" .FablePowers/k/Approved \
+         .fablepowers/k/approved/x ".fablepowers/k/approved." "$TEST_ROOT/other/.fablepowers/k/approved"; do
+  check "no pending: $f denied" test "$(ocperm "$R" "$f")" == deny
+done
+ocperm "$R" .fablepowers/k/approved >/dev/null
+check "  marker deny names /fablepowers:approve" bash -c '[[ "$1" == *"/fablepowers:approve"* && "$1" == *"Do not retry"* ]]' _ "$(oc_text)"
+check "no pending: .fablepowers/k/approved.md allowed" test "$(ocperm "$R" .fablepowers/k/approved.md)" == none
+OC_EDIT='d["resources"] = ["docs/plans/ok.md"]; d["files"][0]["file"] = ".fablepowers/k/approved"'
+oc permission-edit CWD="$R" FILE=x PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "no pending: marker only in files[]" deny
+oc permission-edit-child CWD="$R" FILE=.fablepowers/k/pending PLUGIN="$OCPLUG"
+oc_expect "no pending: child session marker write" deny
+mkdir -p "$R/.fablepowers/k"; ln -s "$R/.fablepowers/k/approved" "$R/docs/plans/alias"
+check "no pending: symlink resolving to a marker denied" test "$(ocperm "$R" docs/plans/alias)" == deny
+mkdir -p "$R/docs/plans/elsewhere"; ln -s ../docs/plans/elsewhere "$R/.fablepowers/lk"
+check "no pending: .fablepowers/<symlinked key>/approved denied (lexical path)" test "$(ocperm "$R" .fablepowers/lk/approved)" == deny
+OC_EDIT='d["resources"] = [".fablepowers/k/appr\u0000oved"]; d["files"] = []'; oc permission-edit CWD="$R" FILE=x PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "no pending: unresolvable marker-like path" deny
+occreate "$R" docs/specs/k2.md
+check "pending: .fablepowers/k2/approved denied" test "$(ocperm "$R" .fablepowers/k2/approved)" == deny
+GATE_ENV=("FABLEPOWERS_GATE=off")
+check "FABLEPOWERS_GATE=off: marker write not denied" test "$(ocperm "$R" .fablepowers/k2/approved)" == none
+check "FABLEPOWERS_GATE=off: implementer dispatch not denied" test "$(ocsub "$R" fablepowers-implementer)" == none
+check "  would-be denials logged" grep -q "FABLEPOWERS_GATE=off: would deny OpenCode permission" "$R/.fablepowers/gate.log"
+GATE_ENV=()
+
+echo "28. OpenCode: approve / withdraw via prompt"
+
+R="$TEST_ROOT/o8"; new_repo "$R"
+ocprompt "$R" "/fablepowers:approve"
+oc_expect "nothing pending" context
+check "  says so, records nothing" bash -c '[[ "$1" == *"nothing is pending"* && ! -e "$2" ]]' _ "$(oc_text)" "$R/.fablepowers"
+occreate "$R" docs/specs/one.md
+for p in "please /fablepowers:approve" '$fablepowers:approve' "fablepowers:approve" "" "/fablepowers:Approve"; do
+  ocprompt "$R" "$p"
+  check "not an approval: '$p' (no decision, nothing recorded)" test "$(oc_verdict)" == none -a ! -e "$R/.fablepowers/one/approved"
+done
+for p in "/fablepowers:approve a b" $'/fablepowers:approve\nyes' "/fablepowers:approvex" '"/fablepowers:approve"' \
+         "'/fablepowers:approve one'" '""/fablepowers:approve""'; do
+  ocprompt "$R" "$p"
+  q="${p//$'\n'/\\n}"
+  check "not an approval: '$q' (not-recognised context, nothing recorded)" \
+    bash -c '[[ "$1" == context && "$2" == *"was not recognised"* && "$2" == *"send exactly \`/fablepowers:approve [key]\` on its own"* && "$2" == *"as an approval."* ]]' _ "$(oc_verdict)" "$(oc_text)"
+  check "  nothing recorded" test ! -e "$R/.fablepowers/one/approved" -a -e "$R/.fablepowers/one/pending"
+done
+ocprompt "$R" "/fablepowers:withdraw one two"
+check "near-miss withdraw says 'as a withdrawal'" bash -c '[[ "$1" == *"/fablepowers:withdraw [key]"* && "$1" == *"as a withdrawal."* ]]' _ "$(oc_text)"
+ocprompt "$R" "/fablepowers:approve" prompt-child
+oc_expect "child session prompt" none
+check "  nothing recorded" test ! -e "$R/.fablepowers/one/approved"
+ocprompt "$R" "/fablepowers:approve nosuch"
+check "unknown key: context, nothing recorded" \
+  bash -c '[[ "$1" == *"no pending design matches \`nosuch\`"* && ! -e "$2" ]]' _ "$(oc_text)" "$R/.fablepowers/one/approved"
+ocprompt "$R" $' \t/fablepowers:approve \t\n'
+oc_expect "one pending, blanks and one trailing newline" context
+A="$R/.fablepowers/one/approved"
+check "  approved written, via command" test "$(json_field "$A" via)" == '"command"'
+check "  spec_sha256 matches the spec" test "$(json_field "$A" spec_sha256)" == "\"$(sha256sum "$R/docs/specs/one.md" | cut -d' ' -f1)\""
+check "  context: recorded, plus the next step (SF11)" \
+  bash -c '[[ "$1" == *"approved design \`docs/specs/one.md\`"* && "$1" == *"fablepowers:implementation-plan"* ]]' _ "$(oc_text)"
+check "approved: implementer dispatch allowed" test "$(ocsub "$R" fablepowers-implementer)" == none
+check "approved: code edit allowed" test "$(ocperm "$R" src/app.py)" == none
+check "approved: config edit allowed" test "$(ocperm "$R" opencode.json)" == none
+ocprompt "$R" "/fablepowers:approve"
+oc_expect "after approval: nothing pending" context
+check "  nothing-pending approve still points at the next step" bash -c '[[ "$1" == *"fablepowers:implementation-plan"* ]]' _ "$(oc_text)"
+
+R="$TEST_ROOT/o8b"; new_repo "$R"
+occreate "$R" docs/specs/a.md; occreate "$R" docs/specs/b.md
+ocprompt "$R" "/fablepowers:approve"
+check "several pending, no key: lists keys, records nothing" \
+  bash -c '[[ "$1" == *"a (docs/specs/a.md)"* && "$1" == *"b (docs/specs/b.md)"* && ! -e "$2" && ! -e "$3" ]]' _ "$(oc_text)" "$R/.fablepowers/a/approved" "$R/.fablepowers/b/approved"
+ocprompt "$R" "/fablepowers:approve docs/specs/b.md"
+check "spec path b: only b approved" test -f "$R/.fablepowers/b/approved" -a ! -e "$R/.fablepowers/a/approved"
+check "one still pending: dispatch denied" test "$(ocsub "$R" fablepowers-implementer)" == deny
+ocprompt "$R" "/fablepowers:withdraw"
+oc_expect "withdraw, one pending" context
+check "  a/pending removed, spec kept" test ! -e "$R/.fablepowers/a/pending" -a -f "$R/docs/specs/a.md"
+check "  context: withdrawn, not approved" bash -c '[[ "$1" == *"withdrew design \`docs/specs/a.md\`"* && "$1" == *"not approved"* ]]' _ "$(oc_text)"
+check "after withdraw: dispatch allowed" test "$(ocsub "$R" fablepowers-implementer)" == none
+
+echo "29. OpenCode: approve / withdraw via command"
+
+R="$TEST_ROOT/o9"; new_repo "$R"
+occmd "$R" approve ""
+check "nothing pending: context" bash -c '[[ "$1" == context && "$2" == *"nothing is pending"* ]]' _ "$(oc_verdict)" "$(oc_text)"
+occreate "$R" docs/specs/c1.md; occreate "$R" docs/specs/c2.md
+occmd "$R" approve ""
+check "several pending, no args: nothing recorded" test ! -e "$R/.fablepowers/c1/approved" -a ! -e "$R/.fablepowers/c2/approved"
+occmd "$R" approve "foo bar"
+check "args naming no design: context, nothing recorded" \
+  bash -c '[[ "$1" == *"no pending design matches \`foo bar\`"* && ! -e "$2" ]]' _ "$(oc_text)" "$R/.fablepowers/c1/approved"
+occmd "$R" approve " c1 "
+oc_expect "approve c1 (args trimmed)" context
+check "  c1 approved via command" test "$(json_field "$R/.fablepowers/c1/approved" via)" == '"command"'
+check "  context carries the next step" bash -c '[[ "$1" == *"fablepowers:implementation-plan"* ]]' _ "$(oc_text)"
+occmd "$R" withdraw ""
+oc_expect "withdraw, one pending (c2)" context
+check "  c2 withdrawn" test ! -e "$R/.fablepowers/c2/pending"
+occreate "$R" docs/specs/c3.md
+occmd "$R" bogus ""
+oc_expect "unknown verb" none
+OC_EDIT='del d["args"]'; oc command CWD="$R" VERB=approve PLUGIN="$OCPLUG"; OC_EDIT=""
+oc_expect "args missing: as empty" context
+check "  c3 approved" test -f "$R/.fablepowers/c3/approved"
+
+echo "30. OpenCode: question path (C13)"
+
+R="$TEST_ROOT/o10"; new_repo "$R"
+ocq "$R" Approve
+oc_expect "Approve with nothing pending" context
+check "  not recorded, says why" bash -c '[[ "$1" == *"was not recorded because no design is pending"* ]]' _ "$(oc_text)"
+occreate "$R" docs/specs/q.md
+ocq "$R" "Changes needed"
+oc_expect "Changes needed" none
+check "  still pending" test ! -e "$R/.fablepowers/q/approved"
+for e in 'd["output"]["answers"] = [["Approve", "Changes needed"]]' \
+         'd["output"]["answers"] = [["approve"]]' \
+         'd["output"]["answers"] = [[]]' \
+         'd["output"]["answers"] = ["Approve"]' \
+         'd["output"]["answers"] = [["Approve"], ["Approve"]]' \
+         'd["input"]["questions"][0]["options"].append({"label": "Later"})' \
+         'd["input"]["questions"][0]["options"][1]["label"] = "Reject"' \
+         'd["input"]["questions"].append(dict(d["input"]["questions"][0], question="Again?"))' \
+         'd["input"]["questions"] = []' \
+         'd["status"] = "error"' \
+         'd["parent_id"] = "ses_parent"' \
+         'd["output"] = None'; do
+  OC_EDIT="$e"; ocq "$R" Approve; OC_EDIT=""
+  check "not recorded: $e" test "$(oc_verdict)" == none -a ! -e "$R/.fablepowers/q/approved"
+done
+oc after-question-cancelled CWD="$R" PLUGIN="$OCPLUG"
+oc_expect "question cancelled in opencode run (status error)" none
+check "  nothing recorded" test ! -e "$R/.fablepowers/q/approved"
+ocq "$R" Approve
+oc_expect "exactly Approve, one pending" context
+check "  approved via question" test "$(json_field "$R/.fablepowers/q/approved" via)" == '"question"'
+check "  context says recorded" bash -c '[[ "$1" == *"approved design \`docs/specs/q.md\`"* ]]' _ "$(oc_text)"
+check "  dispatch now allowed" test "$(ocsub "$R" fablepowers-implementer)" == none
+R="$TEST_ROOT/o10b"; new_repo "$R"
+occreate "$R" docs/specs/a.md; occreate "$R" docs/specs/b.md
+ocq "$R" Approve
+check "two pending: not recorded, lists both" \
+  bash -c '[[ "$1" == *"several designs are pending"* && "$1" == *"/fablepowers:approve <key>"* && ! -e "$2" ]]' _ "$(oc_text)" "$R/.fablepowers/a/approved"
+R="$TEST_ROOT/o10c"; new_repo "$R"
+occreate "$R" docs/specs/gone.md; rm "$R/docs/specs/gone.md"
+ocq "$R" Approve
+check "spec deleted: not recorded" \
+  bash -c '[[ "$1" == *"no longer exists"* && ! -e "$2" ]]' _ "$(oc_text)" "$R/.fablepowers/gone/approved"
+
+echo "31. OpenCode: failures fail open with one JSON object"
+
+R="$TEST_ROOT/o11"; new_repo "$R"
+occreate "$R" docs/specs/f.md
+chmod 555 "$R/.fablepowers/f"
+occmd "$R" approve ""
+if [[ ! -w "$R/.fablepowers/f" ]]; then
+  oc_expect "approval write fails (read-only key dir): internal error" none
+  check "  logged" grep -q "internal error (OpenCode), allowed" "$R/.fablepowers/gate.log"
+else
+  pass "  (skipped: running as a user who can write a 555 directory)"
+fi
+chmod 755 "$R/.fablepowers/f"
+RC=0; OUT="$(printf 'not json' | python3 -I "$PLUGIN/hooks/approval_gate.py")" || RC=$?
+check "malformed (non-JSON) input: no output, exit 0 (unchanged)" test "$RC:$OUT" == "0:"
+
 echo
 if [[ "$FAILURES" -eq 0 ]]; then
   echo "All approval-gate tests passed."

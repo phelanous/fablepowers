@@ -1,0 +1,21 @@
+{
+  "harness": "opencode",
+  "hook": "permission",
+  "cwd": "__CWD__",
+  "session_id": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+  "parent_id": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+  "plugin_root": "__PLUGIN__",
+  "action": "edit",
+  "resources": [
+    "__FILE__"
+  ],
+  "files": [
+    {
+      "file": "__FILE__",
+      "patch": "Index: __FILE__\n===================================================================\n--- __FILE__\n+++ __FILE__\n@@ -0,0 +1,1 @@\n+child\n\\ No newline at end of file\n",
+      "status": "added",
+      "additions": 1,
+      "deletions": 0
+    }
+  ]
+}

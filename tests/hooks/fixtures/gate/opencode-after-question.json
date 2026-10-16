@@ -1,0 +1,36 @@
+{
+  "harness": "opencode",
+  "hook": "after",
+  "cwd": "__CWD__",
+  "session_id": "ses_ebd57ee19ffedY6kFQQpZ9Vhxd",
+  "parent_id": null,
+  "plugin_root": "__PLUGIN__",
+  "tool": "question",
+  "input": {
+    "questions": [
+      {
+        "header": "Design",
+        "question": "Approve the design?",
+        "options": [
+          {
+            "label": "Approve",
+            "description": "approve"
+          },
+          {
+            "label": "Changes needed",
+            "description": "changes"
+          }
+        ]
+      }
+    ]
+  },
+  "status": "completed",
+  "output": {
+    "answers": [
+      [
+        "__ANSWER__"
+      ]
+    ]
+  },
+  "existed": {}
+}

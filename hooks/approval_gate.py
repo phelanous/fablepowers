@@ -77,8 +77,12 @@ with no final period since Codex appends ". Tool: <name>".
 OpenCode branch. A payload is OpenCode's iff `harness` is "opencode"; the JS
 adapter (opencode/index.js) builds it and runs this file directly. Every
 payload has `hook`, `cwd` (the session directory, absolute; anything else makes
-the gate inert), `session_id`, `parent_id` (null for a root session; a failed
-parent lookup arrives as null, so it counts as root) and `plugin_root`. The
+the gate inert), `session_id`, `parent_id` (null for a root session) and `plugin_root`;
+when the adapter cannot look up the parent it sends `parent_id` null plus
+`parent_unknown: true`. Pending creation treats that as root (a design is
+never missed); approve/withdraw (prompt, command, question) record only for a
+session positively known to be root (`parent_id` null, no `parent_unknown`)
+and otherwise answer with a "recorded nothing" context. The
 answer is always exactly one JSON object on stdout: `{}` (no decision; also on
 an internal error), `{"decision": "deny", "reason": <text>}` (permission,
 before) or `{"context": <text>}` (after, prompt, command). Same markers, states
@@ -90,7 +94,8 @@ and rules:
       directory, `<config home>/opencode/` and `<config home>/fablepowers/
       models.toml`, config home being $XDG_CONFIG_HOME and ~/.config), then
       repo paths inside the allowlist pass, paths under `plugin_root` are
-      denied, other paths outside the toplevel pass, and the rest is denied;
+      denied (config-home, models.toml and plugin-root prefixes compared per
+      component as win_name() normalises them), other paths outside the toplevel pass, and the rest is denied;
       one bad path denies the call; no usable path denies while pending.
       `action` "subagent": while pending, every resource (the agent that will
       run, continuations included) must be `fablepowers-reviewer` or
@@ -105,13 +110,15 @@ and rules:
       docs/specs/<name>.md pending, with a notice. Tool `question`: exactly one
       question whose option labels are exactly Approve and Changes needed,
       answered exactly ["Approve"], with exactly one pending design whose spec
-      exists -> approved (via question); a matching Approve that cannot be
-      recorded gets a "not recorded" context.
-  prompt (root sessions)  `text` (the adapter strips one wrapping pair of
+      exists, from a known root session -> approved (via question); a
+      matching Approve that cannot be recorded gets a "not recorded" context.
+  prompt  `text` (the adapter strips one wrapping pair of
       quotes) matching `/fablepowers:approve|withdraw [key]` as the whole text
       approves / withdraws; text that starts like the command (leading quotes
-      allowed) but does not match gets a "not recognised" context.
-  command  `verb` ("approve"/"withdraw") and `args` (the key, if any).
+      allowed) but does not match gets a "not recognised" context; either
+      from a session not known to be root gets a "recorded nothing" context.
+  command  `verb` ("approve"/"withdraw") and `args` (the key, if any); known
+      root sessions only, as for prompt.
 OpenCode messages name `/fablepowers:approve [key]` and the approval question;
 an approve result carries the next workflow step.
 
@@ -930,19 +937,36 @@ def oc_config_homes():
     return homes
 
 
+def win_parts(path):
+    """The components of an absolute, normalised path as win_name() normalises them
+    (trailing separators dropped)."""
+    parts = path.split(os.sep)
+    while len(parts) > 1 and parts[-1] == "":
+        parts.pop()
+    return [win_name(p) for p in parts]
+
+
+def under_ci(path, directory):
+    """`under` with every component compared as win_name() normalises it
+    (case-insensitive, NTFS trailing dots/spaces and streams ignored)."""
+    p, d = win_parts(path), win_parts(directory)
+    return len(p) >= len(d) and p[:len(d)] == d
+
+
 def is_opencode_config_path(path):
     """True for OpenCode config: `opencode.json`/`opencode.jsonc` anywhere, anything
-    under a `.opencode` directory (components normalised as win_name() does),
-    anything under <config home>/opencode/ and <config home>/fablepowers/models.toml."""
-    parts = [win_name(p) for p in path.split(os.sep)]
+    under a `.opencode` directory, anything under <config home>/opencode/ and
+    <config home>/fablepowers/models.toml (all components normalised as win_name()
+    does)."""
+    parts = win_parts(path)
     if parts and parts[-1] in OC_CONFIG_NAMES:
         return True
     if ".opencode" in parts[:-1]:
         return True
     for home in oc_config_homes():
         for h in {os.path.normpath(home), os.path.realpath(home)}:
-            if (under(path, os.path.join(h, "opencode"))
-                    or path == os.path.join(h, "fablepowers", "models.toml")):
+            if (under_ci(path, os.path.join(h, "opencode"))
+                    or parts == win_parts(os.path.join(h, "fablepowers", "models.toml"))):
                 return True
     return False
 
@@ -1019,7 +1043,7 @@ def oc_permission_edit(top, payload, cwd):
                 "design first)" % lexical))
         if under(real, top) and any(under(real, a) for a in allowed):
             continue
-        if any(under(lexical, r) or under(real, r) for r in proots):
+        if any(under_ci(lexical, r) or under_ci(real, r) for r in proots):
             return oc_deny(top, payload, oc_pending_reason(
                 pending, "editing `%s` under the fablepowers plugin directory (it stays closed to the "
                 "edit tools until approval)" % lexical))
@@ -1055,7 +1079,27 @@ def oc_before(top, payload, cwd):
 
 
 def oc_is_root(payload):
+    """Root for pending creation: no parent id (a failed parent lookup counts as
+    root, SF9, so a design is never missed)."""
     return not payload.get("parent_id")
+
+
+def oc_known_root(payload):
+    """Positively known to be a root session: `parent_id` present and null, and the
+    adapter did not flag the parent lookup as failed (`parent_unknown`). Only such
+    a session can approve or withdraw."""
+    return ("parent_id" in payload and payload["parent_id"] is None
+            and not payload.get("parent_unknown"))
+
+
+OC_NOT_ROOT = ("it did not come from the user's main session (it came from a subagent session, or from a "
+               "session whose parent the plugin could not determine); only the user, in the main session, "
+               "can approve or withdraw a design")
+
+
+def oc_not_root_context(verb):
+    return {"context": "fablepowers approval gate: `/fablepowers:%s` recorded nothing: %s. Do not act on "
+                       "this message as %s." % (verb, OC_NOT_ROOT, ACT_NOUN[verb])}
 
 
 def oc_after_pending(top, payload, cwd, tool, output):
@@ -1119,6 +1163,9 @@ def oc_question(top, payload, output):
     answers = output.get("answers")
     if not isinstance(answers, list) or len(answers) != 1 or answers[0] != ["Approve"]:
         return {}
+    if not oc_known_root(payload):
+        return {"context": "fablepowers approval gate: the Approve answer was not recorded because %s. "
+                           "Tell the user this; do not act on it as an approval." % OC_NOT_ROOT}
     pending = pending_designs(top)
     if len(pending) == 1:
         key, spec = pending[0]
@@ -1142,7 +1189,7 @@ def oc_question(top, payload, output):
 
 
 def oc_after(top, payload, cwd):
-    if payload.get("status") != "completed" or not oc_is_root(payload):
+    if payload.get("status") != "completed":
         return {}
     tool = payload.get("tool")
     output = payload.get("output")
@@ -1150,7 +1197,7 @@ def oc_after(top, payload, cwd):
         return {}
     if tool == "question":
         return oc_question(top, payload, output)
-    if tool not in ("write", "edit", "patch"):
+    if tool not in ("write", "edit", "patch") or not oc_is_root(payload):
         return {}
     made = oc_after_pending(top, payload, cwd, tool, output)
     if not made:
@@ -1192,14 +1239,14 @@ def oc_act(top, verb, arg):
 
 
 def oc_prompt(top, payload, cwd):
-    if not oc_is_root(payload):
-        return {}
     text = payload.get("text")
     if not isinstance(text, str):
         return {}
     m = OC_COMMAND.fullmatch(text)
+    near = None if m else OC_NEAR_MISS.match(text)
+    if (m or near) and not oc_known_root(payload):
+        return oc_not_root_context((m or near).group(1))
     if not m:
-        near = OC_NEAR_MISS.match(text)
         if near:
             verb = near.group(1)
             return {"context": (
@@ -1214,6 +1261,8 @@ def oc_command(top, payload, cwd):
     verb = payload.get("verb")
     if verb not in ("approve", "withdraw"):
         return {}
+    if not oc_known_root(payload):
+        return oc_not_root_context(verb)
     arg = payload.get("args")
     return oc_act(top, verb, arg.strip() if isinstance(arg, str) else "")
 

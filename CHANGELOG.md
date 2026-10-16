@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.6.0 — 2026-10-16
+
+fablepowers runs in OpenCode 2.x from the same repository, with the same skills, seats, approval gate and workflow map. Claude Code and Codex behaviour is unchanged. Tested with OpenCode 2.0.29. Reasons and spike evidence are in `docs/rationale.md` (Decisions 2026-10-16: the OpenCode port).
+
+- **Installs on OpenCode as a plugin.** Add `"plugins": ["fablepowers@git+https://github.com/phelanous/fablepowers.git"]` (optionally `#v0.6.0`) to `~/.config/opencode/opencode.json` or a project's `opencode.json` or `.opencode/opencode.json`. Then restart OpenCode, including its background service. A root `package.json` (`type: module`, `main: opencode/index.js`, a `files` list) makes the repo installable from git. A root `index.js` re-export serves the local-directory form, which ignores `main`. The plugin uses `node:` builtins only.
+- **The plugin is an adapter.** `opencode/index.js` registers every skill except approve and withdraw as `fablepowers:<name>`. It registers the three seats as subagents: `fablepowers-implementer`, `fablepowers-strict-implementer` and `fablepowers-reviewer`. Each has its role file named in its system prompt, sub-spawns denied, and `external_directory` allowed on the plugin root. The plugin also registers the `/fablepowers:approve` and `/fablepowers:withdraw` commands, injects the bootstrap, and turns OpenCode's events into gate payloads. Every gate decision is still made by `hooks/approval_gate.py`, and the seat table is still parsed by `hooks/session-start`. All plugin state is per instance, because OpenCode keeps one plugin instance per directory in one server process.
+- **Bootstrap on OpenCode.** It is prepended to the first user message of each root session, re-added after compaction, never doubled, and skipped for child sessions. It holds a preamble naming OpenCode, `references/opencode.md` and the plugin root, then the seat table and its warnings, then the workflow map. It comes from the new `hooks/session-start --opencode` mode, which never reads stdin and prints JSON: `context`, `seats` and `warnings`. It runs once when the plugin loads (3 s timeout). Without python, the bootstrap's first line says the gate is disabled. Without bash, or when session-start fails, a `bootstrap unavailable` line comes first, followed by the map with no seat table.
+- **Seats are pinned per user in `[opencode]`.** The table lives in `${XDG_CONFIG_HOME:-~/.config}/fablepowers/models.toml`. Keys are `implementer`, `strict_implementer` and `reviewer`. A value is `provider/model[#variant]`, up to 128 characters; the variant goes to the agent's `model.variant`. An effort key warns and is ignored. An unset or invalid seat runs on the session model, and one warning line names the unpinned seats. The table is read when the plugin loads, so a change needs an OpenCode restart. A pinned seat's per-dispatch `model` argument is stripped. `[codex]` keeps its 0.5.0 grammar and output byte for byte, and each mode ignores the other's table.
+- **The approval gate works on OpenCode.** `approval_gate.py` gains a branch keyed on `harness: "opencode"`.
+  - **Pending:** a root session's `write` creating `docs/specs/<name>.md` (`existed: false`), an `edit` with an `added` file, or a `patch` add whose target the plugin found missing before the call. Paths are resolved against the session directory, then the git toplevel. The notice is appended to the tool result the model sees.
+  - **Denied while pending,** via `permission.evaluate` (with a second check in `tool.execute.before` for dispatch): a `subagent` dispatch to anything but `fablepowers-reviewer` or `explore`, judged by the agent that will actually run, continuations included. Also denied: edits outside `docs/specs/`, `docs/plans/` and `.fablepowers/`; OpenCode config (`opencode.json`/`.jsonc` anywhere, `.opencode/`, the config homes' `opencode/` and `fablepowers/models.toml`); and the plugin root.
+  - **Always denied:** marker edits.
+  - **Fails open:** the adapter only ever sets `effect = "deny"`. Every hook body is wrapped to fail open, because OpenCode fails a tool or a turn when a hook throws. Gate calls time out after 2 s; failures are logged to `.fablepowers/gate.log`.
+- **Approval on OpenCode.** There are three ways:
+  - answering **Approve** to design-spec's question in the TUI: exactly one question, exact labels, exactly one pending design;
+  - `/fablepowers:approve [key]` typed in the TUI, which runs the plugin command and posts the gate's answer as a message;
+  - the same text as the whole message of the main session in `opencode run`, which does not route slash commands. One wrapping pair of quotes is stripped, and the answer is appended to the message.
+
+  `/fablepowers:withdraw [key]` works the same way. Approvals record only from a session positively known to be root. A subagent session or a failed lookup gets a "recorded nothing" answer, while pending creation still treats an unknown session as root. An approval's answer names the next step (`fablepowers:implementation-plan`).
+- **Gate path comparisons on OpenCode** are per component and case-insensitive, with NTFS normalisation, for markers, config homes, `models.toml` and the plugin root.
+- **OpenCode reference.** `skills/workflow/references/opencode.md` maps the skills' actions to OpenCode tools: `skill`, `subagent` with a seat agent, `question`, and no todo tool. It also covers seats and `models.toml`, the dispatch convention (including continuation, which switches a child's agent), the bootstrap, the approval mechanism and its differences from Claude Code, requirements, testing with `--standalone`, accepted gaps, and where session logs live. The workflow map and design-spec name the OpenCode approve command. The Claude Code injected context stays under 6,000 characters.
+- **Requirements.** Python 3.8+ for the gate and bash for the seat table. The plugin finds them the way the launcher does: `FABLEPOWERS_PYTHON` / `FABLEPOWERS_BASH`, then PATH, then absolute fallbacks. It sees the OpenCode server's environment, so set these where the background service starts.
+- **Accepted gaps on OpenCode**, documented in the reference:
+  - shell writes;
+  - self-approval by the model through the shell (`opencode run -s … /fablepowers:approve`) or the server API;
+  - edits to the installed plugin while no design is pending;
+  - config in locations the guard doesn't list;
+  - another plugin's permission hook overriding a deny.
+
+  The Codex reference also records the custom `CODEX_HOME` guard-parity gap: only that home's `config.toml` is guarded, and it is compared exactly.
+- **Tests.** New: `tests/opencode/run.sh` (`node --test`; skips without node), plugin tests against a fake `ctx` built from real OpenCode 2.0.29 payloads (`tests/opencode/fixtures/`), and integration tests that run the real gate and session-start for each payload type. OpenCode sections were added to the approval-gate and session-start suites. A version-parity check covers `package.json`, both `.claude-plugin` manifests and the CHANGELOG head.
+
 ## 0.5.0 — 2026-10-15
 
 fablepowers runs in OpenAI Codex (CLI and app) from the same repository: same skills, seats, approval gate and workflow map. Claude Code behaviour is unchanged. Tested with Codex CLI 0.162.1. Reasons and spike evidence in `docs/rationale.md` (Decisions 2026-10-15: the Codex port).

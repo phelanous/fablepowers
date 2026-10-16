@@ -669,6 +669,20 @@ test('npm pack --dry-run lists exactly the intended files', { skip: spawnSync('n
   assert.equal(pkg.main, 'opencode/index.js');
 });
 
+test('version parity: package.json, both .claude-plugin manifests and the CHANGELOG head agree', () => {
+  const read = (...p) => JSON.parse(fs.readFileSync(path.join(ROOT, ...p), 'utf8'));
+  const pkg = read('package.json').version;
+  const plugin = read('.claude-plugin', 'plugin.json').version;
+  const market = read('.claude-plugin', 'marketplace.json').plugins.filter((p) => p.name === 'fablepowers');
+  const head = /^## (\S+)/m.exec(fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8'));
+  assert.match(pkg, /^\d+\.\d+\.\d+$/);
+  assert.equal(plugin, pkg, '.claude-plugin/plugin.json version');
+  assert.equal(market.length, 1, 'one fablepowers entry in marketplace.json');
+  assert.equal(market[0].version, pkg, '.claude-plugin/marketplace.json version');
+  assert.ok(head, 'CHANGELOG.md has a version heading');
+  assert.equal(head[1], pkg, 'newest CHANGELOG.md heading');
+});
+
 test('root index.js re-exports the plugin (local-directory form)', async () => {
   const m = await import(path.join(ROOT, 'index.js'));
   const o = await import(path.join(ROOT, 'opencode', 'index.js'));

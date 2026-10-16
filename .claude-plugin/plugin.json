@@ -1,6 +1,6 @@
 {
   "name": "fablepowers",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Outcome-gated development workflow for frontier orchestrator models, with pinned-model implementer and reviewer agents; forked from superpowers.",
   "author": {
     "name": "Phelanous"

@@ -407,3 +407,124 @@ during normal sessions, which test procedures must undo.
    the reason and ends its turn, or retries.
 3. **Approvals that never registered** (users typing "approve" in chat, or
    picking the skill in the app), which would mean the ask's wording needs work.
+
+## Decisions (2026-10-16): the OpenCode port
+
+0.6.0 runs the workflow on OpenCode 2.x. The evidence comes from three runs:
+
+- the first OpenCode spike (`docs/plans/2026-10-14-opencode-spike.md`: skills, bootstrap, seats);
+- the gate spike (`docs/plans/2026-10-16-opencode-gate-spike.md`: OpenCode 2.0.29, a logging probe plugin, `--standalone` runs plus a private `opencode serve`);
+- the port's own verification run before any gate code (Task 0 of `docs/plans/2026-10-16-opencode-port.md`, whose real hook payloads are committed under `tests/opencode/fixtures/`).
+
+Each point below was observed by execution unless marked otherwise.
+
+### A plugin as an adapter, not a second implementation
+
+OpenCode does not read Claude-format hooks. Its extension point is a JS plugin
+that runs inside the server. That plugin (`opencode/index.js`) could have
+re-implemented the gate. It doesn't: it translates OpenCode's events into a
+`harness: "opencode"` payload and runs the same `hooks/approval_gate.py`
+(about 17 ms per call in the spike, sync or async), and it gets the bootstrap
+and seat table from the same `hooks/session-start`, through a new
+`--opencode` mode that prints JSON. Markers, states and rules then stay one
+implementation across three harnesses, and the gate's existing tests and
+mutation checks cover OpenCode's rules too. The cost is a python and a bash
+dependency inside a JS plugin, so the plugin searches for them the way the
+Claude Code launcher does and says in the bootstrap when either is missing.
+
+### Install and entry point
+
+The git form, `"plugins": ["fablepowers@git+…"]`, installs through npm
+semantics into OpenCode's cache and honours `package.json` `main` (spike §6,
+run with superpowers' own repo). The local-directory form does not read `main`.
+It tries `<dir>/server` and then `<dir>/index`, and silently skips a plugin
+with neither (Task 0 item 2: the first run loaded nothing and logged nothing).
+Hence a root `index.js` re-export. The config key is `plugins`; 1.x used
+`plugin`.
+
+### Where the session lives
+
+The plugin runs in the server process. A background service started elsewhere
+has an unrelated `process.cwd()`, and in this version `ctx.directory` is
+undefined. `session.get({sessionID}).location.directory` is the session's
+absolute directory, and child sessions inherit it (Task 0, MF2, with a private
+server launched outside the repo). Edit `resources` are relative to that
+directory, which may be a subdirectory of the repo, even when the model passed
+an absolute path. So the gate resolves against the session directory, then
+judges against the git toplevel. OpenCode creates **one plugin instance per
+directory** in one server process, which ruled out the planned process-global
+single-instance flag: it would have disabled the plugin for every directory
+after the first. Duplicate plugin entries with the same id are already
+deduplicated by OpenCode.
+
+### The gate on OpenCode
+
+- **Deny holds where it matters.** `permission.evaluate` with `effect = "deny"`
+  and a message blocks `subagent` and `edit` (write/edit/patch), and the model
+  sees the message. A throw in `tool.execute.before` also blocks, so dispatch
+  is checked twice.
+- **Agent identity is real.** `resources[0]` of a `subagent` evaluation is the
+  agent that will run. Continuing a child with its `sessionID` *switches* the
+  child to the agent passed (Task 0 item 5), so the planned lookup of the
+  child's original agent was dropped: the ordinary dispatch rule already
+  covers continuation. Unlike Codex's task-name convention, a mislabelled
+  reviewer is not possible.
+- **New-file detection is exact.** `write` reports `existed`, and `edit`
+  reports a file status. `patch` reports neither, so the plugin stats each
+  add target just before the call. `patch` exists only for `gpt-*` models, so
+  it is covered by unit tests and source reading, not a live run.
+- **Model-visible result text is `result.content[]`**, not `result.output`.
+  The probe mutated both, and only `content` reached the model (Task 0
+  item 4). The pending notice is appended there.
+- **Hooks that throw fail closed in OpenCode.** A thrown error rejects the
+  prompt, errors the tool, replaces an executed tool's result, or aborts the
+  turn (Task 0). The plugin wraps every hook body to fail open and log, so the
+  only blocking outcomes are the gate's explicit denies. The adapter never
+  sets an allow, so the user's own permission rules keep working.
+- **Approval has three paths.** A typed slash command in the TUI runs the
+  plugin's command handler instead of a model turn. Its input carries only
+  the arguments, so there is one handler per verb, and its answer is posted
+  with `session.synthetic`, which starts a turn. `opencode run` does not
+  route slash commands, so the same text arriving as the root session's
+  prompt approves too. `opencode run` quotes any argument holding a space,
+  so the plugin strips one wrapping pair. The `question` tool blocks until
+  the form is answered and exposes `answers` to the after-hook (spike §7, via
+  a private server's form API). In `opencode run` it is cancelled.
+- **Only a known root session approves.** Building the plugin showed that a
+  failed session lookup made a child session look like a root. Approvals now
+  need a positively identified root session; pending creation still treats an
+  unknown session as root, so a design is never missed.
+- **Config guard and plugin root.** While a design is pending, edits to
+  OpenCode config (`opencode.json(c)`, `.opencode/`, the config homes'
+  `opencode/` and `fablepowers/models.toml`) and to the plugin root are
+  denied. Config-home, `models.toml` and plugin-root paths are compared per
+  component and case-insensitively, as markers are. Outside pending, the
+  installed plugin stays editable: that is the same accepted gap as Claude
+  Code's plugin hook files and Codex's plugin cache.
+- **Self-approval through the shell or API** (`opencode run -s <id>
+  /fablepowers:approve`, `session.command`, a form reply) is an accepted gap,
+  the Codex precedent: shell writes are already outside the gate's threat
+  model. The model has no command tool, and child sessions get no `question`
+  or `subagent` tool at the default depth.
+
+### Seats and models
+
+A subagent's model resolves as dispatch `model`, then the agent's `model`,
+then the parent session's (spike §8, source). So "unpinned" means leaving the
+agent's model unset: the seat runs on the session's model. The bootstrap warns
+about unpinned seats. OpenCode users' providers vary (the test account had
+only free Zen models), so fablepowers cannot choose defaults for them. A
+per-dispatch `model` overrides an agent's pin (first spike §4), so the plugin
+strips it for pinned seats. A seat's `#variant` must go in `model.variant`: a
+top-level `variant` was silently ignored (Task 0). Agents register once per
+plugin instance, so the seat table is read then and cached, and a
+`models.toml` edit needs a server restart, background service included.
+
+### What to watch next audit
+
+1. **Seat models actually used** on OpenCode (`session_v2.model` of child
+   sessions) against the bootstrap's table, and how often seats ran unpinned.
+2. **Approvals that never registered**: a command typed in a subagent view,
+   a quoted or decorated `opencode run` message, or "approve" in chat.
+3. **Gate log lines from the plugin** (`opencode plugin: … failed, allowed`,
+   timeouts), which would mean the fail-open path is hiding a real problem.

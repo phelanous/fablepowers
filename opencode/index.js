@@ -42,6 +42,7 @@ const SESSION_CACHE_MAX = 512;
 const EXISTED_MAX = 256;
 const COMMAND_TEXT = /\/fablepowers:(approve|withdraw)/;
 const GATE_FAILED = Symbol('fablepowers gate call failed'); // on gate()'s {} result: why
+const GATE_NOT_RUN = Symbol('fablepowers gate not run'); // with GATE_FAILED: the gate was never started
 
 // --- small helpers -----------------------------------------------------------------
 
@@ -256,7 +257,7 @@ export function createPlugin(options = {}) {
     async function gate(hook, sid, fields) {
       const info = await sessionInfo(sid);
       if (!python) return {};
-      if (!info.dir) return { [GATE_FAILED]: 'the session directory is unknown' };
+      if (!info.dir) return { [GATE_FAILED]: 'the session directory is unknown', [GATE_NOT_RUN]: true };
       const payload = {
         harness: 'opencode', hook, cwd: info.dir, session_id: sid ?? null,
         parent_id: info.parentID, plugin_root: ROOT, ...fields,
@@ -350,12 +351,14 @@ export function createPlugin(options = {}) {
       execute: async (input) => {
         let sid = null;
         try { sid = typeof input?.sessionID === 'string' && input.sessionID ? input.sessionID : null; } catch { /* none */ }
-        const notRecorded = (why) => `fablepowers approval gate: \`/fablepowers:${verb}\` was not recorded: ${why}. Tell the user, and ask them to run \`/fablepowers:${verb}\` again (details in .fablepowers/gate.log).`;
+        // `maybe`: the gate may have run (and recorded) before it timed out or failed.
+        const notRecorded = (why, maybe = true) => `fablepowers approval gate: \`/fablepowers:${verb}\` ${maybe ? 'may not have been' : 'was not'} recorded: ${why}. Tell the user, and ask them to run \`/fablepowers:${verb}\` again (details in .fablepowers/gate.log).`;
         if (!sid) {
           logAt(locationDir, `command ${verb} without a sessionID; nothing recorded`);
-          throw new Error(notRecorded('the command arrived without a session id, so the gate could not tell which session sent it'));
+          throw new Error(notRecorded('the command arrived without a session id, so the gate could not tell which session sent it', false));
         }
         let text = null;
+        let dir = null;
         try {
           if (!python) {
             text = `fablepowers approval gate disabled: python3 not found, so \`/fablepowers:${verb}\` recorded nothing. Tell the user to install Python 3.8+ (or set FABLEPOWERS_PYTHON) and restart OpenCode.`;
@@ -363,17 +366,19 @@ export function createPlugin(options = {}) {
             const args = typeof input?.prompt?.text === 'string' ? input.prompt.text : '';
             const out = await gate('command', sid, { verb, args });
             if (typeof out.context === 'string' && out.context) text = out.context;
-            else text = notRecorded(out[GATE_FAILED] || 'the gate gave no answer');
+            else text = notRecorded(out[GATE_FAILED] || 'the gate gave no answer', !out[GATE_NOT_RUN]);
           }
         } catch (e) {
-          let dir = null;
           try { dir = (await sessionInfo(sid)).dir; } catch { /* none */ }
           report(`command ${verb}`, dir, e);
           text = notRecorded(`the plugin hit an error (${e && e.message ? e.message : e})`);
         }
         try {
           if (typeof ctx.session?.synthetic === 'function') await ctx.session.synthetic({ sessionID: sid, text });
-        } catch (e) { report(`command ${verb} message`, null, e); }
+        } catch (e) {
+          if (!dir) { try { dir = (await sessionInfo(sid)).dir; } catch { /* none */ } }
+          report(`command ${verb} message`, dir, e);
+        }
       },
     });
     await guard('command registration', async () => {

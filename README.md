@@ -107,6 +107,92 @@ trusted, or set `FABLEPOWERS_GATE=off`. The accepted gaps (shell writes, a
 spawn mislabelled as a reviewer, the rest of `~/.codex` and the plugin cache)
 are listed in the Codex reference.
 
+## OpenCode
+
+fablepowers also runs in OpenCode 2.x (tested with OpenCode 2.0.29), from the
+same repository, with the same skills, seats, approval gate and workflow map.
+It runs as a plugin (`opencode/index.js`). The plugin's gate decisions come
+from the same `hooks/approval_gate.py`, and its seat table from the same
+`hooks/session-start`. What the skills' actions resolve to on OpenCode is in
+[`skills/workflow/references/opencode.md`](skills/workflow/references/opencode.md).
+
+**Install.** Add the plugin to the `plugins` key (OpenCode 2's key, not 1.x's
+`plugin`) of an OpenCode config file. For every project, that is
+`~/.config/opencode/opencode.json`. For one project, use the project's
+`opencode.json` or `.opencode/opencode.json`.
+
+```json
+{ "plugins": ["fablepowers@git+https://github.com/phelanous/fablepowers.git"] }
+```
+
+To pin a release, append its tag: `…/fablepowers.git#v0.6.0`. OpenCode
+installs the plugin into its cache on the next run. Then restart OpenCode,
+including its background service (`opencode serve --service`) if one is
+running, because plugins load when the server starts. If superpowers is
+installed in OpenCode too, remove it: both preambles arrive with conflicting
+instructions, the same conflict as on Claude Code (see [Migrating](#migrating)).
+
+**Requirements.** Python 3.8+ for the approval gate, and bash for the
+bootstrap's seat table. Without python the gate is off, and the bootstrap says
+so in its first line. Without bash there is no seat table, so every seat runs
+on the session model, and the workflow map is still injected. The plugin sees
+the OpenCode **server's** environment. The background service keeps the PATH
+of whatever started it, so if python or bash is found only through your
+interactive shell, set `FABLEPOWERS_PYTHON` or `FABLEPOWERS_BASH` where the
+server starts. The usual absolute locations (`/usr/bin`, `/usr/local/bin`,
+`/opt/homebrew/bin`, and `/bin` for bash) are tried as fallbacks.
+
+**Seat models (optional).** On OpenCode a seat with no entry runs on your
+session's model, and the bootstrap names the unpinned seats in a warning line.
+Pin seats in `~/.config/fablepowers/models.toml` (or under `$XDG_CONFIG_HOME`),
+in its `[opencode]` table:
+
+```toml
+[opencode]
+implementer = "opencode/big-pickle#high"
+strict_implementer = "opencode/mimo-v2.6-flash-free"
+reviewer = "openrouter/anthropic/claude-x.1"
+```
+
+Keys are `implementer`, `strict_implementer` and `reviewer`. A value is
+`provider/model` with an optional `#variant` (the model's reasoning variant),
+double-quoted, at most 128 characters. There are no `*_effort` keys here: use
+`#variant`. A bad entry leaves that seat on the session model and shows a
+warning in the bootstrap. Codex's `[codex]` table can sit in the same file, and
+each harness reads only its own table. **Restart OpenCode after editing
+`models.toml`, including the background service.** Seats load when the server
+loads the plugin, not per session. A pinned seat keeps its model even when the
+orchestrator passes a different `model` in a dispatch.
+
+**Approving a design.** The design question blocks in the TUI: answer
+**Approve**. Or type `/fablepowers:approve` in the TUI (add the spec's key
+when several designs are pending); `/fablepowers:withdraw [key]` drops one.
+`opencode run` doesn't route slash commands, and its question is cancelled, so
+headless runs end at the ask. Continue with the command as the whole message of
+the main session: `opencode run -s <session-id> /fablepowers:approve`. Only
+the main session approves; a command or answer from a subagent session records
+nothing. While a design is pending, every dispatch except
+`fablepowers-reviewer` and the read-only `explore` agent is denied. So are
+edits outside `docs/specs/`, `docs/plans/` and `.fablepowers/`, edits to
+OpenCode config (`opencode.json`, `opencode.jsonc`, `.opencode/`,
+`~/.config/opencode/`, `models.toml`), and edits to the plugin itself. Set
+`FABLEPOWERS_GATE=off` in the server's environment to turn blocking off.
+
+**Accepted gaps.** The full list is in the OpenCode reference:
+
+- shell writes;
+- the model approving itself by running `opencode run -s … /fablepowers:approve`
+  or the server API through the shell;
+- edits to the installed plugin while no design is pending;
+- config in locations the guard doesn't list;
+- another plugin's permission hook overriding a deny.
+
+**Testing a checkout.** Plain `opencode` commands go to the background
+service, which runs the installed plugin. To try a local checkout, list its
+absolute path in `plugins` (the repository's root `index.js` is the
+local-directory entry) and run `opencode run --standalone …`, which starts a
+private server for that run.
+
 ## How it works
 
 Ten workflow skills, invoked through the Skill tool as `fablepowers:<name>`, plus
@@ -121,8 +207,9 @@ logs live — is in
 [`skills/workflow/references/claude-code.md`](skills/workflow/references/claude-code.md).
 On Codex they resolve as described in
 [`skills/workflow/references/codex.md`](skills/workflow/references/codex.md)
-(see [Codex](#codex)); other harnesses get a sibling reference when their
-support lands.
+(see [Codex](#codex)), and on OpenCode as described in
+[`skills/workflow/references/opencode.md`](skills/workflow/references/opencode.md)
+(see [OpenCode](#opencode)).
 
 | | |
 |---|---|
@@ -251,6 +338,7 @@ bash tests/systematic-debugging/test-find-polluter.sh   # vendored find-polluter
 bash tests/integration-review/test-review-package.sh    # workspace + review-package script
 bash tests/hooks/test-session-start.sh                  # SessionStart hook, incl. with a broken PATH
 bash tests/hooks/test-approval-gate.sh                  # approval gate hook, launcher and hooks.json wiring
+bash tests/opencode/run.sh                              # OpenCode plugin (node --test; skips without node)
 ```
 
 ## Measuring it

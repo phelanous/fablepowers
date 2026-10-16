@@ -106,7 +106,10 @@ and rules:
       `write` with `output.existed` false, `edit` with an `output.files[]`
       entry whose status is "added", and `patch` `output.applied[]` adds whose
       target the adapter recorded as not existing before the call (`existed`,
-      {<path>: bool}, paths absolute or relative to cwd) make a
+      {<path>: bool}, paths absolute or relative to cwd; matched against the
+      entry's `target` or `resource`, lexically or by realpath), and `patch`
+      `output.applied[]` updates whose target is a `*** Move to:` destination
+      of `input.patchText` (a move, as on Codex), make a
       docs/specs/<name>.md pending, with a notice. Tool `question`: exactly one
       question whose option labels are exactly Approve and Changes needed,
       answered exactly ["Approve"], with exactly one pending design whose spec
@@ -1102,6 +1105,15 @@ def oc_not_root_context(verb):
                        "this message as %s." % (verb, OC_NOT_ROOT, ACT_NOUN[verb])}
 
 
+def oc_path_forms(p, cwd):
+    """[lexical, realpath] of path `p` (absolute, or relative to cwd)."""
+    lexical = os.path.normpath(os.path.join(cwd, p))
+    try:
+        return [lexical, os.path.realpath(lexical)]
+    except (OSError, ValueError):
+        return [lexical]
+
+
 def oc_after_pending(top, payload, cwd, tool, output):
     """[(spec, key)] made pending by a root-session create of a docs/specs/*.md."""
     targets = []
@@ -1122,25 +1134,43 @@ def oc_after_pending(top, payload, cwd, tool, output):
             if isinstance(f, dict) and f.get("status") == "added" and isinstance(f.get("file"), str) and f["file"]:
                 targets.append(f["file"])
     elif tool == "patch":
+        # `existed` keys and `applied[]` paths may spell one file differently (the patch
+        # text vs OpenCode's target, e.g. through a symlinked session directory): each
+        # side is compared lexically (joined to cwd) and by realpath.
         existed = payload.get("existed")
         known = {}
         if isinstance(existed, dict):
             for k, v in existed.items():
                 if isinstance(k, str) and k:
-                    known[os.path.normpath(os.path.join(cwd, k))] = v
+                    for f in oc_path_forms(k, cwd):
+                        known.setdefault(f, v)
+        ti = payload.get("input")
+        text = ti.get("patchText") if isinstance(ti, dict) else None
+        ops = parse_patch(text) if isinstance(text, str) else None
+        moves = set()
+        for op, p in ops or []:
+            if op == "move to":
+                moves.update(oc_path_forms(p, cwd))
         applied = output.get("applied")
         for a in applied if isinstance(applied, list) else []:
-            if not isinstance(a, dict) or a.get("type") != "add":
+            if not isinstance(a, dict) or a.get("type") not in ("add", "update"):
                 continue
-            raw = a.get("target") or a.get("resource")
-            if not isinstance(raw, str) or not raw:
+            raws = [r for r in (a.get("target"), a.get("resource")) if isinstance(r, str) and r]
+            if not raws:
                 continue
-            lexical = os.path.normpath(os.path.join(cwd, raw))
-            if known.get(lexical) is False:
-                targets.append(raw)
-            elif lexical not in known:
+            pairs = [(r, f) for r in raws for f in oc_path_forms(r, cwd)]
+            if a["type"] == "update":
+                # A move is an update whose destination is a `*** Move to:` path (as on Codex).
+                hit = next((r for r, f in pairs if f in moves), None)
+                if hit is not None:
+                    targets.append(hit)
+                continue
+            hit = next(((r, known[f]) for r, f in pairs if f in known), None)
+            if hit is not None and hit[1] is False:
+                targets.append(hit[0])
+            elif hit is None:
                 log(top, "OpenCode patch add of `%s` without an existed record; no spec marked pending"
-                    % shown_path(raw))
+                    % shown_path(raws[0]))
     made = []
     for raw in targets:
         m = mark_pending(top, resolve(raw, cwd))

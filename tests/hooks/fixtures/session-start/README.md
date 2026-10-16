@@ -18,3 +18,9 @@ Task 0 verification run (2026-10-15), and later Claude Code captures:
 
 `tests/hooks/test-session-start.sh` feeds them to `hooks/session-start` on
 stdin to check harness detection. Do not edit them; add new captures instead.
+
+Hand-written models.toml fixtures (not captures):
+
+- `models-full.toml`: every `[codex]` key set, plus other tables to ignore.
+- `models-both.toml`: a `[codex]` and an `[opencode]` table side by side, for
+  the no-cross-warnings checks in both modes.

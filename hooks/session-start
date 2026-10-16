@@ -16,6 +16,13 @@
 # the output is exactly 0.4.0's. On Codex the preamble names Codex, points to
 # references/codex.md and carries the effective seat table: defaults overridden
 # by the [codex] table of ${XDG_CONFIG_HOME:-$HOME/.config}/fablepowers/models.toml.
+#
+# OpenCode mode (argv flag --opencode, called by the OpenCode plugin): stdin is
+# never read, and the output is one JSON object
+#   {"context": "...", "seats": {"implementer": S, "strict_implementer": S,
+#    "reviewer": S}, "warnings": ["...", ...]}
+# where S is {"providerID":"...","id":"...","variant":"..."|null} for a seat
+# pinned in the [opencode] table of models.toml, or null (session model).
 # bash 3.2-compatible: no associative arrays, no ${x,,}, no mapfile.
 
 set -euo pipefail
@@ -73,8 +80,13 @@ escape_for_json() {
 # The hook payload (JSON) arrives on stdin. One builtin read with a 1-second
 # total timeout, so a stdin that never closes cannot block the session; skipped
 # when stdin is a terminal. Empty or unreadable stdin leaves the payload empty.
+# OpenCode mode is selected by the flag alone and never reads stdin.
+opencode_mode=0
+if [[ "${1:-}" == --opencode ]]; then
+    opencode_mode=1
+fi
 payload=""
-if [[ ! -t 0 ]]; then
+if [[ "$opencode_mode" -eq 0 && ! -t 0 ]]; then
     IFS= read -r -t 1 -d '' payload 2>/dev/null || true
 fi
 
@@ -106,9 +118,13 @@ detect_harness() {
         harness="codex"
     fi
 }
-detect_harness
+if [[ "$opencode_mode" -eq 1 ]]; then
+    harness="opencode"
+else
+    detect_harness
+fi
 
-if [[ "$harness" != codex ]]; then
+if [[ "$harness" == claude-code ]]; then
     preamble="You have fablepowers on Claude Code. The workflow map below is \`fablepowers:workflow\`, your entry point for substantive dev work. Invoke the other skills through the Skill tool as \`fablepowers:<skill>\`; dispatch the implementer, strict-implementer and reviewer seats through the Agent tool with \`subagent_type: \"fablepowers:<agent>\"\`, never the default general-purpose agent. Ask the user a structured question (the design approval) with AskUserQuestion; track tasks with TodoWrite. The rest of the mapping is in the workflow skill's \`references/claude-code.md\`."
 
     session_context="$(escape_for_json "${preamble}")\\n\\n$(escape_for_json "${workflow_content}")"
@@ -119,7 +135,7 @@ if [[ "$harness" != codex ]]; then
     exit 0
 fi
 
-# --- Codex: plugin root ----------------------------------------------------------
+# --- Codex and OpenCode: plugin root ----------------------------------------------------------
 
 # Absolute plugin root from this script's directory (builtins only).
 case "$SCRIPT_DIR" in
@@ -143,7 +159,7 @@ normalize_path() {
 }
 plugin_root="$(normalize_path "${plugin_root}/..")"
 
-# --- Codex: seat table from defaults + models.toml -----------------------------
+# --- Codex and OpenCode: seat table from defaults + models.toml ----------------
 
 D_IMPL_MODEL="gpt-6.1-sol";    D_IMPL_EFFORT="high"
 D_STRICT_MODEL="gpt-5.6-terra"; D_STRICT_EFFORT="medium"
@@ -151,14 +167,24 @@ D_REV_MODEL="gpt-6.1-sol";     D_REV_EFFORT="high"
 implementer="$D_IMPL_MODEL";          implementer_effort="$D_IMPL_EFFORT"
 strict_implementer="$D_STRICT_MODEL"; strict_implementer_effort="$D_STRICT_EFFORT"
 reviewer="$D_REV_MODEL";              reviewer_effort="$D_REV_EFFORT"
+# On OpenCode there are no defaults: an empty seat is unpinned (session model),
+# and the effort keys are unused (a #variant on the model id covers them).
+table="codex"
+if [[ "$harness" == opencode ]]; then
+    table="opencode"
+    implementer=""; strict_implementer=""; reviewer=""
+fi
 
 warn_count=0
 warn_lines=""
-# Only the first 3 warnings reach the context; the rest are counted.
+warn_json=""
+# Only the first 3 warnings reach the context; the rest are counted. warn_json
+# holds the same lines as JSON string items, for OpenCode's "warnings" array.
 warn() {
     warn_count=$((warn_count + 1))
     if [[ "$warn_count" -le 3 ]]; then
         warn_lines="${warn_lines}"$'\n'"- $1"
+        warn_json="${warn_json},\"$(escape_for_json "$1")\""
     fi
 }
 
@@ -186,9 +212,15 @@ set_key() {
     esac
 }
 
-# reject <line> <key> <why>: warn and put the key back to its default.
+# reject <line> <key> <why>: warn and put the key back to its default
+# (on OpenCode: unpin the seat).
 reject() {
     local d
+    if [[ "$table" == opencode ]]; then
+        set_key "$2" ""
+        warn "line $1: $2 $3; using the session model."
+        return 0
+    fi
     d="$(default_of "$2")"
     set_key "$2" "$d"
     warn "line $1: $2 $3; using the default $d."
@@ -202,8 +234,8 @@ trim() {
     printf '%s' "$s"
 }
 
-# parse_models_toml <file>. Grammar: only the [codex] table is read, other
-# tables are ignored. Lines are key = "value"; full-line and trailing # comments
+# parse_models_toml <file>. Grammar: only the [$table] table is read ([codex] on
+# Codex, [opencode] on OpenCode), other tables are ignored. Lines are key = "value"; full-line and trailing # comments
 # (outside the quotes) are ignored; CRLF and a leading UTF-8 BOM are stripped.
 # Keys: implementer, strict_implementer, reviewer (model ids, matching
 # ^[A-Za-z0-9._:/-]{1,64}$) and <seat>_effort (low|medium|high|xhigh|max|ultra).
@@ -211,13 +243,23 @@ trim() {
 # lines and an unreadable file each add a warning; a rejected key keeps its
 # default. A duplicate key warns and the last occurrence wins. Warnings never
 # quote file content beyond a validated key name.
+# [opencode] differs only in its keys and values: implementer, strict_implementer
+# and reviewer take provider/model with an optional #variant (charset
+# [A-Za-z0-9._:/#-], at most 128 characters, non-empty provider, model path
+# segments and variant, at most one #); a rejected seat is unpinned; a
+# <seat>_effort key warns and is ignored.
 parse_models_toml() {
     local LC_ALL=C
     local file="$1" line n=0 in_codex=0 seen=" " hdr name key rest val after
     local re_key='^[A-Za-z0-9_-]+$' re_model='^[A-Za-z0-9._:/-]{1,64}$'
+    local re_oc='^[A-Za-z0-9._:-]+/[A-Za-z0-9._:-]+(/[A-Za-z0-9._:-]+)*(#[A-Za-z0-9._:-]+)?$'
     [[ -e "$file" ]] || return 0
     if [[ ! -f "$file" || ! -r "$file" ]]; then
-        warn "models.toml is not a readable file; using the defaults."
+        if [[ "$table" == opencode ]]; then
+            warn "models.toml is not a readable file; every seat runs on the session model."
+        else
+            warn "models.toml is not a readable file; using the defaults."
+        fi
         return 0
     fi
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -236,7 +278,7 @@ parse_models_toml() {
             if [[ "$hdr" == \[*\] ]]; then
                 name="${hdr#\[}"
                 name="$(trim "${name%\]}")"
-                if [[ "$name" == codex ]]; then
+                if [[ "$name" == "$table" ]]; then
                     in_codex=1
                 fi
             else
@@ -264,6 +306,10 @@ parse_models_toml() {
                 continue
                 ;;
         esac
+        if [[ "$table" == opencode && "$key" == *_effort ]]; then
+            warn "line $n: $key is not used on OpenCode (add a #variant to the model id); ignored."
+            continue
+        fi
         if [[ "$seen" == *" $key "* ]]; then
             warn "line $n: duplicate key $key; the last one wins."
         fi
@@ -299,7 +345,13 @@ parse_models_toml() {
                 esac
                 ;;
             *)
-                if [[ "$val" =~ $re_model ]]; then
+                if [[ "$table" == opencode ]]; then
+                    if [[ "${#val}" -le 128 && "$val" =~ $re_oc ]]; then
+                        set_key "$key" "$val"
+                    else
+                        reject "$n" "$key" "is not a valid provider/model[#variant] id"
+                    fi
+                elif [[ "$val" =~ $re_model ]]; then
                     set_key "$key" "$val"
                 else
                     reject "$n" "$key" "is not a valid model id"
@@ -321,6 +373,81 @@ fi
 
 if [[ "$warn_count" -gt 3 ]]; then
     warn_lines="${warn_lines}"$'\n'"- … $((warn_count - 3)) more"
+    warn_json="${warn_json},\"… $((warn_count - 3)) more\""
+fi
+
+# --- OpenCode: output --------------------------------------------------------------
+
+if [[ "$harness" == opencode ]]; then
+    # seat_line <seat> <agent file stem> <value>: the seat's line in the table.
+    seat_line() {
+        local v="$3" m
+        if [[ -z "$v" ]]; then
+            printf -- '- %s (agent fablepowers-%s, agents/%s.md): session model (unpinned)' "$1" "$2" "$2"
+            return 0
+        fi
+        m="${v%%#*}"
+        if [[ "$v" == *#* ]]; then
+            printf -- '- %s (agent fablepowers-%s, agents/%s.md): model %s, variant %s' "$1" "$2" "$2" "$m" "${v#*#}"
+        else
+            printf -- '- %s (agent fablepowers-%s, agents/%s.md): model %s' "$1" "$2" "$2" "$m"
+        fi
+    }
+    # seat_json <value>: {"providerID","id","variant"} split from provider/model[#variant],
+    # or null when the seat is unpinned. Values were validated by the parser.
+    seat_json() {
+        local v="$1" m variant="null"
+        if [[ -z "$v" ]]; then
+            printf 'null'
+            return 0
+        fi
+        m="${v%%#*}"
+        if [[ "$v" == *#* ]]; then
+            variant="\"$(escape_for_json "${v#*#}")\""
+        fi
+        printf '{"providerID":"%s","id":"%s","variant":%s}' \
+            "$(escape_for_json "${m%%/*}")" "$(escape_for_json "${m#*/}")" "$variant"
+    }
+
+    # One warning names every unpinned seat (after the parser's warnings).
+    unpinned=""
+    for seat in implementer strict_implementer reviewer; do
+        case "$seat" in
+            implementer) v="$implementer" ;;
+            strict_implementer) v="$strict_implementer" ;;
+            reviewer) v="$reviewer" ;;
+        esac
+        if [[ -z "$v" ]]; then
+            unpinned="${unpinned:+${unpinned}, }${seat}"
+        fi
+    done
+    if [[ -n "$unpinned" ]]; then
+        w="unpinned seats run on the session model: ${unpinned}; pin them in the [opencode] table of models.toml."
+        warn_count=$((warn_count + 1))
+        warn_lines="${warn_lines}"$'\n'"- ${w}"
+        warn_json="${warn_json},\"$(escape_for_json "$w")\""
+    fi
+
+    opencode_ref="${plugin_root}/skills/workflow/references/opencode.md"
+    preamble="You have fablepowers on OpenCode. The workflow map below is \`fablepowers:workflow\`, your entry point for substantive dev work. Before invoking another fablepowers skill, dispatching a seat or asking for design approval, read the OpenCode mapping in \`${opencode_ref}\`. Plugin root: \`${plugin_root}\`."
+    if [[ -n "$models_file" ]]; then
+        seat_source="the [opencode] table of ${models_file}"
+    else
+        seat_source="no models.toml since HOME and XDG_CONFIG_HOME are unset"
+    fi
+    preamble="${preamble}"$'\n'"Seat table (${seat_source}); dispatch each seat as its fablepowers agent and never pass a model:"
+    preamble="${preamble}"$'\n'"$(seat_line implementer implementer "$implementer")"
+    preamble="${preamble}"$'\n'"$(seat_line strict_implementer strict-implementer "$strict_implementer")"
+    preamble="${preamble}"$'\n'"$(seat_line reviewer reviewer "$reviewer")"
+    if [[ "$warn_count" -gt 0 ]]; then
+        preamble="${preamble}"$'\n'"models.toml warnings (${warn_count}):${warn_lines}"
+    fi
+
+    session_context="$(escape_for_json "${preamble}")\\n\\n$(escape_for_json "${workflow_content}")"
+    printf '{"context":"%s","seats":{"implementer":%s,"strict_implementer":%s,"reviewer":%s},"warnings":[%s]}\n' \
+        "$session_context" "$(seat_json "$implementer")" "$(seat_json "$strict_implementer")" \
+        "$(seat_json "$reviewer")" "${warn_json#,}"
+    exit 0
 fi
 
 # --- Codex: output ---------------------------------------------------------------

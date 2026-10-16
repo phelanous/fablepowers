@@ -1,0 +1,12 @@
+# fablepowers seat models: both harness tables, each holding keys and values the
+# other table's grammar would reject (no cross-warnings either way).
+[codex]
+implementer = "gpt-6-luna"
+implementer_effort = "low"
+strict_implementer = "gpt-5.6-terra"
+reviewer_effort = "max"
+
+[opencode]
+implementer = "opencode/big-pickle#high"   # trailing comment
+  strict_implementer = "openrouter/anthropic/claude-x.1:beta"
+reviewer="opencode/mimo-v2.6-flash-free"

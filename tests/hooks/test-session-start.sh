@@ -777,6 +777,272 @@ else
   fail "worst case: rc $RC, $size characters, $nw warning lines, seats '$(seats_of "$OUT")'"
 fi
 
+# --- (j) OpenCode mode (--opencode) -----------------------------------------------
+
+echo "OpenCode mode (--opencode)"
+
+# oc_run [VAR=value ...]: run the tree's hook directly with --opencode (the
+# plugin's way, no hooks.json), stdin /dev/null unless $HOOK_STDIN; $OUT, $RC.
+oc_run() {
+  RC=0
+  OUT="$(cd "$TEST_ROOT" && env -u BASH -u PLUGIN_ROOT -u CODEX_HOME XDG_CONFIG_HOME="$TEST_ROOT/xdg-empty" "$@" "$SH" "$OC_TREE/hooks/session-start" --opencode <"${HOOK_STDIN:-/dev/null}" 2>"$TEST_ROOT/stderr")" || RC=$?
+}
+OC_TREE="$T"
+
+# oc_check <json> <expected seats as compact JSON> [expected warnings as a JSON
+# array]: exit 0 iff the output is exactly {context, seats, warnings}, seats
+# equals the expectation, and (if given) warnings equals it. Prints a summary.
+oc_check() {
+  python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception as e:
+    print("not JSON: %s" % e); sys.exit(1)
+ok = sorted(d) == ["context", "seats", "warnings"] and isinstance(d["context"], str) and isinstance(d["warnings"], list)
+ok = ok and d["seats"] == json.loads(sys.argv[2])
+if len(sys.argv) > 3:
+    ok = ok and d["warnings"] == json.loads(sys.argv[3])
+print("seats=%s warnings=%s" % (json.dumps(d.get("seats"), separators=(",", ":")), json.dumps(d.get("warnings"), ensure_ascii=False)))
+sys.exit(0 if ok else 1)' "$@"
+}
+
+# oc_ctx <json>: the context string.
+oc_ctx() { printf '%s' "$1" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["context"])'; }
+
+NULL_SEATS='{"implementer":null,"strict_implementer":null,"reviewer":null}'
+UNPINNED_ALL='["unpinned seats run on the session model: implementer, strict_implementer, reviewer; pin them in the [opencode] table of models.toml."]'
+
+# Shape, with no models.toml: every seat null, one warning naming all three.
+oc_run
+if got="$(oc_check "$OUT" "$NULL_SEATS" "$UNPINNED_ALL")" && [[ "$RC" == 0 && ! -s "$TEST_ROOT/stderr" ]]; then
+  pass "no models.toml: {context, seats (all null), warnings (one unpinned line)}, rc 0, no stderr"
+else
+  fail "no models.toml: rc $RC, $got"
+fi
+oc_default="$OUT"
+if pre="$(python3 -c '
+import json, sys
+ctx = json.loads(sys.argv[1])["context"]
+lines = open(sys.argv[2], encoding="utf-8").read().split("\n")
+end = lines.index("---", 1)
+body = "\n".join(lines[end + 1:]).rstrip("\n")
+pre = ctx[: len(ctx) - len(body) - 2]
+if not ctx.endswith("\n\n" + body) or "\n\n" in pre:
+    sys.exit(1)
+sys.stdout.write(pre)' "$oc_default" "$REPO_ROOT/skills/workflow/SKILL.md")"; then
+  pass "OpenCode context is the preamble, a blank line, then the map byte for byte"
+else
+  fail "OpenCode context is not preamble + blank line + SKILL.md minus frontmatter"
+  pre=""
+fi
+for needle in 'You have fablepowers on OpenCode.' '`fablepowers:workflow`' \
+  "\`$T/skills/workflow/references/opencode.md\`" "Plugin root: \`$T\`." \
+  "Seat table (the [opencode] table of $TEST_ROOT/xdg-empty/fablepowers/models.toml)" \
+  '- implementer (agent fablepowers-implementer, agents/implementer.md): session model (unpinned)' \
+  '- strict_implementer (agent fablepowers-strict-implementer, agents/strict-implementer.md): session model (unpinned)' \
+  '- reviewer (agent fablepowers-reviewer, agents/reviewer.md): session model (unpinned)' \
+  $'models.toml warnings (1):\n- unpinned seats run on the session model: implementer, strict_implementer, reviewer;'; do
+  [[ "$pre" == *"$needle"* ]] && pass "OpenCode preamble names '${needle%%$'\n'*}'" || fail "OpenCode preamble lacks '$needle'"
+done
+for needle in 'Codex' 'codex.md' 'reasoning_effort' 'Claude Code' 'AskUserQuestion' 'TodoWrite' 'Agent tool' 'gpt-'; do
+  [[ "$pre" != *"$needle"* ]] && pass "OpenCode preamble does not mention '$needle'" || fail "OpenCode preamble mentions '$needle'"
+done
+size="$(oc_ctx "$oc_default" | python3 -c 'import sys; print(len(sys.stdin.read()))')"
+[[ "$size" -le 8000 ]] && pass "OpenCode context is $size characters (cap 8000)" \
+  || fail "OpenCode context is $size characters, over the 8000 cap"
+
+# Stdin is never read: a Codex payload on stdin, or a Codex-like environment,
+# still gives the OpenCode output unchanged.
+HOOK_STDIN="$CODEX_PAYLOAD" oc_run
+[[ "$RC" == 0 && "$OUT" == "$oc_default" ]] && pass "--opencode with a Codex payload on stdin: same OpenCode output" \
+  || fail "--opencode with a Codex payload on stdin: rc $RC, output differs"
+oc_run PLUGIN_ROOT="$T" CLAUDE_PLUGIN_ROOT="$T"
+[[ "$RC" == 0 && "$OUT" == "$oc_default" ]] && pass "--opencode with PLUGIN_ROOT = CLAUDE_PLUGIN_ROOT: same OpenCode output" \
+  || fail "--opencode with PLUGIN_ROOT = CLAUDE_PLUGIN_ROOT: rc $RC, output differs"
+# A stdin that never closes and holds no data costs no 1 s read timeout.
+exec 9<>"$TEST_ROOT/fifo"
+t0="$(python3 -c 'import time; print(int(time.time()*1000))')"
+HOOK_STDIN="$TEST_ROOT/fifo" oc_run
+t1="$(python3 -c 'import time; print(int(time.time()*1000))')"
+exec 9>&-
+if [[ "$RC" == 0 && "$OUT" == "$oc_default" && $((t1 - t0)) -lt 800 ]]; then
+  pass "--opencode, stdin open with no data: rc 0 in $((t1 - t0)) ms (< 800, stdin not read)"
+else
+  fail "--opencode, stdin open with no data: rc $RC after $((t1 - t0)) ms"
+fi
+# Other arguments do not select OpenCode mode.
+RC=0
+OUT="$(cd "$TEST_ROOT" && env -u BASH -u PLUGIN_ROOT -u CODEX_HOME "$SH" "$T/hooks/session-start" --opencodex </dev/null 2>/dev/null)" || RC=$?
+[[ "$RC" == 0 && "$OUT" == "$claude_ref" ]] && pass "argument --opencodex: Claude Code output" \
+  || fail "argument --opencodex: rc $RC, not the Claude Code output"
+
+# Broken PATH (builtins only) and bash --posix.
+RC=0
+OUT="$(cd "$TEST_ROOT" && env -i PATH=/nonexistent "$SH" "$T/hooks/session-start" --opencode </dev/null 2>"$TEST_ROOT/stderr")" || RC=$?
+if oc_check "$OUT" "$NULL_SEATS" "$UNPINNED_ALL" >/dev/null && [[ "$RC" == 0 && "$(oc_ctx "$OUT")" == *"Seat table (no models.toml since HOME and XDG_CONFIG_HOME are unset)"* ]]; then
+  pass "broken PATH, no HOME/XDG_CONFIG_HOME: all seats null, and the preamble says why"
+else
+  fail "broken PATH, no HOME/XDG_CONFIG_HOME: rc $RC; $(head -c 160 "$TEST_ROOT/stderr")"
+fi
+RC=0
+OUT="$(cd "$TEST_ROOT" && env -u PLUGIN_ROOT XDG_CONFIG_HOME="$TEST_ROOT/xdg-empty" "$SH" --posix "$T/hooks/session-start" --opencode </dev/null 2>"$TEST_ROOT/stderr")" || RC=$?
+[[ "$RC" == 0 && "$OUT" == "$oc_default" ]] && pass "bash --posix: same OpenCode output" \
+  || fail "bash --posix --opencode: rc $RC; $(head -c 160 "$TEST_ROOT/stderr")"
+
+# JSON escaping: a plugin root holding a quote, a backslash and a tab.
+QT="$TEST_ROOT/q\"uo\\te	dir"
+make_tree "$QT" new "$FIX/real.md"
+OC_TREE="$QT"; oc_run; OC_TREE="$T"
+if oc_check "$OUT" "$NULL_SEATS" >/dev/null && [[ "$(oc_ctx "$OUT")" == *"Plugin root: \`$QT\`."* ]]; then
+  pass "plugin root with a quote, backslash and tab: valid JSON, root named exactly"
+else
+  fail "plugin root with a quote, backslash and tab: $(printf '%s' "$OUT" | head -c 160)"
+fi
+
+# oc_toml <file-or-empty> [VAR=value ...]: OpenCode run with that models.toml.
+oc_toml() {
+  local src="$1"; shift
+  XN=$((XN + 1))
+  local xdg="$TEST_ROOT/xdg-$XN"
+  mkdir -p "$xdg/fablepowers"
+  [[ -n "$src" ]] && cp "$src" "$xdg/fablepowers/models.toml"
+  oc_run XDG_CONFIG_HOME="$xdg" "$@"
+}
+
+# oc_case <label> <content (printf format)> <expected seats JSON> <expected warnings JSON>
+oc_case() {
+  local label="$1" content="$2" got
+  printf -- "$content" > "$TEST_ROOT/models.toml"
+  oc_toml "$TEST_ROOT/models.toml"
+  if got="$(oc_check "$OUT" "$3" "$4")" && [[ "$RC" == 0 ]]; then
+    pass "$label"
+  else
+    fail "$label: rc $RC, $got"
+  fi
+}
+
+# Both tables present: each mode reads only its own, with no cross-warnings.
+oc_toml "$SS_FIX/models-both.toml"
+want_both='{"implementer":{"providerID":"opencode","id":"big-pickle","variant":"high"},"strict_implementer":{"providerID":"openrouter","id":"anthropic/claude-x.1:beta","variant":null},"reviewer":{"providerID":"opencode","id":"mimo-v2.6-flash-free","variant":null}}'
+if got="$(oc_check "$OUT" "$want_both" '[]')" && [[ "$RC" == 0 ]]; then
+  pass "[codex] + [opencode]: OpenCode reads only [opencode], no warnings"
+else
+  fail "[codex] + [opencode], OpenCode mode: $got"
+fi
+both_ctx="$(oc_ctx "$OUT")"
+for needle in '- implementer (agent fablepowers-implementer, agents/implementer.md): model opencode/big-pickle, variant high' \
+  '- strict_implementer (agent fablepowers-strict-implementer, agents/strict-implementer.md): model openrouter/anthropic/claude-x.1:beta' \
+  '- reviewer (agent fablepowers-reviewer, agents/reviewer.md): model opencode/mimo-v2.6-flash-free'; do
+  [[ "$both_ctx" == *"$needle"$'\n'* ]] && pass "pinned seat line: '${needle:2:60}…'" || fail "seat line missing: '$needle'"
+done
+[[ "$both_ctx" != *"models.toml warnings"* && "$both_ctx" != *unpinned* ]] \
+  && pass "every seat pinned: no warning block, no unpinned line" || fail "every seat pinned: warnings in the context"
+toml_run "$SS_FIX/models-both.toml"; codex_both="$OUT"
+want="implementer=gpt-6-luna/low strict_implementer=gpt-5.6-terra/medium reviewer=gpt-6.1-sol/max"
+[[ "$RC" == 0 && "$(seats_of "$codex_both")" == "$want" && -z "$(warnings_of "$codex_both")" ]] \
+  && pass "[codex] + [opencode]: Codex reads only [codex], no warnings" \
+  || fail "[codex] + [opencode], Codex mode: seats '$(seats_of "$codex_both")', warnings '$(warnings_of "$codex_both")'"
+# Byte-identical to the same [codex] table without the [opencode] one (same path).
+xdg_both="$TEST_ROOT/xdg-$XN"
+sed '/^\[opencode\]/,$d' "$SS_FIX/models-both.toml" > "$xdg_both/fablepowers/models.toml"
+HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$xdg_both" run_normal "$T"
+[[ "$RC" == 0 && "$OUT" == "$codex_both" ]] && pass "Codex output byte-identical with and without the [opencode] table" \
+  || fail "Codex output changes when an [opencode] table is present"
+cp "$SS_FIX/models-both.toml" "$xdg_both/fablepowers/models.toml"
+HOOK_STDIN="$CLAUDE_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$xdg_both" run_normal "$T"
+[[ "$RC" == 0 && "$OUT" == "$claude_ref" ]] && pass "Claude Code output unchanged with both tables present" \
+  || fail "Claude Code output changes with both tables present"
+
+# [opencode] grammar.
+p1() { printf '{"implementer":%s,"strict_implementer":null,"reviewer":null}' "$1"; }
+UNPIN_SR='"unpinned seats run on the session model: strict_implementer, reviewer; pin them in the [opencode] table of models.toml."'
+UNPIN_IR='"unpinned seats run on the session model: implementer, reviewer; pin them in the [opencode] table of models.toml."'
+bad() { printf '["line %s: implementer is not a valid provider/model[#variant] id; using the session model.",%s]' "$1" "${UNPINNED_ALL:1:${#UNPINNED_ALL}-2}"; }
+oc_case "provider/model: split, variant null" '[opencode]\nimplementer = "opencode/big-pickle"\n' \
+  "$(p1 '{"providerID":"opencode","id":"big-pickle","variant":null}')" "[$UNPIN_SR]"
+oc_case "provider/model#variant: variant split off" '[opencode]\nimplementer = "anthropic/claude-x#max"\n' \
+  "$(p1 '{"providerID":"anthropic","id":"claude-x","variant":"max"}')" "[$UNPIN_SR]"
+oc_case "provider/a/b#v: the provider is the first segment, the id keeps its slashes" '[opencode]\nimplementer = "openrouter/meta/llama-4:free#low"\n' \
+  "$(p1 '{"providerID":"openrouter","id":"meta/llama-4:free","variant":"low"}')" "[$UNPIN_SR]"
+oc_case "characters . _ : - and digits accepted" '[opencode]\nimplementer = "A.z_:0-9/x.y_1:2-3#v_1.2:3-4"\n' \
+  "$(p1 '{"providerID":"A.z_:0-9","id":"x.y_1:2-3","variant":"v_1.2:3-4"}')" "[$UNPIN_SR]"
+id128="p/$(printf 'm%.0s' {1..126})"
+oc_case "128-character id accepted" "[opencode]\nimplementer = \"$id128\"\n" \
+  "$(p1 "{\"providerID\":\"p\",\"id\":\"${id128#p/}\",\"variant\":null}")" "[$UNPIN_SR]"
+oc_case "129-character id: unpinned + warning" "[opencode]\nimplementer = \"${id128}m\"\n" "$NULL_SEATS" "$(bad 2)"
+oc_case "no slash: unpinned + warning" '[opencode]\nimplementer = "big-pickle"\n' "$NULL_SEATS" "$(bad 2)"
+oc_case "leading slash: unpinned + warning" '[opencode]\nimplementer = "/big-pickle"\n' "$NULL_SEATS" "$(bad 2)"
+oc_case "trailing slash: unpinned + warning" '[opencode]\nimplementer = "opencode/"\n' "$NULL_SEATS" "$(bad 2)"
+oc_case "empty path segment: unpinned + warning" '[opencode]\nimplementer = "a//b"\n' "$NULL_SEATS" "$(bad 2)"
+oc_case "double #: unpinned + warning" '[opencode]\nimplementer = "a/b#c#d"\n' "$NULL_SEATS" "$(bad 2)"
+oc_case "empty variant: unpinned + warning" '[opencode]\nimplementer = "a/b#"\n' "$NULL_SEATS" "$(bad 2)"
+oc_case "# before the slash: unpinned + warning" '[opencode]\nimplementer = "a#b/c"\n' "$NULL_SEATS" "$(bad 2)"
+oc_case "space: unpinned + warning" '[opencode]\nimplementer = "a/b c"\n' "$NULL_SEATS" "$(bad 2)"
+oc_case "+: unpinned + warning" '[opencode]\nimplementer = "a/b+c"\n' "$NULL_SEATS" "$(bad 2)"
+oc_case "non-ASCII letter: unpinned + warning" '[opencode]\nimplementer = "a/caf\xc3\xa9"\n' "$NULL_SEATS" "$(bad 2)"
+oc_case "empty value: unpinned + warning" '[opencode]\nimplementer = ""\n' "$NULL_SEATS" "$(bad 2)"
+oc_case "single-quoted: unpinned + warning" "[opencode]\nimplementer = 'a/b'\n" "$NULL_SEATS" \
+  "[\"line 2: implementer is single-quoted (use double quotes); using the session model.\",${UNPINNED_ALL:1:${#UNPINNED_ALL}-2}]"
+oc_case "unquoted: unpinned + warning" '[opencode]\nimplementer = a/b\n' "$NULL_SEATS" \
+  "[\"line 2: implementer is not a double-quoted string; using the session model.\",${UNPINNED_ALL:1:${#UNPINNED_ALL}-2}]"
+oc_case "effort key: warning, ignored (seat stays pinned)" '[opencode]\nimplementer = "a/b"\nimplementer_effort = "high"\n' \
+  "$(p1 '{"providerID":"a","id":"b","variant":null}')" \
+  "[\"line 3: implementer_effort is not used on OpenCode (add a #variant to the model id); ignored.\",$UNPIN_SR]"
+oc_case "invalid effort value: the same warning, never an effort-value check" '[opencode]\nreviewer_effort = "nope"\n' "$NULL_SEATS" \
+  "[\"line 2: reviewer_effort is not used on OpenCode (add a #variant to the model id); ignored.\",${UNPINNED_ALL:1:${#UNPINNED_ALL}-2}]"
+oc_case "unknown key: warning, ignored" '[opencode]\norchestrator = "a/b"\n' "$NULL_SEATS" \
+  "[\"line 2: unknown key orchestrator; ignored.\",${UNPINNED_ALL:1:${#UNPINNED_ALL}-2}]"
+oc_case "duplicate key: last wins + warning" '[opencode]\nimplementer = "a/b"\nimplementer = "c/d#e"\n' \
+  "$(p1 '{"providerID":"c","id":"d","variant":"e"}')" "[\"line 3: duplicate key implementer; the last one wins.\",$UNPIN_SR]"
+oc_case "CRLF, BOM, #variant and a trailing comment" '\xef\xbb\xbf[opencode]\r\nimplementer = "a/b#hi" # c #2\r\n' \
+  "$(p1 '{"providerID":"a","id":"b","variant":"hi"}')" "[$UNPIN_SR]"
+oc_case "keys before any table and in [codex] are ignored" 'implementer = "x/y"\n[codex]\nimplementer = "a/b#c"\nfoo = bar\n' "$NULL_SEATS" "$UNPINNED_ALL"
+oc_case "[opencode] header with spaces and a comment" '[ opencode ] # mine\nstrict_implementer = "a/b"\n' \
+  '{"implementer":null,"strict_implementer":{"providerID":"a","id":"b","variant":null},"reviewer":null}' "[$UNPIN_IR]"
+oc_case "the unpinned warning names a rejected seat too" '[opencode]\nimplementer = "a/b"\nstrict_implementer = "a/b"\nreviewer = "nope"\n' \
+  '{"implementer":{"providerID":"a","id":"b","variant":null},"strict_implementer":{"providerID":"a","id":"b","variant":null},"reviewer":null}' \
+  '["line 4: reviewer is not a valid provider/model[#variant] id; using the session model.","unpinned seats run on the session model: reviewer; pin them in the [opencode] table of models.toml."]'
+oc_case "five parser warnings: three, '… 2 more', then the unpinned line" '[opencode]\na1 = "x"\na2 = "x"\na3 = "x"\na4 = "x"\na5 = "x"\n' "$NULL_SEATS" \
+  "[\"line 2: unknown key a1; ignored.\",\"line 3: unknown key a2; ignored.\",\"line 4: unknown key a3; ignored.\",\"… 2 more\",${UNPINNED_ALL:1:${#UNPINNED_ALL}-2}]"
+[[ "$(oc_ctx "$OUT")" == *$'models.toml warnings (6):\n- line 2: unknown key a1; ignored.\n- line 3: unknown key a2; ignored.\n- line 4: unknown key a3; ignored.\n- … 2 more\n- unpinned seats run on the session model: implementer, strict_implementer, reviewer; pin them in the [opencode] table of models.toml.\n\n'* ]] \
+  && pass "context warning block: header (6), 3 lines, '… 2 more', the unpinned line" \
+  || fail "context warning block: $(oc_ctx "$OUT" | grep -A6 'models.toml warnings' | tr '\n' '|')"
+
+mkdir -p "$TEST_ROOT/xdg-ocdir/fablepowers/models.toml"
+oc_run XDG_CONFIG_HOME="$TEST_ROOT/xdg-ocdir"
+oc_check "$OUT" "$NULL_SEATS" "[\"models.toml is not a readable file; every seat runs on the session model.\",${UNPINNED_ALL:1:${#UNPINNED_ALL}-2}]" >/dev/null \
+  && pass "models.toml is a directory: all seats null + warning" || fail "models.toml is a directory: $(oc_check "$OUT" "$NULL_SEATS")"
+
+# Worst case size: long path, every seat rejected, 200 unknown keys.
+mkdir -p "$deep/fablepowers"
+{
+  printf '\xef\xbb\xbf[opencode]\r\n'
+  for k in implementer strict_implementer reviewer; do
+    printf '%s = "p/%s"\r\n' "$k" "$(printf 'x%.0s' {1..140})"
+  done
+  for i in $(seq 1 200); do printf 'unknown_key_%s_%s = "x"\r\n' "$i" "$(printf 'y%.0s' {1..40})"; done
+} > "$deep/fablepowers/models.toml"
+oc_run XDG_CONFIG_HOME="$deep"
+size="$(oc_ctx "$OUT" | python3 -c 'import sys; print(len(sys.stdin.read()))')"
+nw="$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["warnings"]))')"
+if [[ "$RC" == 0 && "$size" -le 8000 && "$nw" == 5 ]] && oc_check "$OUT" "$NULL_SEATS" >/dev/null; then
+  pass "worst case (203 parser warnings, long path): $size characters (cap 8000), 5 warning items"
+else
+  fail "worst case: rc $RC, $size characters, $nw warning items"
+fi
+# All seats pinned at 128 characters with a variant, long path: still under the cap.
+{
+  printf '[opencode]\n'
+  for k in implementer strict_implementer reviewer; do
+    printf '%s = "p/%s#v"\n' "$k" "$(printf 'x%.0s' {1..124})"
+  done
+} > "$deep/fablepowers/models.toml"
+oc_run XDG_CONFIG_HOME="$deep"
+size="$(oc_ctx "$OUT" | python3 -c 'import sys; print(len(sys.stdin.read()))')"
+[[ "$RC" == 0 && "$size" -le 8000 ]] && pass "three 128-character pinned seats, long path: $size characters (cap 8000)" \
+  || fail "three 128-character pinned seats: rc $RC, $size characters"
+
 echo
 if [[ "$FAILURES" -eq 0 ]]; then
   echo "All session-start hook tests passed."

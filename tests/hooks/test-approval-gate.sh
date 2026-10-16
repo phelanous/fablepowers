@@ -1899,8 +1899,11 @@ done
 ocprompt "$R" "/fablepowers:withdraw one two"
 check "near-miss withdraw says 'as a withdrawal'" bash -c '[[ "$1" == *"/fablepowers:withdraw [key]"* && "$1" == *"as a withdrawal."* ]]' _ "$(oc_text)"
 ocprompt "$R" "/fablepowers:approve" prompt-child
-oc_expect "child session prompt" none
-check "  nothing recorded" test ! -e "$R/.fablepowers/one/approved"
+oc_expect "child session prompt" context
+check "  nothing recorded, says only the main session can approve" \
+  bash -c '[[ "$1" == *"recorded nothing"* && "$1" == *"main session"* && ! -e "$2" ]]' _ "$(oc_text)" "$R/.fablepowers/one/approved"
+ocprompt "$R" "hello" prompt-child
+oc_expect "child session prompt that is not a command" none
 ocprompt "$R" "/fablepowers:approve nosuch"
 check "unknown key: context, nothing recorded" \
   bash -c '[[ "$1" == *"no pending design matches \`nosuch\`"* && ! -e "$2" ]]' _ "$(oc_text)" "$R/.fablepowers/one/approved"
@@ -1977,10 +1980,14 @@ for e in 'd["output"]["answers"] = [["Approve", "Changes needed"]]' \
          'd["input"]["questions"].append(dict(d["input"]["questions"][0], question="Again?"))' \
          'd["input"]["questions"] = []' \
          'd["status"] = "error"' \
-         'd["parent_id"] = "ses_parent"' \
          'd["output"] = None'; do
   OC_EDIT="$e"; ocq "$R" Approve; OC_EDIT=""
   check "not recorded: $e" test "$(oc_verdict)" == none -a ! -e "$R/.fablepowers/q/approved"
+done
+for e in 'd["parent_id"] = "ses_parent"' 'd["parent_unknown"] = True' 'del d["parent_id"]'; do
+  OC_EDIT="$e"; ocq "$R" Approve; OC_EDIT=""
+  check "not known root ($e): context, not recorded" \
+    bash -c '[[ "$1" == context && "$2" == *"was not recorded"* && "$2" == *"main session"* && ! -e "$3" ]]' _ "$(oc_verdict)" "$(oc_text)" "$R/.fablepowers/q/approved"
 done
 oc after-question-cancelled CWD="$R" PLUGIN="$OCPLUG"
 oc_expect "question cancelled in opencode run (status error)" none
@@ -2016,6 +2023,60 @@ fi
 chmod 755 "$R/.fablepowers/f"
 RC=0; OUT="$(printf 'not json' | python3 -I "$PLUGIN/hooks/approval_gate.py")" || RC=$?
 check "malformed (non-JSON) input: no output, exit 0 (unchanged)" test "$RC:$OUT" == "0:"
+
+echo "32. OpenCode: approvals only from known root sessions; case-insensitive config paths"
+
+# parent_unknown: the adapter could not look up the session's parent. Pending
+# creation still treats it as root (SF9); approve/withdraw (prompt, command,
+# question) need a session positively known to be root.
+R="$TEST_ROOT/o12"; new_repo "$R"
+OC_EDIT='d["parent_unknown"] = True; d["parent_id"] = None'; occreate "$R" docs/specs/u.md; OC_EDIT=""
+oc_expect "SF9: parent_unknown write create still pends" context
+check "  pending written" test -f "$R/.fablepowers/u/pending"
+for e in 'd["parent_unknown"] = True' 'd["parent_unknown"] = "yes"' 'del d["parent_id"]' 'd["parent_id"] = ""'; do
+  OC_EDIT="$e"; ocprompt "$R" "/fablepowers:withdraw"; OC_EDIT=""
+  check "prompt withdraw, $e: context, not withdrawn" \
+    bash -c '[[ "$1" == context && "$2" == *"recorded nothing"* && -f "$3" ]]' _ "$(oc_verdict)" "$(oc_text)" "$R/.fablepowers/u/pending"
+  OC_EDIT="$e"; occmd "$R" withdraw ""; OC_EDIT=""
+  check "command withdraw, $e: context, not withdrawn" \
+    bash -c '[[ "$1" == context && "$2" == *"recorded nothing"* && -f "$3" ]]' _ "$(oc_verdict)" "$(oc_text)" "$R/.fablepowers/u/pending"
+  OC_EDIT="$e"; ocprompt "$R" "/fablepowers:approve"; OC_EDIT=""
+  check "prompt approve, $e: context, not recorded" \
+    bash -c '[[ "$1" == context && "$2" == *"recorded nothing"* && "$2" == *"main session"* && ! -e "$3" ]]' _ "$(oc_verdict)" "$(oc_text)" "$R/.fablepowers/u/approved"
+  OC_EDIT="$e"; occmd "$R" approve ""; OC_EDIT=""
+  check "command approve, $e: context, not recorded" \
+    bash -c '[[ "$1" == context && "$2" == *"recorded nothing"* && ! -e "$3" ]]' _ "$(oc_verdict)" "$(oc_text)" "$R/.fablepowers/u/approved"
+done
+ocprompt "$R" "/fablepowers:approve a b" prompt-child
+check "child-session near-miss prompt: the not-main-session context (not the not-recognised hint)" \
+  bash -c '[[ "$1" == context && "$2" == *"main session"* && "$2" != *"not recognised"* ]]' _ "$(oc_verdict)" "$(oc_text)"
+OC_EDIT='d["parent_id"] = "ses_parent"'; occmd "$R" approve ""; OC_EDIT=""
+check "command approve from a child session: context, not recorded" \
+  bash -c '[[ "$1" == context && "$2" == *"main session"* && ! -e "$3" ]]' _ "$(oc_verdict)" "$(oc_text)" "$R/.fablepowers/u/approved"
+OC_EDIT='d["parent_id"] = "ses_parent"'; occmd "$R" withdraw ""; OC_EDIT=""
+check "command withdraw from a child session: not withdrawn" test -f "$R/.fablepowers/u/pending"
+OC_EDIT='d["parent_unknown"] = False'; occmd "$R" approve ""; OC_EDIT=""
+check "command approve, parent_id null and parent_unknown false: recorded" test -f "$R/.fablepowers/u/approved"
+
+# Config homes, models.toml and the plugin root compared per component as
+# win_name() normalises them (case-insensitive, NTFS trailing dots/spaces, streams).
+R="$TEST_ROOT/o13"; new_repo "$R"
+GATE_ENV=("HOME=$OCHOME" "XDG_CONFIG_HOME=$OCXDG")
+CI=("${OCHOME^^}/.CONFIG/OPENCODE/tui.json" "$OCHOME/.Config/OpenCode/agents/a.md" "$OCXDG/OPENCODE/plugins/p.js"
+    "$OCXDG/opencode./x.json" "$OCXDG/fablepowers/Models.TOML" "$OCXDG/FablePowers/models.toml"
+    "$OCXDG/fablepowers/models.toml." "$OCXDG/fablepowers/models.toml::\$DATA" "$OCHOME/.config/fablepowers/MODELS.toml"
+    "${OCPLUG^^}/hooks/approval_gate.py" "$TEST_ROOT/OcPlugin/hooks/x.py" "$TEST_ROOT/ocplugin./hooks/x.py")
+for f in "${CI[@]}"; do
+  check "no pending: $f allowed" test "$(ocperm "$R" "$f")" == none
+done
+occreate "$R" docs/specs/ci.md
+for f in "${CI[@]}"; do
+  check "pending: $f denied" test "$(ocperm "$R" "$f")" == deny
+done
+for f in "$OCXDG/opencodex/x" "$OCXDG/fablepowers/models.toml.bak" "$TEST_ROOT/OcPlugin2/x"; do
+  check "pending: $f (component differs) allowed" test "$(ocperm "$R" "$f")" == none
+done
+GATE_ENV=()
 
 echo
 if [[ "$FAILURES" -eq 0 ]]; then

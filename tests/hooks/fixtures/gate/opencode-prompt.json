@@ -1,0 +1,9 @@
+{
+  "harness": "opencode",
+  "hook": "prompt",
+  "cwd": "__CWD__",
+  "session_id": "ses_ebd4ce46dffexDLOaC0SNjZINC",
+  "parent_id": null,
+  "plugin_root": "__PLUGIN__",
+  "text": "__PROMPT__"
+}

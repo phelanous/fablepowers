@@ -1,0 +1,15 @@
+{
+  "harness": "opencode",
+  "hook": "before",
+  "cwd": "__CWD__",
+  "session_id": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+  "parent_id": null,
+  "plugin_root": "__PLUGIN__",
+  "tool": "subagent",
+  "input": {
+    "agent": "__AGENT__",
+    "description": "Create notes/child.txt file",
+    "prompt": "Use the write tool to create notes/child.txt containing the word child. Then reply DONE."
+  },
+  "existed": {}
+}

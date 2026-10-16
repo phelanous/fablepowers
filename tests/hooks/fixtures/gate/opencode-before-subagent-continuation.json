@@ -1,0 +1,16 @@
+{
+  "harness": "opencode",
+  "hook": "before",
+  "cwd": "__CWD__",
+  "session_id": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+  "parent_id": null,
+  "plugin_root": "__PLUGIN__",
+  "tool": "subagent",
+  "input": {
+    "agent": "__AGENT__",
+    "sessionID": "ses_ebd5a5d19ffeeuCWPM7BMia7Gz",
+    "description": "resume",
+    "prompt": "Reply with the name of the agent you are running as, then DONE."
+  },
+  "existed": {}
+}

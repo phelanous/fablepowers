@@ -74,6 +74,47 @@ Codex deny messages name `$fablepowers:approve [key]` (no question path) and
 end with the recovery line (trust the hooks in /hooks, or FABLEPOWERS_GATE=off),
 with no final period since Codex appends ". Tool: <name>".
 
+OpenCode branch. A payload is OpenCode's iff `harness` is "opencode"; the JS
+adapter (opencode/index.js) builds it and runs this file directly. Every
+payload has `hook`, `cwd` (the session directory, absolute; anything else makes
+the gate inert), `session_id`, `parent_id` (null for a root session; a failed
+parent lookup arrives as null, so it counts as root) and `plugin_root`. The
+answer is always exactly one JSON object on stdout: `{}` (no decision; also on
+an internal error), `{"decision": "deny", "reason": <text>}` (permission,
+before) or `{"context": <text>}` (after, prompt, command). Same markers, states
+and rules:
+  permission (permission.evaluate)  `action` "edit": every path in `resources`
+      and `files[].file`, resolved against cwd, is checked like an edit-tool
+      path: markers denied always; while pending, OpenCode config denied
+      (`opencode.json`/`opencode.jsonc` anywhere, anything under a `.opencode`
+      directory, `<config home>/opencode/` and `<config home>/fablepowers/
+      models.toml`, config home being $XDG_CONFIG_HOME and ~/.config), then
+      repo paths inside the allowlist pass, paths under `plugin_root` are
+      denied, other paths outside the toplevel pass, and the rest is denied;
+      one bad path denies the call; no usable path denies while pending.
+      `action` "subagent": while pending, every resource (the agent that will
+      run, continuations included) must be `fablepowers-reviewer` or
+      `explore`. Other actions: no decision.
+  before (tool.execute.before)  tool `subagent`: the same dispatch rule on
+      `input.agent`. Other tools: no decision.
+  after (tool.execute.after, `status` "completed" only)  from a root session:
+      `write` with `output.existed` false, `edit` with an `output.files[]`
+      entry whose status is "added", and `patch` `output.applied[]` adds whose
+      target the adapter recorded as not existing before the call (`existed`,
+      {<path>: bool}, paths absolute or relative to cwd) make a
+      docs/specs/<name>.md pending, with a notice. Tool `question`: exactly one
+      question whose option labels are exactly Approve and Changes needed,
+      answered exactly ["Approve"], with exactly one pending design whose spec
+      exists -> approved (via question); a matching Approve that cannot be
+      recorded gets a "not recorded" context.
+  prompt (root sessions)  `text` (the adapter strips one wrapping pair of
+      quotes) matching `/fablepowers:approve|withdraw [key]` as the whole text
+      approves / withdraws; text that starts like the command (leading quotes
+      allowed) but does not match gets a "not recognised" context.
+  command  `verb` ("approve"/"withdraw") and `args` (the key, if any).
+OpenCode messages name `/fablepowers:approve [key]` and the approval question;
+an approve result carries the next workflow step.
+
 FABLEPOWERS_GATE=off: never deny; would-be denials go to .fablepowers/gate.log.
 Malformed payloads and internal errors allow (fail open) and are logged there.
 """
@@ -124,6 +165,17 @@ RUST_WS = ("\t\n\x0b\x0c\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2
            "\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000")
 CODEX_HOW = ("type it as a message (or pick it from the `$` menu in the CLI); in the Codex app, "
              "type it as text")
+
+# OpenCode
+OC_ALLOWED_AGENTS = ("fablepowers-reviewer", "explore")
+OC_CONFIG_NAMES = ("opencode.json", "opencode.jsonc")
+# One trailing newline (LF or CRLF) is accepted, as on Codex.
+OC_COMMAND = re.compile(r"[ \t]*/fablepowers:(approve|withdraw)(?:[ \t]+(\S+))?[ \t]*(?:\r?\n)?")
+# A text that starts like a command (leading quotes the adapter left count) gets a hint.
+OC_NEAR_MISS = re.compile(r"\s*[\"']*/fablepowers:(approve|withdraw)")
+OC_NEXT_STEP = ("Tell the user in one line which design, then continue the workflow: write the "
+                "implementation plan with fablepowers:implementation-plan (or, when the approved design "
+                "already has a plan, execute it).")
 
 
 def now():
@@ -841,6 +893,354 @@ def codex_user_prompt(top, payload):
                       "it is no longer pending." % (spec, key))
 
 
+# --- OpenCode -------------------------------------------------------------------------
+
+def oc_commands_hint(keys):
+    k = keys[0] if len(keys) == 1 else "<key>"
+    return ("ask the user to answer Approve to the approval question, or to run `/fablepowers:approve %s` "
+            "(or `/fablepowers:withdraw %s` to abandon it) as a command or as the whole message" % (k, k))
+
+
+def oc_pending_reason(pending, what):
+    keys = [k for k, _ in pending]
+    if len(pending) == 1:
+        head = "Design `%s` awaits the user's approval" % pending[0][1]
+    else:
+        head = "Designs awaiting the user's approval: %s" % key_list(pending)
+    return ("%s, so %s is blocked by the fablepowers approval gate. Stop and %s. "
+            "Do not retry this call." % (head, what, oc_commands_hint(keys)))
+
+
+def oc_deny(top, payload, reason):
+    if os.environ.get("FABLEPOWERS_GATE", "") == "off":
+        log(top, "FABLEPOWERS_GATE=off: would deny OpenCode %s: %s" % (payload.get("hook"), reason))
+        return {}
+    return {"decision": "deny", "reason": reason}
+
+
+def oc_config_homes():
+    """The config homes the guard covers: $XDG_CONFIG_HOME (when absolute) and ~/.config."""
+    homes = []
+    x = os.environ.get("XDG_CONFIG_HOME", "")
+    if x and os.path.isabs(x):
+        homes.append(x)
+    h = os.path.expanduser("~/.config")
+    if os.path.isabs(h):
+        homes.append(h)
+    return homes
+
+
+def is_opencode_config_path(path):
+    """True for OpenCode config: `opencode.json`/`opencode.jsonc` anywhere, anything
+    under a `.opencode` directory (components normalised as win_name() does),
+    anything under <config home>/opencode/ and <config home>/fablepowers/models.toml."""
+    parts = [win_name(p) for p in path.split(os.sep)]
+    if parts and parts[-1] in OC_CONFIG_NAMES:
+        return True
+    if ".opencode" in parts[:-1]:
+        return True
+    for home in oc_config_homes():
+        for h in {os.path.normpath(home), os.path.realpath(home)}:
+            if (under(path, os.path.join(h, "opencode"))
+                    or path == os.path.join(h, "fablepowers", "models.toml")):
+                return True
+    return False
+
+
+def oc_dispatch_check(top, payload, agents):
+    """While pending, deny unless every agent in `agents` is an allowed one."""
+    pending = pending_designs(top)
+    if not pending:
+        return {}
+    names = [a for a in agents if isinstance(a, str) and a] if isinstance(agents, list) else []
+    if names and len(names) == len(agents) and all(a in OC_ALLOWED_AGENTS for a in names):
+        return {}
+    bad = [a for a in names if a not in OC_ALLOWED_AGENTS]
+    what = ("dispatching agent %s" % ", ".join("`%s`" % a for a in bad)) if bad else "this dispatch (no agent named)"
+    return oc_deny(top, payload, oc_pending_reason(
+        pending, "%s (until approval only `fablepowers-reviewer` and `explore` may be dispatched)" % what))
+
+
+def oc_edit_paths(payload):
+    """The path strings of a permission `edit` call: `resources` and `files[].file`."""
+    out = []
+    res = payload.get("resources")
+    if isinstance(res, list):
+        out += [r for r in res if isinstance(r, str) and r]
+    files = payload.get("files")
+    if isinstance(files, list):
+        out += [f.get("file") for f in files
+                if isinstance(f, dict) and isinstance(f.get("file"), str) and f.get("file")]
+    seen, uniq = set(), []
+    for p in out:
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return uniq
+
+
+def oc_permission_edit(top, payload, cwd):
+    raw = oc_edit_paths(payload)
+    paths = []
+    for p in raw:
+        try:
+            paths.append((p, os.path.normpath(os.path.join(cwd, p)), resolve(p, cwd)))
+        except (ValueError, OSError, TypeError):
+            paths.append((p, None, None))
+    for p, lexical, real in paths:
+        if lexical is None:
+            if is_marker_like(p):
+                return oc_deny(top, payload, OC_MARKER_DENY)
+            continue
+        if is_marker_path(lexical) or is_marker_path(real):
+            return oc_deny(top, payload, OC_MARKER_DENY)
+    pending = pending_designs(top)
+    if not pending:
+        return {}
+    checked = [(p, lx, rl) for p, lx, rl in paths if lx is not None]
+    if not checked:
+        return oc_deny(top, payload, oc_pending_reason(
+            pending, "this edit (the gate found no path it can check in it, so it fails closed)"))
+    if len(checked) != len(paths):
+        p = next(p for p, lx, _ in paths if lx is None)
+        return oc_deny(top, payload, oc_pending_reason(
+            pending, "this edit (the gate cannot resolve its path `%s`, so it fails closed)" % shown_path(p)))
+    allowed = [os.path.realpath(os.path.join(top, d)) for d in ALLOWED_DIRS]
+    proot = payload.get("plugin_root")
+    proots = []
+    if isinstance(proot, str) and os.path.isabs(proot):
+        proots = list({os.path.normpath(proot), os.path.realpath(proot)})
+    for p, lexical, real in checked:
+        if is_opencode_config_path(lexical) or is_opencode_config_path(real):
+            return oc_deny(top, payload, oc_pending_reason(
+                pending, "editing the OpenCode config file `%s` (OpenCode config and "
+                "~/.config/fablepowers/models.toml stay closed to the edit tools until approval; if the "
+                "user asked for this change, they can make it themselves, or approve or withdraw the "
+                "design first)" % lexical))
+        if under(real, top) and any(under(real, a) for a in allowed):
+            continue
+        if any(under(lexical, r) or under(real, r) for r in proots):
+            return oc_deny(top, payload, oc_pending_reason(
+                pending, "editing `%s` under the fablepowers plugin directory (it stays closed to the "
+                "edit tools until approval)" % lexical))
+        if not under(real, top):
+            continue
+        return oc_deny(top, payload, oc_pending_reason(
+            pending, "editing `%s` (only docs/specs/, docs/plans/ and .fablepowers/ are open "
+            "until approval)" % os.path.relpath(real, top)))
+    return {}
+
+
+OC_MARKER_DENY = ("Approval markers (.fablepowers/**/pending, .fablepowers/**/approved) are written only "
+                  "by the fablepowers approval gate on a user action; edit tools may not create or change "
+                  "them. Ask the user to run `/fablepowers:approve` or `/fablepowers:withdraw`. Do not retry "
+                  "this call.")
+
+
+def oc_permission(top, payload, cwd):
+    action = payload.get("action")
+    if action == "edit":
+        return oc_permission_edit(top, payload, cwd)
+    if action == "subagent":
+        return oc_dispatch_check(top, payload, payload.get("resources"))
+    return {}
+
+
+def oc_before(top, payload, cwd):
+    if payload.get("tool") != "subagent":
+        return {}
+    ti = payload.get("input")
+    agent = ti.get("agent") if isinstance(ti, dict) else None
+    return oc_dispatch_check(top, payload, [agent])
+
+
+def oc_is_root(payload):
+    return not payload.get("parent_id")
+
+
+def oc_after_pending(top, payload, cwd, tool, output):
+    """[(spec, key)] made pending by a root-session create of a docs/specs/*.md."""
+    targets = []
+    if tool == "write":
+        if output.get("existed") is not False:
+            return []
+        raw = output.get("target") or output.get("resource")
+        if not isinstance(raw, str) or not raw:
+            ti = payload.get("input")
+            raw = ti.get("path") if isinstance(ti, dict) else None
+        if isinstance(raw, str) and raw:
+            targets.append(raw)
+        else:
+            log(top, "OpenCode write create without a path; ignored")
+    elif tool == "edit":
+        files = output.get("files")
+        for f in files if isinstance(files, list) else []:
+            if isinstance(f, dict) and f.get("status") == "added" and isinstance(f.get("file"), str) and f["file"]:
+                targets.append(f["file"])
+    elif tool == "patch":
+        existed = payload.get("existed")
+        known = {}
+        if isinstance(existed, dict):
+            for k, v in existed.items():
+                if isinstance(k, str) and k:
+                    known[os.path.normpath(os.path.join(cwd, k))] = v
+        applied = output.get("applied")
+        for a in applied if isinstance(applied, list) else []:
+            if not isinstance(a, dict) or a.get("type") != "add":
+                continue
+            raw = a.get("target") or a.get("resource")
+            if not isinstance(raw, str) or not raw:
+                continue
+            lexical = os.path.normpath(os.path.join(cwd, raw))
+            if known.get(lexical) is False:
+                targets.append(raw)
+            elif lexical not in known:
+                log(top, "OpenCode patch add of `%s` without an existed record; no spec marked pending"
+                    % shown_path(raw))
+    made = []
+    for raw in targets:
+        m = mark_pending(top, resolve(raw, cwd))
+        if m:
+            made.append(m)
+    return made
+
+
+def oc_question(top, payload, output):
+    ti = payload.get("input")
+    qs = ti.get("questions") if isinstance(ti, dict) else None
+    if not isinstance(qs, list) or len(qs) != 1 or not isinstance(qs[0], dict):
+        return {}
+    opts = qs[0].get("options")
+    if not isinstance(opts, list):
+        return {}
+    labels = [o.get("label") if isinstance(o, dict) else None for o in opts]
+    if len(labels) != 2 or set(labels) != set(QUESTION_LABELS):
+        return {}
+    answers = output.get("answers")
+    if not isinstance(answers, list) or len(answers) != 1 or answers[0] != ["Approve"]:
+        return {}
+    pending = pending_designs(top)
+    if len(pending) == 1:
+        key, spec = pending[0]
+        if os.path.isfile(os.path.join(top, spec)):
+            record_approval(top, key, "question")
+            return {"context": "fablepowers approval gate: the user approved design `%s`; the approval "
+                               "is recorded." % spec}
+        why = "the spec file `%s` of the pending design no longer exists" % spec
+    elif not pending:
+        why = "no design is pending in this repository (no spec file under docs/specs/ was created)"
+    else:
+        why = "several designs are pending: %s" % key_list(pending)
+    keys = [k for k, _ in pending]
+    if keys:
+        k = keys[0] if len(keys) == 1 else "<key>"
+        todo = "The user should run `/fablepowers:approve %s` (or `/fablepowers:withdraw %s`)." % (k, k)
+    else:
+        todo = "The gate is not blocking anything."
+    return {"context": "fablepowers approval gate: the Approve answer was not recorded because %s. %s "
+                       "Tell the user this; do not ask the approval question again." % (why, todo)}
+
+
+def oc_after(top, payload, cwd):
+    if payload.get("status") != "completed" or not oc_is_root(payload):
+        return {}
+    tool = payload.get("tool")
+    output = payload.get("output")
+    if not isinstance(output, dict):
+        return {}
+    if tool == "question":
+        return oc_question(top, payload, output)
+    if tool not in ("write", "edit", "patch"):
+        return {}
+    made = oc_after_pending(top, payload, cwd, tool, output)
+    if not made:
+        return {}
+    names = ", ".join("`%s` (key `%s`)" % m for m in made)
+    return {"context": (
+        "fablepowers approval gate: design %s %s now pending the user's approval. Dispatching any agent "
+        "except fablepowers-reviewer and explore, and edits outside docs/specs/, docs/plans/ and "
+        ".fablepowers/, are blocked until the user answers Approve to the approval question or runs "
+        "`/fablepowers:approve%s`." % (names, "is" if len(made) == 1 else "are",
+                                        "" if len(made) == 1 else " <key>"))}
+
+
+def oc_act(top, verb, arg):
+    """Approve or withdraw from a command or a prompt; the context dict."""
+    pending = pending_designs(top)
+    if not pending:
+        extra = (" If a design is under discussion in this conversation, the command is still the user's "
+                 "approval of it: tell the user the gate had nothing to record, then continue with "
+                 "fablepowers:implementation-plan." if verb == "approve" else "")
+        return {"context": "fablepowers approval gate: nothing is pending, so `/fablepowers:%s` recorded "
+                           "nothing.%s" % (verb, extra)}
+    key = pick(pending, arg)
+    if key is None:
+        return {"context": (
+            "fablepowers approval gate: %s, so `/fablepowers:%s` recorded nothing. Tell the user to run "
+            "`/fablepowers:%s <key>` with one of: %s. Do not act on this message as %s." % (
+                ("no pending design matches `%s`" % arg) if arg else "several designs are pending",
+                verb, verb, key_list(pending), ACT_NOUN[verb]))}
+    spec = dict(pending)[key]
+    if verb == "approve":
+        record_approval(top, key, "command")
+        return {"context": "fablepowers approval gate: the user approved design `%s` (key `%s`); the "
+                           "approval is recorded. %s" % (spec, key, OC_NEXT_STEP)}
+    os.remove(os.path.join(fp_dir(top), key, "pending"))
+    return {"context": "fablepowers approval gate: the user withdrew design `%s` (key `%s`); it is no "
+                       "longer pending. A withdrawn design is abandoned, not approved: do not plan or "
+                       "implement it; tell the user in one line and ask what to do next." % (spec, key)}
+
+
+def oc_prompt(top, payload, cwd):
+    if not oc_is_root(payload):
+        return {}
+    text = payload.get("text")
+    if not isinstance(text, str):
+        return {}
+    m = OC_COMMAND.fullmatch(text)
+    if not m:
+        near = OC_NEAR_MISS.match(text)
+        if near:
+            verb = near.group(1)
+            return {"context": (
+                "fablepowers approval gate: `/fablepowers:%s` was not recognised, so it recorded nothing; "
+                "send exactly `/fablepowers:%s [key]` on its own, as the whole message. Tell the user this; "
+                "do not act on this message as %s." % (verb, verb, ACT_NOUN[verb]))}
+        return {}
+    return oc_act(top, m.group(1), m.group(2) or "")
+
+
+def oc_command(top, payload, cwd):
+    verb = payload.get("verb")
+    if verb not in ("approve", "withdraw"):
+        return {}
+    arg = payload.get("args")
+    return oc_act(top, verb, arg.strip() if isinstance(arg, str) else "")
+
+
+OC_HOOKS = {"permission": oc_permission, "before": oc_before, "after": oc_after,
+            "prompt": oc_prompt, "command": oc_command}
+
+
+def opencode_main(payload):
+    """The OpenCode branch: always prints exactly one JSON object."""
+    top = None
+    out = {}
+    try:
+        cwd = payload.get("cwd")
+        handler = OC_HOOKS.get(payload.get("hook"))
+        if isinstance(cwd, str) and os.path.isabs(cwd):
+            top = find_toplevel(cwd)
+            if top and handler:
+                out = handler(top, payload, cwd) or {}
+            elif top:
+                log(top, "OpenCode payload with an unknown hook %r; no decision" % (payload.get("hook"),))
+    except Exception:
+        out = {}
+        log(top, "internal error (OpenCode), allowed: " + traceback.format_exc(limit=3))
+    emit(out)
+
+
 # --- main ---------------------------------------------------------------------------
 
 def main():
@@ -853,6 +1253,9 @@ def main():
             payload = None
         if not isinstance(payload, dict):
             log(find_toplevel(os.getcwd()), "malformed hook payload (not a JSON object); allowed")
+            return
+        if payload.get("harness") == "opencode":
+            opencode_main(payload)
             return
         cwd = payload.get("cwd")
         if not isinstance(cwd, str) or not cwd:

@@ -1,0 +1,28 @@
+{
+  "harness": "opencode",
+  "hook": "after",
+  "cwd": "__CWD__",
+  "session_id": "ses_ebd5a99f3ffeF5vPi54JXAWmlv",
+  "parent_id": null,
+  "plugin_root": "__PLUGIN__",
+  "tool": "edit",
+  "input": {
+    "path": "__FILE__",
+    "oldString": "alpha",
+    "newString": "beta"
+  },
+  "status": "completed",
+  "output": {
+    "files": [
+      {
+        "file": "__FILE__",
+        "patch": "Index: __FILE__\n===================================================================\n--- __FILE__\n+++ __FILE__\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+        "additions": 1,
+        "deletions": 1,
+        "status": "modified"
+      }
+    ],
+    "replacements": 1
+  },
+  "existed": {}
+}

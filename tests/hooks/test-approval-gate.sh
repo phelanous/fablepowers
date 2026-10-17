@@ -2529,6 +2529,63 @@ chmod 755 "$R/.fablepowers/f"
 PI_EDIT='d["plugin_root"] = 5; d["pi_agent_dir"] = ["x"]'; piw "$R" "$R/src/app.py" >/dev/null; PI_EDIT=""
 check "malformed plugin_root / pi_agent_dir: ignored, src still denied" test "$(oc_verdict)" == deny
 
+
+# --- 44. Case variants of the toplevel (all harnesses) ------------------------------------
+# realpath() does not canonicalise case, so on a case-insensitive filesystem
+# `<parent>/CI` names the repo `<parent>/ci`. A path under the toplevel only
+# case-insensitively (or by an NTFS name variant) counts as inside the repo: denied
+# while pending unless the rest of it is exactly an allowed dir (fails closed; on a
+# case-sensitive filesystem such a path is a sibling directory, denied too).
+
+echo "44. Case variants of the toplevel count as inside the repo"
+
+ci_variants() {  # ci_variants <repo>: the upper-cased and trailing-dot variants of its last component
+  local base; base="$(basename "$1")"
+  printf '%s\n' "$(dirname "$1")/${base^^}" "$1."
+}
+
+R="$TEST_ROOT/ci-claude"; new_repo "$R"; create_spec "$R" docs/specs/ci.md
+while read -r V; do
+  check "Claude: '$V/src/app.py' denied" test "$(edit_verdict pre-write "$R" "$V/src/app.py")" == deny
+  check "Claude: '$V/docs/specs/n.md' allowed" test "$(edit_verdict pre-write "$R" "$V/docs/specs/n.md")" == allow
+  check "Claude: '$V/Docs/Specs/n.md' denied (rest compared exactly)" test "$(edit_verdict pre-write "$R" "$V/Docs/Specs/n.md")" == deny
+done < <(ci_variants "$R")
+edit_verdict pre-write "$R" "$(dirname "$R")/CI-CLAUDE/src/app.py" >/dev/null
+check "Claude: the deny names the repo-relative path" bash -c '[[ "$1" == *"editing \`src/app.py\`"* ]]' _ "$(text_of)"
+check "Claude: a sibling '${R}x/src/app.py' still outside, allowed" test "$(edit_verdict pre-write "$R" "${R}x/src/app.py")" == allow
+
+R="$TEST_ROOT/ci-codex"; new_repo "$R"; ccreate "$R" docs/specs/ci.md
+while read -r V; do
+  check "Codex: '$V/src/app.py' denied" test "$(cpatch "$R" "$(patch_of "*** Add File: $V/src/app.py"$'\n+x')")" == deny
+  check "Codex: '$V/docs/plans/n.md' allowed" test "$(cpatch "$R" "$(patch_of "*** Add File: $V/docs/plans/n.md"$'\n+x')")" == allow
+  check "Codex: '$V/Docs/Plans/n.md' denied (rest compared exactly)" test "$(cpatch "$R" "$(patch_of "*** Add File: $V/Docs/Plans/n.md"$'\n+x')")" == deny
+done < <(ci_variants "$R")
+cpatch "$R" "$(patch_of "*** Add File: $(dirname "$R")/CI-CODEX/src/app.py"$'\n+x')" >/dev/null
+check "Codex: the deny names the repo-relative path" bash -c '[[ "$1" == *"touches \`src/app.py\`"* ]]' _ "$(text_of)"
+check "Codex: a sibling '${R}x/src/app.py' still outside, allowed" test "$(cpatch "$R" "$(patch_of "*** Add File: ${R}x/src/app.py"$'\n+x')")" == allow
+
+R="$TEST_ROOT/ci-oc"; new_repo "$R"; occreate "$R" docs/specs/ci.md
+while read -r V; do
+  check "OpenCode: '$V/src/app.py' denied" test "$(ocperm "$R" "$V/src/app.py")" == deny
+  check "OpenCode: '$V/.fablepowers/ci/notes.md' allowed" test "$(ocperm "$R" "$V/.fablepowers/ci/notes.md")" == none
+  check "OpenCode: '$V/DOCS/specs/n.md' denied (rest compared exactly)" test "$(ocperm "$R" "$V/DOCS/specs/n.md")" == deny
+done < <(ci_variants "$R")
+ocperm "$R" "$(dirname "$R")/CI-OC/src/app.py" >/dev/null
+check "OpenCode: the deny names the repo-relative path" bash -c '[[ "$1" == *"editing \`src/app.py\`"* ]]' _ "$(oc_text)"
+check "OpenCode: a sibling '${R}x/src/app.py' still outside, allowed" test "$(ocperm "$R" "${R}x/src/app.py")" == none
+
+R="$TEST_ROOT/ci-pi"; new_repo "$R"; picreate "$R" docs/specs/ci.md >/dev/null
+while read -r V; do
+  check "Pi: write '$V/src/app.py' denied" test "$(piw "$R" "$V/src/app.py")" == deny
+  check "Pi: edit '$V/src/app.py' denied" test "$(piw "$R" "$V/src/app.py" edit)" == deny
+  check "Pi: '$V/docs/specs/n.md' allowed" test "$(piw "$R" "$V/docs/specs/n.md")" == none
+  check "Pi: '$V/docs/Specs/n.md' denied (rest compared exactly)" test "$(piw "$R" "$V/docs/Specs/n.md")" == deny
+done < <(ci_variants "$R")
+piw "$R" "$(dirname "$R")/CI-PI/src/app.py" >/dev/null
+check "Pi: the deny names the repo-relative path" bash -c '[[ "$1" == *"editing \`src/app.py\`"* ]]' _ "$(oc_text)"
+check "Pi: a sibling '${R}x/src/app.py' still outside, allowed" test "$(piw "$R" "${R}x/src/app.py")" == none
+check "Pi: the plugin root still denied under a case-variant toplevel" test "$(piw "$R" "$(dirname "$R")/CI-PI/plug/x.js" write "$R/plug")" == deny
+
 echo
 if [[ "$FAILURES" -eq 0 ]]; then
   echo "All approval-gate tests passed."

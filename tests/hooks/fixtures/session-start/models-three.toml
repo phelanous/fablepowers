@@ -1,0 +1,19 @@
+# fablepowers seat models: the Codex, OpenCode and Pi tables side by side, each
+# holding keys and values the other tables' grammars would reject.
+[codex]
+implementer = "gpt-6-luna"
+implementer_effort = "low"
+strict_implementer = "gpt-5.6-terra"
+reviewer_effort = "max"
+
+[opencode]
+implementer = "opencode/big-pickle#high"   # trailing comment
+  strict_implementer = "openrouter/anthropic/claude-x.1:beta"
+reviewer="opencode/mimo-v2.6-flash-free"
+
+[pi]
+implementer = "openrouter/deepseek/deepseek-v4-flash"
+implementer_thinking = "minimal"   # trailing comment
+  strict_implementer = "openrouter/qwen/qwen3.6-flash"
+reviewer="google-vertex/claude-x@20261001"
+reviewer_thinking = "xhigh"

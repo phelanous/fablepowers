@@ -15,6 +15,9 @@
 # Claude Code payload the output must stay byte-identical to the empty-stdin
 # (0.4.0) output; on a Codex payload the context is the Codex preamble with the
 # seat table (from models.toml) followed by the same map, capped at 8,000.
+#
+# 0.6.0 adds --opencode and 0.7.0 adds --pi: JSON {context, seats, warnings}
+# from the [opencode] / [pi] table, stdin never read, context capped at 8,000.
 set -euo pipefail
 
 # No hook run inherits the runner's stdin: empty stdin is the 0.4.0 case.
@@ -1042,6 +1045,304 @@ oc_run XDG_CONFIG_HOME="$deep"
 size="$(oc_ctx "$OUT" | python3 -c 'import sys; print(len(sys.stdin.read()))')"
 [[ "$RC" == 0 && "$size" -le 8000 ]] && pass "three 128-character pinned seats, long path: $size characters (cap 8000)" \
   || fail "three 128-character pinned seats: rc $RC, $size characters"
+
+# --- (k) Pi mode (--pi) -------------------------------------------------------------
+
+echo "Pi mode (--pi)"
+
+# pi_run [VAR=value ...]: run the tree's hook directly with --pi (the Pi
+# extension's way, no hooks.json), stdin /dev/null unless $HOOK_STDIN; $OUT, $RC.
+pi_run() {
+  RC=0
+  OUT="$(cd "$TEST_ROOT" && env -u BASH -u PLUGIN_ROOT -u CODEX_HOME XDG_CONFIG_HOME="$TEST_ROOT/xdg-empty" "$@" "$SH" "$PI_TREE/hooks/session-start" --pi <"${HOOK_STDIN:-/dev/null}" 2>"$TEST_ROOT/stderr")" || RC=$?
+}
+PI_TREE="$T"
+
+PI_UNPINNED_ALL='["unpinned seats run on the session model: implementer, strict_implementer, reviewer; pin them in the [pi] table of models.toml."]'
+PI_UNPINNED_ITEM="${PI_UNPINNED_ALL:1:${#PI_UNPINNED_ALL}-2}"
+
+# Shape, with no models.toml: every seat null, one warning naming all three.
+pi_run
+if got="$(oc_check "$OUT" "$NULL_SEATS" "$PI_UNPINNED_ALL")" && [[ "$RC" == 0 && ! -s "$TEST_ROOT/stderr" ]]; then
+  pass "Pi, no models.toml: {context, seats (all null), warnings (one unpinned line)}, rc 0, no stderr"
+else
+  fail "Pi, no models.toml: rc $RC, $got"
+fi
+pi_default="$OUT"
+if pre="$(python3 -c '
+import json, sys
+ctx = json.loads(sys.argv[1])["context"]
+lines = open(sys.argv[2], encoding="utf-8").read().split("\n")
+end = lines.index("---", 1)
+body = "\n".join(lines[end + 1:]).rstrip("\n")
+pre = ctx[: len(ctx) - len(body) - 2]
+if not ctx.endswith("\n\n" + body) or "\n\n" in pre:
+    sys.exit(1)
+sys.stdout.write(pre)' "$pi_default" "$REPO_ROOT/skills/workflow/SKILL.md")"; then
+  pass "Pi context is the preamble, a blank line, then the map byte for byte"
+else
+  fail "Pi context is not preamble + blank line + SKILL.md minus frontmatter"
+  pre=""
+fi
+for needle in 'You have fablepowers on Pi.' '`fablepowers:workflow`' \
+  "\`$T/skills/workflow/references/pi.md\`" "Plugin root: \`$T\`." \
+  'Skill names: a skill written `fablepowers:<x>` is the Pi skill `fablepowers-<x>`.' \
+  "Seat table (the [pi] table of $TEST_ROOT/xdg-empty/fablepowers/models.toml)" \
+  'dispatch each seat with the `fablepowers_dispatch` tool' \
+  '- implementer (seat implementer, agents/implementer.md): session model and thinking (unpinned)' \
+  '- strict_implementer (seat strict_implementer, agents/strict-implementer.md): session model and thinking (unpinned)' \
+  '- reviewer (seat reviewer, agents/reviewer.md): session model and thinking (unpinned)' \
+  $'models.toml warnings (1):\n- unpinned seats run on the session model: implementer, strict_implementer, reviewer; pin them in the [pi] table of models.toml.'; do
+  [[ "$pre" == *"$needle"* ]] && pass "Pi preamble names '${needle%%$'\n'*}'" || fail "Pi preamble lacks '$needle'"
+done
+for needle in 'Codex' 'codex.md' 'OpenCode' 'opencode.md' 'reasoning_effort' 'variant' 'Claude Code' 'AskUserQuestion' 'TodoWrite' 'Agent tool' 'gpt-'; do
+  [[ "$pre" != *"$needle"* ]] && pass "Pi preamble does not mention '$needle'" || fail "Pi preamble mentions '$needle'"
+done
+size="$(oc_ctx "$pi_default" | python3 -c 'import sys; print(len(sys.stdin.read()))')"
+[[ "$size" -le 8000 ]] && pass "Pi context is $size characters (cap 8000)" \
+  || fail "Pi context is $size characters, over the 8000 cap"
+
+# Stdin is never read in --pi mode: a Codex payload on stdin, or a Codex-like
+# environment, still gives the Pi output unchanged.
+HOOK_STDIN="$CODEX_PAYLOAD" pi_run
+[[ "$RC" == 0 && "$OUT" == "$pi_default" ]] && pass "--pi with a Codex payload on stdin: same Pi output" \
+  || fail "--pi with a Codex payload on stdin: rc $RC, output differs"
+pi_run PLUGIN_ROOT="$T" CLAUDE_PLUGIN_ROOT="$T"
+[[ "$RC" == 0 && "$OUT" == "$pi_default" ]] && pass "--pi with PLUGIN_ROOT = CLAUDE_PLUGIN_ROOT: same Pi output" \
+  || fail "--pi with PLUGIN_ROOT = CLAUDE_PLUGIN_ROOT: rc $RC, output differs"
+exec 9<>"$TEST_ROOT/fifo"
+t0="$(python3 -c 'import time; print(int(time.time()*1000))')"
+HOOK_STDIN="$TEST_ROOT/fifo" pi_run
+t1="$(python3 -c 'import time; print(int(time.time()*1000))')"
+exec 9>&-
+if [[ "$RC" == 0 && "$OUT" == "$pi_default" && $((t1 - t0)) -lt 800 ]]; then
+  pass "--pi, stdin open with no data: rc 0 in $((t1 - t0)) ms (< 800, stdin not read)"
+else
+  fail "--pi, stdin open with no data: rc $RC after $((t1 - t0)) ms"
+fi
+# Other arguments do not select Pi mode; --pi as a later argument does not either.
+for args in '--pix' '--p' 'x --pi'; do
+  RC=0
+  OUT="$(cd "$TEST_ROOT" && env -u BASH -u PLUGIN_ROOT -u CODEX_HOME "$SH" "$T/hooks/session-start" $args </dev/null 2>/dev/null)" || RC=$?
+  [[ "$RC" == 0 && "$OUT" == "$claude_ref" ]] && pass "arguments '$args': Claude Code output" \
+    || fail "arguments '$args': rc $RC, not the Claude Code output"
+done
+
+# Broken PATH (builtins only) and bash --posix.
+RC=0
+OUT="$(cd "$TEST_ROOT" && env -i PATH=/nonexistent "$SH" "$T/hooks/session-start" --pi </dev/null 2>"$TEST_ROOT/stderr")" || RC=$?
+if oc_check "$OUT" "$NULL_SEATS" "$PI_UNPINNED_ALL" >/dev/null && [[ "$RC" == 0 && "$(oc_ctx "$OUT")" == *"Seat table (no models.toml since HOME and XDG_CONFIG_HOME are unset)"* ]]; then
+  pass "Pi, broken PATH, no HOME/XDG_CONFIG_HOME: all seats null, and the preamble says why"
+else
+  fail "Pi, broken PATH, no HOME/XDG_CONFIG_HOME: rc $RC; $(head -c 160 "$TEST_ROOT/stderr")"
+fi
+RC=0
+OUT="$(cd "$TEST_ROOT" && env -u PLUGIN_ROOT XDG_CONFIG_HOME="$TEST_ROOT/xdg-empty" "$SH" --posix "$T/hooks/session-start" --pi </dev/null 2>"$TEST_ROOT/stderr")" || RC=$?
+[[ "$RC" == 0 && "$OUT" == "$pi_default" ]] && pass "bash --posix: same Pi output" \
+  || fail "bash --posix --pi: rc $RC; $(head -c 160 "$TEST_ROOT/stderr")"
+
+# JSON escaping: a plugin root holding a quote, a backslash and a tab.
+PI_TREE="$QT"; pi_run; PI_TREE="$T"
+if oc_check "$OUT" "$NULL_SEATS" >/dev/null && [[ "$(oc_ctx "$OUT")" == *"Plugin root: \`$QT\`."* && "$(oc_ctx "$OUT")" == *"\`$QT/skills/workflow/references/pi.md\`"* ]]; then
+  pass "Pi, plugin root with a quote, backslash and tab: valid JSON, root and pi.md named exactly"
+else
+  fail "Pi, plugin root with a quote, backslash and tab: $(printf '%s' "$OUT" | head -c 160)"
+fi
+
+# pi_toml <file-or-empty> [VAR=value ...]: Pi run with that models.toml.
+pi_toml() {
+  local src="$1"; shift
+  XN=$((XN + 1))
+  local xdg="$TEST_ROOT/xdg-$XN"
+  mkdir -p "$xdg/fablepowers"
+  [[ -n "$src" ]] && cp "$src" "$xdg/fablepowers/models.toml"
+  pi_run XDG_CONFIG_HOME="$xdg" "$@"
+}
+
+# pi_case <label> <content (printf format)> <expected seats JSON> <expected warnings JSON>
+pi_case() {
+  local label="$1" content="$2" got
+  printf -- "$content" > "$TEST_ROOT/models.toml"
+  pi_toml "$TEST_ROOT/models.toml"
+  if got="$(oc_check "$OUT" "$3" "$4")" && [[ "$RC" == 0 ]]; then
+    pass "$label"
+  else
+    fail "$label: rc $RC, $got"
+  fi
+}
+
+# All three tables present: each mode reads only its own, with no cross-warnings,
+# and the Claude, Codex and OpenCode outputs are byte-identical to the same file
+# without the [pi] table.
+pi_toml "$SS_FIX/models-three.toml"
+xdg_three="$TEST_ROOT/xdg-$XN"
+want_three='{"implementer":{"provider":"openrouter","id":"deepseek/deepseek-v4-flash","thinking":"minimal"},"strict_implementer":{"provider":"openrouter","id":"qwen/qwen3.6-flash","thinking":null},"reviewer":{"provider":"google-vertex","id":"claude-x@20261001","thinking":"xhigh"}}'
+if got="$(oc_check "$OUT" "$want_three" '[]')" && [[ "$RC" == 0 ]]; then
+  pass "[codex] + [opencode] + [pi]: Pi reads only [pi], no warnings"
+else
+  fail "[codex] + [opencode] + [pi], Pi mode: $got"
+fi
+three_ctx="$(oc_ctx "$OUT")"
+for needle in '- implementer (seat implementer, agents/implementer.md): model openrouter/deepseek/deepseek-v4-flash, thinking minimal' \
+  "- strict_implementer (seat strict_implementer, agents/strict-implementer.md): model openrouter/qwen/qwen3.6-flash, Pi's default thinking" \
+  '- reviewer (seat reviewer, agents/reviewer.md): model google-vertex/claude-x@20261001, thinking xhigh'; do
+  [[ "$three_ctx" == *"$needle"$'\n'* ]] && pass "Pi pinned seat line: '${needle:2:60}…'" || fail "Pi seat line missing: '$needle'"
+done
+[[ "$three_ctx" != *"models.toml warnings"* && "$three_ctx" != *unpinned* ]] \
+  && pass "Pi, every seat pinned: no warning block, no unpinned line" || fail "Pi, every seat pinned: warnings in the context"
+sed '/^\[pi\]/,$d' "$SS_FIX/models-three.toml" > "$TEST_ROOT/models-no-pi.toml"
+for m in codex opencode claude; do
+  cp "$SS_FIX/models-three.toml" "$xdg_three/fablepowers/models.toml"
+  case "$m" in
+    codex) HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$xdg_three" run_normal "$T" ;;
+    opencode) OC_TREE="$T"; oc_run XDG_CONFIG_HOME="$xdg_three" ;;
+    claude) HOOK_STDIN="$CLAUDE_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$xdg_three" run_normal "$T" ;;
+  esac
+  with_pi="$OUT"; rc_with="$RC"
+  cp "$TEST_ROOT/models-no-pi.toml" "$xdg_three/fablepowers/models.toml"
+  case "$m" in
+    codex) HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$xdg_three" run_normal "$T" ;;
+    opencode) oc_run XDG_CONFIG_HOME="$xdg_three" ;;
+    claude) HOOK_STDIN="$CLAUDE_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$xdg_three" run_normal "$T" ;;
+  esac
+  [[ "$rc_with" == 0 && "$with_pi" == "$OUT" ]] && pass "$m output byte-identical with and without the [pi] table" \
+    || fail "$m output changes when a [pi] table is present"
+done
+[[ "$with_pi" == "$claude_ref" ]] && pass "Claude Code output with three tables is the reference output" \
+  || fail "Claude Code output with three tables differs from the reference"
+# The three-table file in Codex and OpenCode mode: the existing expectations, no warnings.
+cp "$SS_FIX/models-three.toml" "$xdg_three/fablepowers/models.toml"
+HOOK_STDIN="$CODEX_PAYLOAD" HOOK_ENV="XDG_CONFIG_HOME=$xdg_three" run_normal "$T"
+[[ "$RC" == 0 && "$(seats_of "$OUT")" == "implementer=gpt-6-luna/low strict_implementer=gpt-5.6-terra/medium reviewer=gpt-6.1-sol/max" && -z "$(warnings_of "$OUT")" ]] \
+  && pass "[codex] + [opencode] + [pi]: Codex reads only [codex], no warnings" \
+  || fail "three tables, Codex mode: seats '$(seats_of "$OUT")', warnings '$(warnings_of "$OUT")'"
+oc_run XDG_CONFIG_HOME="$xdg_three"
+oc_check "$OUT" "$want_both" '[]' >/dev/null && pass "[codex] + [opencode] + [pi]: OpenCode reads only [opencode], no warnings" \
+  || fail "three tables, OpenCode mode: $(oc_check "$OUT" "$want_both")"
+
+# *_thinking keys stay unknown keys in [codex] and [opencode] (the known-key set
+# is shared by the parser).
+toml_case "[codex] implementer_thinking: unknown key" '[codex]\nimplementer_thinking = "high"\n' "$DEFAULT_SEATS" 1 \
+  "line 2: unknown key implementer_thinking; ignored."
+toml_case "[codex] reviewer_thinking with a Pi level: unknown key" '[codex]\nreviewer_thinking = "minimal"\n' "$DEFAULT_SEATS" 1 \
+  "line 2: unknown key reviewer_thinking; ignored."
+oc_case "[opencode] strict_implementer_thinking: unknown key" '[opencode]\nstrict_implementer_thinking = "high"\n' "$NULL_SEATS" \
+  "[\"line 2: unknown key strict_implementer_thinking; ignored.\",${UNPINNED_ALL:1:${#UNPINNED_ALL}-2}]"
+
+# [pi] grammar.
+pp1() { printf '{"implementer":%s,"strict_implementer":null,"reviewer":null}' "$1"; }
+PI_UNPIN_SR='"unpinned seats run on the session model: strict_implementer, reviewer; pin them in the [pi] table of models.toml."'
+pi_bad() { printf '["line %s: implementer is not a valid provider/model-id; using the session model.",%s]' "$1" "$PI_UNPINNED_ITEM"; }
+pi_case "provider/model: split, thinking null" '[pi]\nimplementer = "openrouter/gpt-x"\n' \
+  "$(pp1 '{"provider":"openrouter","id":"gpt-x","thinking":null}')" "[$PI_UNPIN_SR]"
+pi_case "provider/a/b: the provider is the first segment, the id keeps its slashes" '[pi]\nimplementer = "openrouter/qwen/qwen3.6-flash"\n' \
+  "$(pp1 '{"provider":"openrouter","id":"qwen/qwen3.6-flash","thinking":null}')" "[$PI_UNPIN_SR]"
+pi_case "characters . _ : @ - and digits accepted" '[pi]\nimplementer = "A.z_:@0-9/x.y_1:2-3@4"\n' \
+  "$(pp1 '{"provider":"A.z_:@0-9","id":"x.y_1:2-3@4","thinking":null}')" "[$PI_UNPIN_SR]"
+pi_case "a non-level colon suffix (:free) is kept" '[pi]\nimplementer = "openrouter/meta/llama-4:free"\n' \
+  "$(pp1 '{"provider":"openrouter","id":"meta/llama-4:free","thinking":null}')" "[$PI_UNPIN_SR]"
+pi_case "a level name inside the id is kept (:high-x)" '[pi]\nimplementer = "a/b:high-x"\n' \
+  "$(pp1 '{"provider":"a","id":"b:high-x","thinking":null}')" "[$PI_UNPIN_SR]"
+for lvl in off minimal low medium high xhigh max; do
+  pi_case ":$lvl suffix: unpinned + warning" "[pi]\nimplementer = \"a/b:$lvl\"\n" "$NULL_SEATS" \
+    "[\"line 2: implementer ends in a :thinking suffix (use implementer_thinking); using the session model.\",$PI_UNPINNED_ITEM]"
+done
+pi128="p/$(printf 'm%.0s' {1..126})"
+pi_case "128-character id accepted" "[pi]\nimplementer = \"$pi128\"\n" \
+  "$(pp1 "{\"provider\":\"p\",\"id\":\"${pi128#p/}\",\"thinking\":null}")" "[$PI_UNPIN_SR]"
+pi_case "129-character id: unpinned + warning" "[pi]\nimplementer = \"${pi128}m\"\n" "$NULL_SEATS" "$(pi_bad 2)"
+pi_case "no slash: unpinned + warning" '[pi]\nimplementer = "gpt-x"\n' "$NULL_SEATS" "$(pi_bad 2)"
+pi_case "leading slash: unpinned + warning" '[pi]\nimplementer = "/gpt-x"\n' "$NULL_SEATS" "$(pi_bad 2)"
+pi_case "trailing slash: unpinned + warning" '[pi]\nimplementer = "openrouter/"\n' "$NULL_SEATS" "$(pi_bad 2)"
+pi_case "empty path segment: unpinned + warning" '[pi]\nimplementer = "a//b"\n' "$NULL_SEATS" "$(pi_bad 2)"
+pi_case "#variant (OpenCode syntax): unpinned + warning" '[pi]\nimplementer = "a/b#high"\n' "$NULL_SEATS" "$(pi_bad 2)"
+pi_case "space: unpinned + warning" '[pi]\nimplementer = "a/b c"\n' "$NULL_SEATS" "$(pi_bad 2)"
+pi_case "+: unpinned + warning" '[pi]\nimplementer = "a/b+c"\n' "$NULL_SEATS" "$(pi_bad 2)"
+pi_case "non-ASCII letter: unpinned + warning" '[pi]\nimplementer = "a/caf\xc3\xa9"\n' "$NULL_SEATS" "$(pi_bad 2)"
+pi_case "empty value: unpinned + warning" '[pi]\nimplementer = ""\n' "$NULL_SEATS" "$(pi_bad 2)"
+pi_case "single-quoted: unpinned + warning" "[pi]\nimplementer = 'a/b'\n" "$NULL_SEATS" \
+  "[\"line 2: implementer is single-quoted (use double quotes); using the session model.\",$PI_UNPINNED_ITEM]"
+pi_case "unquoted: unpinned + warning" '[pi]\nimplementer = a/b\n' "$NULL_SEATS" \
+  "[\"line 2: implementer is not a double-quoted string; using the session model.\",$PI_UNPINNED_ITEM]"
+
+# <seat>_thinking.
+for lvl in off minimal low medium high xhigh max; do
+  pi_case "thinking $lvl accepted" "[pi]\nimplementer = \"a/b\"\nimplementer_thinking = \"$lvl\"\n" \
+    "$(pp1 "{\"provider\":\"a\",\"id\":\"b\",\"thinking\":\"$lvl\"}")" "[$PI_UNPIN_SR]"
+done
+pi_ok='{"provider":"a","id":"b","thinking":null}'
+for lvl in ultra High none ''; do
+  pi_case "thinking '$lvl': Pi's default + warning, seat stays pinned" "[pi]\nimplementer = \"a/b\"\nimplementer_thinking = \"$lvl\"\n" \
+    "$(pp1 "$pi_ok")" \
+    "[\"line 3: implementer_thinking is not off, minimal, low, medium, high, xhigh or max; using Pi's default thinking.\",$PI_UNPIN_SR]"
+done
+pi_case "thinking unquoted: Pi's default + warning" '[pi]\nimplementer = "a/b"\nimplementer_thinking = high\n' "$(pp1 "$pi_ok")" \
+  "[\"line 3: implementer_thinking is not a double-quoted string; using Pi's default thinking.\",$PI_UNPIN_SR]"
+pi_case "thinking without a model: warning, ignored" '[pi]\nreviewer_thinking = "high"\n' "$NULL_SEATS" \
+  "[\"reviewer_thinking is set but reviewer has no pinned model; ignored.\",$PI_UNPINNED_ITEM]"
+pi_case "thinking with a rejected model: both warnings, seat null" '[pi]\nimplementer = "nope"\nimplementer_thinking = "low"\n' "$NULL_SEATS" \
+  "[\"line 2: implementer is not a valid provider/model-id; using the session model.\",\"implementer_thinking is set but implementer has no pinned model; ignored.\",$PI_UNPINNED_ITEM]"
+pi_case "thinking before its model (order-free)" '[pi]\nimplementer_thinking = "low"\nimplementer = "a/b"\n' \
+  "$(pp1 '{"provider":"a","id":"b","thinking":"low"}')" "[$PI_UNPIN_SR]"
+pi_case "effort key: warning, ignored (seat stays pinned)" '[pi]\nimplementer = "a/b"\nimplementer_effort = "high"\n' "$(pp1 "$pi_ok")" \
+  "[\"line 3: implementer_effort is not used on Pi (use implementer_thinking); ignored.\",$PI_UNPIN_SR]"
+pi_case "unknown key: warning, ignored" '[pi]\norchestrator = "a/b"\n' "$NULL_SEATS" \
+  "[\"line 2: unknown key orchestrator; ignored.\",$PI_UNPINNED_ITEM]"
+pi_case "duplicate key: last wins + warning" '[pi]\nimplementer = "a/b"\nimplementer = "c/d"\n' \
+  "$(pp1 '{"provider":"c","id":"d","thinking":null}')" "[\"line 3: duplicate key implementer; the last one wins.\",$PI_UNPIN_SR]"
+pi_case "duplicate thinking key: last wins + warning" '[pi]\nimplementer = "a/b"\nimplementer_thinking = "low"\nimplementer_thinking = "max"\n' \
+  "$(pp1 '{"provider":"a","id":"b","thinking":"max"}')" "[\"line 4: duplicate key implementer_thinking; the last one wins.\",$PI_UNPIN_SR]"
+pi_case "CRLF, BOM and a trailing comment" '\xef\xbb\xbf[pi]\r\nimplementer = "a/b" # c #2\r\nimplementer_thinking = "high" # c\r\n' \
+  "$(pp1 '{"provider":"a","id":"b","thinking":"high"}')" "[$PI_UNPIN_SR]"
+pi_case "keys before any table and in [codex]/[opencode] are ignored" 'implementer = "x/y"\n[codex]\nimplementer = "a/b"\n[opencode]\nimplementer = "a/b"\nfoo = bar\n' "$NULL_SEATS" "$PI_UNPINNED_ALL"
+pi_case "[pi] header with spaces and a comment" '[ pi ] # mine\nstrict_implementer = "a/b"\n' \
+  '{"implementer":null,"strict_implementer":{"provider":"a","id":"b","thinking":null},"reviewer":null}' \
+  '["unpinned seats run on the session model: implementer, reviewer; pin them in the [pi] table of models.toml."]'
+pi_case "five parser warnings: three, '… 2 more', then the unpinned line" '[pi]\na1 = "x"\na2 = "x"\na3 = "x"\na4 = "x"\na5 = "x"\n' "$NULL_SEATS" \
+  "[\"line 2: unknown key a1; ignored.\",\"line 3: unknown key a2; ignored.\",\"line 4: unknown key a3; ignored.\",\"… 2 more\",$PI_UNPINNED_ITEM]"
+[[ "$(oc_ctx "$OUT")" == *$'models.toml warnings (6):\n- line 2: unknown key a1; ignored.\n- line 3: unknown key a2; ignored.\n- line 4: unknown key a3; ignored.\n- … 2 more\n- unpinned seats run on the session model: implementer, strict_implementer, reviewer; pin them in the [pi] table of models.toml.\n\n'* ]] \
+  && pass "Pi context warning block: header (6), 3 lines, '… 2 more', the unpinned line" \
+  || fail "Pi context warning block: $(oc_ctx "$OUT" | grep -A6 'models.toml warnings' | tr '\n' '|')"
+pi_case "thinking-without-model warnings count toward the three" '[pi]\na1 = "x"\na2 = "x"\na3 = "x"\nreviewer_thinking = "low"\n' "$NULL_SEATS" \
+  "[\"line 2: unknown key a1; ignored.\",\"line 3: unknown key a2; ignored.\",\"line 4: unknown key a3; ignored.\",\"… 1 more\",$PI_UNPINNED_ITEM]"
+
+mkdir -p "$TEST_ROOT/xdg-pidir/fablepowers/models.toml"
+pi_run XDG_CONFIG_HOME="$TEST_ROOT/xdg-pidir"
+oc_check "$OUT" "$NULL_SEATS" "[\"models.toml is not a readable file; every seat runs on the session model.\",$PI_UNPINNED_ITEM]" >/dev/null \
+  && pass "Pi, models.toml is a directory: all seats null + warning" || fail "Pi, models.toml is a directory: $(oc_check "$OUT" "$NULL_SEATS")"
+
+# Worst case size: long plugin root and config path, every seat and thinking
+# key rejected, 200 unknown keys.
+deep_tree="$deep/$(printf 'plugin-root-segment-%.0s' {1..6})"
+make_tree "$deep_tree" new "$REPO_ROOT/skills/workflow/SKILL.md"
+{
+  printf '\xef\xbb\xbf[pi]\r\n'
+  for k in implementer strict_implementer reviewer; do
+    printf '%s = "p/%s"\r\n%s_thinking = "nope"\r\n' "$k" "$(printf 'x%.0s' {1..140})" "$k"
+  done
+  for i in $(seq 1 200); do printf 'unknown_key_%s_%s = "x"\r\n' "$i" "$(printf 'y%.0s' {1..40})"; done
+} > "$deep/fablepowers/models.toml"
+PI_TREE="$deep_tree"; pi_run XDG_CONFIG_HOME="$deep"; PI_TREE="$T"
+size="$(oc_ctx "$OUT" | python3 -c 'import sys; print(len(sys.stdin.read()))')"
+nw="$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["warnings"]))')"
+if [[ "$RC" == 0 && "$size" -le 8000 && "$nw" == 5 ]] && oc_check "$OUT" "$NULL_SEATS" >/dev/null; then
+  pass "Pi worst case (206 parser warnings, long path): $size characters (cap 8000), 5 warning items"
+else
+  fail "Pi worst case: rc $RC, $size characters, $nw warning items"
+fi
+# All seats pinned at 128 characters with the longest thinking level, long
+# plugin root and config path: still under the cap.
+{
+  printf '[pi]\n'
+  for k in implementer strict_implementer reviewer; do
+    printf '%s = "p/%s"\n%s_thinking = "minimal"\n' "$k" "$(printf 'x%.0s' {1..126})" "$k"
+  done
+} > "$deep/fablepowers/models.toml"
+PI_TREE="$deep_tree"; pi_run XDG_CONFIG_HOME="$deep"; PI_TREE="$T"
+size="$(oc_ctx "$OUT" | python3 -c 'import sys; print(len(sys.stdin.read()))')"
+[[ "$RC" == 0 && "$size" -le 8000 && "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["warnings"])')" == "[]" ]] \
+  && pass "Pi, three 128-character pinned seats, long root and path: $size characters (cap 8000)" \
+  || fail "Pi, three 128-character pinned seats: rc $RC, $size characters"
 
 echo
 if [[ "$FAILURES" -eq 0 ]]; then

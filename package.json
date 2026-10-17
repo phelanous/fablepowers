@@ -14,6 +14,14 @@
     "NOTICE",
     "LICENSE"
   ],
+  "pi": {
+    "extensions": [
+      "./pi/fablepowers.ts"
+    ],
+    "skills": [
+      "./pi/skills"
+    ]
+  },
   "license": "MIT",
   "author": "Phelanous",
   "homepage": "https://github.com/phelanous/fablepowers",

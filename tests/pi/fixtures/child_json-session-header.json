@@ -1,0 +1,10 @@
+{
+  "event": {
+    "type": "session",
+    "version": 3,
+    "id": "01a1486e-b270-751c-9267-5fca8d67f128",
+    "timestamp": "2026-10-17T05:56:16.625Z",
+    "cwd": "__CWD__"
+  },
+  "ctx": null
+}

@@ -1,0 +1,19 @@
+{
+  "event": {
+    "type": "tool_call",
+    "toolName": "fablepowers_dispatch",
+    "toolCallId": "call_4d60562dacb54293aa032e06",
+    "input": {
+      "seat": "implementer",
+      "task": "t2"
+    }
+  },
+  "ctx": {
+    "mode": "print",
+    "hasUI": false,
+    "cwd": "__CWD__",
+    "sessionId": "01a1486c-da07-7462-8c7b-05c4f3d50be9",
+    "model": "openrouter/deepseek/deepseek-v4-flash",
+    "thinking": "off"
+  }
+}

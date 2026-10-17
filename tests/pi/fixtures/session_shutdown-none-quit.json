@@ -1,0 +1,14 @@
+{
+  "event": {
+    "type": "session_shutdown",
+    "reason": "quit"
+  },
+  "ctx": {
+    "mode": "print",
+    "hasUI": false,
+    "cwd": "__CWD__",
+    "sessionId": "01a1486b-a8f6-743d-bb90-f867e0209ba0",
+    "model": "openrouter/moonshotai/kimi-k2.6",
+    "thinking": "medium"
+  }
+}

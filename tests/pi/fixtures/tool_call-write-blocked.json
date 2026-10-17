@@ -1,0 +1,22 @@
+{
+  "event": {
+    "type": "tool_call",
+    "toolName": "write",
+    "toolCallId": "call_3d829598a6964cf0aa4a7288",
+    "input": {
+      "path": "BLOCKME.txt",
+      "content": "x"
+    }
+  },
+  "ctx": {
+    "mode": "print",
+    "hasUI": false,
+    "cwd": "__CWD__",
+    "sessionId": "01a1486c-5b8c-7624-a37e-7970d96d703c",
+    "model": "openrouter/deepseek/deepseek-v4-flash",
+    "thinking": "off"
+  },
+  "probe": {
+    "note": "probe returned {block:true}; no tool_result event followed"
+  }
+}

@@ -468,13 +468,14 @@ def pre_tool_use(top, payload, cwd):
                 "to the edit tools until approval; if the user asked for this settings change, they can "
                 "make it themselves, or approve or withdraw the design first)" % lexical))
             return
-        if not under(real, top):
+        inside = in_repo(real, top)
+        if inside is None:
             return
-        if any(under(real, os.path.realpath(os.path.join(top, d))) for d in ALLOWED_DIRS):
+        if any(under(inside, os.path.realpath(os.path.join(top, d))) for d in ALLOWED_DIRS):
             return
         deny(top, payload, pending_reason(
             pending, "editing `%s` (only docs/specs/, docs/plans/ and .fablepowers/ are open "
-            "until approval)" % os.path.relpath(real, top)))
+            "until approval)" % os.path.relpath(inside, top)))
     elif tool == "Agent":
         sub = ti.get("subagent_type")
         if sub in GATED_AGENTS:
@@ -820,8 +821,9 @@ def codex_pre_apply_patch(top, payload, cwd):
                 "make it themselves, or approve or withdraw the design first)" % lexical))
             return
     allowed = [os.path.realpath(os.path.join(top, d)) for d in ALLOWED_DIRS]
-    bad = [os.path.relpath(real, top) for _, _, real in paths
-           if under(real, top) and not any(under(real, a) for a in allowed)]
+    inside = [in_repo(real, top) for _, _, real in paths]
+    bad = [os.path.relpath(i, top) for i in inside
+           if i is not None and not any(under(i, a) for a in allowed)]
     if bad:
         deny(top, payload, codex_pending_reason(
             pending, "this patch (it touches %s; only docs/specs/, docs/plans/ and .fablepowers/ are "
@@ -989,6 +991,22 @@ def under_ci(path, directory):
     return len(p) >= len(d) and p[:len(d)] == d
 
 
+def in_repo(real, top):
+    """`real` (absolute, normalised) as a path inside the toplevel `top`, or None
+    when it is outside. realpath() does not canonicalise case, so a path under top
+    only as under_ci() compares it (a case or NTFS-name variant of top, which a
+    case-insensitive filesystem resolves to top itself) counts as inside: top
+    joined with the rest of its components, which the allowlist then compares
+    exactly. Fails closed: on a case-sensitive filesystem such a path is a
+    sibling directory and is denied while pending."""
+    if under(real, top):
+        return real
+    if under_ci(real, top):
+        rest = real.split(os.sep)[len(win_parts(top)):]
+        return os.path.join(top, *rest) if rest else top
+    return None
+
+
 def is_opencode_config_path(path):
     """True for OpenCode config: `opencode.json`/`opencode.jsonc` anywhere, anything
     under a `.opencode` directory, anything under <config home>/opencode/ and
@@ -1071,23 +1089,24 @@ def oc_permission_edit(top, payload, cwd):
     if isinstance(proot, str) and os.path.isabs(proot):
         proots = list({os.path.normpath(proot), os.path.realpath(proot)})
     for p, lexical, real in checked:
+        inside = in_repo(real, top)
         if is_opencode_config_path(lexical) or is_opencode_config_path(real):
             return oc_deny(top, payload, oc_pending_reason(
                 pending, "editing the OpenCode config file `%s` (OpenCode config and "
                 "~/.config/fablepowers/models.toml stay closed to the edit tools until approval; if the "
                 "user asked for this change, they can make it themselves, or approve or withdraw the "
                 "design first)" % lexical))
-        if under(real, top) and any(under(real, a) for a in allowed):
+        if inside is not None and any(under(inside, a) for a in allowed):
             continue
         if any(under_ci(lexical, r) or under_ci(real, r) for r in proots):
             return oc_deny(top, payload, oc_pending_reason(
                 pending, "editing `%s` under the fablepowers plugin directory (it stays closed to the "
                 "edit tools until approval)" % lexical))
-        if not under(real, top):
+        if inside is None:
             continue
         return oc_deny(top, payload, oc_pending_reason(
             pending, "editing `%s` (only docs/specs/, docs/plans/ and .fablepowers/ are open "
-            "until approval)" % os.path.relpath(real, top)))
+            "until approval)" % os.path.relpath(inside, top)))
     return {}
 
 
@@ -1480,7 +1499,8 @@ def pi_tool_call(top, payload, cwd):
             pending, "editing the Pi config file `%s` (Pi config (`.pi/`, the Pi agent directory) and "
             "~/.config/fablepowers/models.toml stay closed to write/edit until approval; if the user asked "
             "for this change, they can make it themselves, or approve or withdraw the design first)" % lexical))
-    if under(real, top) and any(under(real, os.path.realpath(os.path.join(top, d))) for d in ALLOWED_DIRS):
+    inside = in_repo(real, top)
+    if inside is not None and any(under(inside, os.path.realpath(os.path.join(top, d))) for d in ALLOWED_DIRS):
         return {}
     proot = payload.get("plugin_root")
     if isinstance(proot, str) and os.path.isabs(proot):
@@ -1489,11 +1509,11 @@ def pi_tool_call(top, payload, cwd):
                 return pi_deny(top, payload, pi_pending_reason(
                     pending, "editing `%s` under the fablepowers plugin directory (it stays closed to "
                     "write/edit until approval)" % lexical))
-    if not under(real, top):
+    if inside is None:
         return {}
     return pi_deny(top, payload, pi_pending_reason(
         pending, "editing `%s` (only docs/specs/, docs/plans/ and .fablepowers/ are open "
-        "until approval)" % os.path.relpath(real, top)))
+        "until approval)" % os.path.relpath(inside, top)))
 
 
 def pi_tool_result(top, payload, cwd):

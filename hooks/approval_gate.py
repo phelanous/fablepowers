@@ -136,8 +136,8 @@ JSON object: `{}` (no decision; also on an internal error), `{"decision": "deny"
 "reason"}` (tool_call, dispatch), `{"context"}` (tool_result, approval_tool,
 command) or, for `pending`, `{"pending": [{"key", "spec"}], "refused", "reason"}`.
 Approve/withdraw (command and approval tool) are refused when `is_child` is not
-exactly false, or when `env_session` is not exactly false and `mode` is not
-exactly "tui" (both fail closed). Same markers, states and rules:
+exactly false, or when `env_session` is not exactly false, in every mode
+including "tui" (both fail closed). Same markers, states and rules:
   tool_call  `tool` "write" or "edit" only (reads are never gated), `path`:
       markers denied always; while pending, Pi config denied (anything under a
       `.pi` directory, under `pi_agent_dir`, and <config home>/fablepowers/
@@ -1449,14 +1449,15 @@ def pi_refusal(payload):
     """Why this session may not approve or withdraw, or None. Refused when it is a
     dispatched child (`is_child` not exactly false), or when PI_SESSION_ID was set
     in its environment (`env_session` not exactly false: the model's shell sets
-    it) outside the interactive TUI (`mode` not exactly "tui"). Both fail closed."""
+    it), in every mode: a model can give a shell-started Pi a pty, so the TUI is
+    not exempt. Both fail closed."""
     if payload.get("is_child") is not False:
         return ("it came from a dispatched child session (or one the extension could not classify), "
                 "not from the user's main session")
-    if payload.get("env_session") is not False and payload.get("mode") != "tui":
-        return ("it came from a Pi started inside a Pi shell (PI_SESSION_ID is set) in a non-interactive "
-                "mode, which is how a model would forge it; the user must run `/fablepowers:approve` "
-                "themselves, in their own terminal")
+    if payload.get("env_session") is not False:
+        return ("it came from a Pi started from inside another Pi's shell (PI_SESSION_ID is set), which is "
+                "how a model would forge it; approve with `/fablepowers:approve` from a Pi you started "
+                "yourself, in your own terminal")
     return None
 
 

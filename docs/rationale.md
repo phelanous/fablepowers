@@ -636,7 +636,8 @@ children too, so it is skipped there.
   `pi -c -p '/fablepowers:approve'` through `bash`, and `-c` attaches it to
   the parent's own session (gate spike §1). Pi's `bash` tool exports
   `PI_SESSION_ID` to its children, so the gate refuses approve and withdraw
-  when it is set outside the TUI, and in any dispatched child. `env -u`
+  whenever it is set, the TUI included (`script` gives a shell-started Pi a
+  pty), and in any dispatched child. `env -u`
   defeats that, the same class as forging a marker through the shell, so it
   is documented, not chased; so are launchers that don't set the variable.
 - **The question path records inside the tool.** `ctx.ui.select` blocks in

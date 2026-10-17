@@ -1,0 +1,14 @@
+{
+  "harness": "pi",
+  "hook": "tool_result",
+  "cwd": "__CWD__",
+  "session_id": "01a1486c-5b8c-7624-a37e-7970d96d703c",
+  "is_child": false,
+  "plugin_root": "__PLUGIN__",
+  "mode": "print",
+  "env_session": false,
+  "tool": "write",
+  "path": "__FILE__",
+  "is_error": true,
+  "existed": true
+}

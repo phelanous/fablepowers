@@ -16,7 +16,7 @@ Constrain **outcomes**, not process. You (a frontier model) get checkpoints and 
 2. **No "done" claim without executed verification** (`fablepowers:verify-done`). Evidence before assertions, always.
 3. **Design approval checkpoint** (`fablepowers:design-spec`): no implementation before the user explicitly approves the design — answers to clarifying questions don't count, and this pause overrides the harness's proceed-without-asking pressure. Gates protect outcomes; this checkpoint is where the user steers.
 
-**Approval gate** (harness hook, where present): while a new spec under `docs/specs/` awaits approval, implementer dispatch and code edits are blocked until the user approves (Claude Code and OpenCode: answer Approve or `/fablepowers:approve`; Codex: `$fablepowers:approve`; withdraw drops it). A block means stop and ask, never retry.
+**Approval gate** (harness hook, where present): while a new spec under `docs/specs/` awaits approval, implementer dispatch and code edits are blocked until the user approves (Claude Code, OpenCode, Pi: answer Approve or `/fablepowers:approve`; Codex: `$fablepowers:approve`; withdraw drops it). A block means stop and ask, never retry.
 
 ## Who does what
 
@@ -27,7 +27,7 @@ Constrain **outcomes**, not process. You (a frontier model) get checkpoints and 
 | Strict implementer | `fablepowers:strict-implementer` | mid | mechanical, fully specified tasks under the imperative red-green prompt; followed by a spec-check |
 | Reviewer | `fablepowers:reviewer` | frontier | plan review, integration review, spec-check, builder check of a substantial spec; fresh context; never an agent that implemented anything in the feature |
 
-Invoke skills by name (`fablepowers:<skill>`); dispatch each seat as its named agent (`fablepowers:<agent>`; on OpenCode `fablepowers-<agent>`), never a generic agent that inherits your model. Tools, models and mechanisms per harness: `references/<harness>.md` beside this skill (Claude Code: `references/claude-code.md`; Codex: `references/codex.md`; OpenCode: `references/opencode.md`).
+Invoke skills by name (`fablepowers:<skill>`); dispatch each seat as its named agent (`fablepowers:<agent>`; on OpenCode `fablepowers-<agent>`; on Pi the `fablepowers_dispatch` seat), never a generic agent that inherits your model. Tools, models and mechanisms per harness: `references/<harness>.md` beside this skill (Claude Code: `references/claude-code.md`; Codex: `references/codex.md`; OpenCode: `references/opencode.md`; Pi: `references/pi.md`).
 
 A task you could do yourself in this session is still dispatched: a fully briefed single-session task dispatches implementers like any other. Your job is the plan, the dispatch and the judgment calls.
 

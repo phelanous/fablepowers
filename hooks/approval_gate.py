@@ -1455,9 +1455,8 @@ def pi_refusal(payload):
         return ("it came from a dispatched child session (or one the extension could not classify), "
                 "not from the user's main session")
     if payload.get("env_session") is not False:
-        return ("it came from a Pi started from inside another Pi's shell (PI_SESSION_ID is set), which is "
-                "how a model would forge it; approve with `/fablepowers:approve` from a Pi you started "
-                "yourself, in your own terminal")
+        return ("it came from a Pi started from inside another Pi's shell, which is how a model would forge "
+                "it. The user must type `/fablepowers:approve` in a Pi they started in their own terminal")
     return None
 
 

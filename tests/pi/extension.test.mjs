@@ -494,8 +494,10 @@ test('refusal rule: PI_SESSION_ID in any mode (the TUI included), an unknown mod
     ctx.mode = mode; // undefined: a ctx without a mode (SF4: fails closed)
     await forged.commands.get('fablepowers:approve').handler('', ctx);
     assert.ok(!fs.existsSync(approvedMarker(repo, 'feat')), String(mode));
-    assert.match(forged.sent.at(-1).m.content, /PI_SESSION_ID is set/);
     assert.match(forged.sent.at(-1).m.content, /inside another Pi's shell/);
+    // SF-1: speaks to the user's action, never to "you", and does not name the variable
+    assert.match(forged.sent.at(-1).m.content, /The user must type `\/fablepowers:approve` in a Pi they started in their own terminal/);
+    assert.doesNotMatch(forged.sent.at(-1).m.content, /PI_SESSION_ID|yourself|you started/);
     assert.doesNotMatch(forged.sent.at(-1).m.content, /interactive/);
   }
   await forged.commands.get('fablepowers:withdraw').handler('', fakeCtx({ cwd: repo, mode: 'tui' }));

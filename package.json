@@ -7,6 +7,7 @@
   "files": [
     "index.js",
     "opencode/",
+    "pi/",
     "agents/",
     "skills/",
     "hooks/session-start",

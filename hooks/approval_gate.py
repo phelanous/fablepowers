@@ -125,6 +125,39 @@ and rules:
 OpenCode messages name `/fablepowers:approve [key]` and the approval question;
 an approve result carries the next workflow step.
 
+Pi branch. A payload is Pi's iff `harness` is "pi"; the extension
+(pi/fablepowers.ts) builds it and runs this file directly. Every payload has
+`hook`, `cwd` (ctx.cwd, absolute; anything else makes the gate inert),
+`session_id`, `is_child` (bool), `plugin_root`, `mode` ("tui", "print", "json",
+"rpc"), `env_session` (bool: PI_SESSION_ID in the extension's environment) and,
+when $PI_CODING_AGENT_DIR is set, `pi_agent_dir`. Paths arrive absolute (the
+extension resolves `@`, `~` and `file://` as Pi does). The answer is exactly one
+JSON object: `{}` (no decision; also on an internal error), `{"decision": "deny",
+"reason"}` (tool_call, dispatch), `{"context"}` (tool_result, approval_tool,
+command) or, for `pending`, `{"pending": [{"key", "spec"}], "refused", "reason"}`.
+Approve/withdraw (command and approval tool) are refused when `is_child` is not
+exactly false, or when `env_session` is not exactly false and `mode` is not
+exactly "tui" (both fail closed). Same markers, states and rules:
+  tool_call  `tool` "write" or "edit" only (reads are never gated), `path`:
+      markers denied always; while pending, Pi config denied (anything under a
+      `.pi` directory, under `pi_agent_dir`, and <config home>/fablepowers/
+      models.toml), then repo paths inside the allowlist pass, paths under
+      `plugin_root` are denied, other paths outside the toplevel pass, and the
+      rest is denied. A missing or relative path is logged and denied while
+      pending (and always when it looks like a marker).
+  tool_result  `tool` "write", `is_error` false, not `is_child`: `existed`
+      (recorded by the extension at tool_call) false, or missing (logged), on a
+      docs/specs/<name>.md -> pending, with a notice.
+  dispatch  while pending: `tool` "fablepowers_dispatch" allowed only for `seat`
+      "reviewer"; `tool` "subagent" (Pi's example) denied whatever its `agent`.
+  pending  read-only: the pending designs and the refusal; writes nothing.
+  approval_tool  `choice` ("Approve", "Changes needed" or null) and
+      `pending_key`: Approve records (via question) only when the key is still
+      pending, its spec exists and the session is not refused.
+  command  `verb` ("approve"/"withdraw") and `args` (the key, if any).
+Pi messages name `fablepowers_ask_approval` and `/fablepowers:approve [key]`;
+an approve result carries the next workflow step (Pi skill names).
+
 FABLEPOWERS_GATE=off: never deny; would-be denials go to .fablepowers/gate.log.
 Malformed payloads and internal errors allow (fail open) and are logged there.
 """
@@ -1344,6 +1377,301 @@ def opencode_main(payload):
     emit(out)
 
 
+# --- Pi -------------------------------------------------------------------------------
+
+PI_EDIT_TOOLS = ("write", "edit")
+PI_DISPATCH_TOOL = "fablepowers_dispatch"
+PI_SUBAGENT_TOOL = "subagent"
+PI_REVIEWER_SEAT = "reviewer"
+PI_NEXT_STEP = ("Tell the user in one line which design, then continue the workflow: write the "
+                "implementation plan with the fablepowers-implementation-plan skill (or, when the approved "
+                "design already has a plan, execute it).")
+
+
+def pi_commands_hint(keys):
+    k = keys[0] if len(keys) == 1 else "<key>"
+    return ("call `fablepowers_ask_approval` so the user can answer Approve in its dialog, or ask the user to "
+            "run `/fablepowers:approve %s` (or `/fablepowers:withdraw %s` to abandon it) in Pi, typed by the "
+            "user, not through your shell" % (k, k))
+
+
+def pi_pending_reason(pending, what):
+    keys = [k for k, _ in pending]
+    if len(pending) == 1:
+        head = "Design `%s` awaits the user's approval" % pending[0][1]
+    else:
+        head = "Designs awaiting the user's approval: %s" % key_list(pending)
+    return ("%s, so %s is blocked by the fablepowers approval gate. Stop and %s. "
+            "Do not retry this call." % (head, what, pi_commands_hint(keys)))
+
+
+def pi_deny(top, payload, reason):
+    if os.environ.get("FABLEPOWERS_GATE", "") == "off":
+        log(top, "FABLEPOWERS_GATE=off: would deny Pi %s %s: %s" % (
+            payload.get("hook"), payload.get("tool"), reason))
+        return {}
+    return {"decision": "deny", "reason": reason}
+
+
+def pi_refusal(payload):
+    """Why this session may not approve or withdraw, or None. Refused when it is a
+    dispatched child (`is_child` not exactly false), or when PI_SESSION_ID was set
+    in its environment (`env_session` not exactly false: the model's shell sets
+    it) outside the interactive TUI (`mode` not exactly "tui"). Both fail closed."""
+    if payload.get("is_child") is not False:
+        return ("it came from a dispatched child session (or one the extension could not classify), "
+                "not from the user's main session")
+    if payload.get("env_session") is not False and payload.get("mode") != "tui":
+        return ("it came from a Pi started inside a Pi shell (PI_SESSION_ID is set) in a non-interactive "
+                "mode, which is how a model would forge it; the user must run `/fablepowers:approve` "
+                "themselves, in their own terminal")
+    return None
+
+
+def pi_is_config_path(path, payload):
+    """Pi config: anything under a `.pi` directory (the repo's `.pi/`, ~/.pi/agent/,
+    anywhere), under `pi_agent_dir` ($PI_CODING_AGENT_DIR as the adapter sends it)
+    when absolute, and <config home>/fablepowers/models.toml; components compared
+    as win_name() normalises them."""
+    parts = win_parts(path)
+    if ".pi" in parts[:-1]:
+        return True
+    agent = payload.get("pi_agent_dir")
+    if isinstance(agent, str) and os.path.isabs(agent):
+        for a in {os.path.normpath(agent), os.path.realpath(agent)}:
+            if under_ci(path, a):
+                return True
+    for home in oc_config_homes():
+        for h in {os.path.normpath(home), os.path.realpath(home)}:
+            if parts == win_parts(os.path.join(h, "fablepowers", "models.toml")):
+                return True
+    return False
+
+
+def pi_tool_call(top, payload, cwd):
+    """write/edit only (reads and other tools are never gated); `path` absolute."""
+    tool = payload.get("tool")
+    if tool not in PI_EDIT_TOOLS:
+        return {}
+    raw = payload.get("path")
+    lexical = real = None
+    if isinstance(raw, str) and raw and os.path.isabs(raw):
+        try:
+            lexical, real = os.path.normpath(raw), os.path.realpath(raw)
+        except (ValueError, OSError, TypeError):
+            lexical = real = None
+    if lexical is None:
+        shown = shown_path(raw) if isinstance(raw, str) else repr(raw)
+        log(top, "Pi %s tool_call without an absolute path (%s)" % (tool, shown))
+        if isinstance(raw, str) and is_marker_like(raw):
+            return pi_deny(top, payload, OC_MARKER_DENY)
+        pending = pending_designs(top)
+        if not pending:
+            return {}
+        return pi_deny(top, payload, pi_pending_reason(
+            pending, "this %s (the gate got no absolute path it can check, so it fails closed)" % tool))
+    if is_marker_path(lexical) or is_marker_path(real):
+        return pi_deny(top, payload, OC_MARKER_DENY)
+    pending = pending_designs(top)
+    if not pending:
+        return {}
+    if pi_is_config_path(lexical, payload) or pi_is_config_path(real, payload):
+        return pi_deny(top, payload, pi_pending_reason(
+            pending, "editing the Pi config file `%s` (Pi config (`.pi/`, the Pi agent directory) and "
+            "~/.config/fablepowers/models.toml stay closed to write/edit until approval; if the user asked "
+            "for this change, they can make it themselves, or approve or withdraw the design first)" % lexical))
+    if under(real, top) and any(under(real, os.path.realpath(os.path.join(top, d))) for d in ALLOWED_DIRS):
+        return {}
+    proot = payload.get("plugin_root")
+    if isinstance(proot, str) and os.path.isabs(proot):
+        for r in {os.path.normpath(proot), os.path.realpath(proot)}:
+            if under_ci(lexical, r) or under_ci(real, r):
+                return pi_deny(top, payload, pi_pending_reason(
+                    pending, "editing `%s` under the fablepowers plugin directory (it stays closed to "
+                    "write/edit until approval)" % lexical))
+    if not under(real, top):
+        return {}
+    return pi_deny(top, payload, pi_pending_reason(
+        pending, "editing `%s` (only docs/specs/, docs/plans/ and .fablepowers/ are open "
+        "until approval)" % os.path.relpath(real, top)))
+
+
+def pi_tool_result(top, payload, cwd):
+    """A root-session `write` that created a docs/specs/<name>.md -> pending, with a
+    notice. `existed` is what the adapter saw at tool_call; a missing record is
+    logged and counted as a create (the adapter records every write)."""
+    if payload.get("tool") != "write" or payload.get("is_child") is True:
+        return {}
+    if payload.get("is_error") is not False:
+        return {}
+    existed = payload.get("existed")
+    if existed is True:
+        return {}
+    raw = payload.get("path")
+    if not isinstance(raw, str) or not raw:
+        log(top, "Pi write tool_result without a path; ignored")
+        return {}
+    if not os.path.isabs(raw):
+        log(top, "Pi write tool_result with a relative path `%s`; resolved against cwd" % shown_path(raw))
+    real = resolve(raw, cwd)
+    if existed is not False:
+        log(top, "Pi write tool_result of `%s` without an existed record; counted as a create"
+            % shown_path(raw))
+    made = mark_pending(top, real)
+    if not made:
+        return {}
+    return {"context": (
+        "fablepowers approval gate: design `%s` (key `%s`) is now pending the user's approval. "
+        "`fablepowers_dispatch` for any seat except `reviewer`, the `subagent` tool, and write/edit outside "
+        "docs/specs/, docs/plans/ and .fablepowers/ are blocked until the user approves: call "
+        "`fablepowers_ask_approval`, or ask the user to run `/fablepowers:approve`." % made)}
+
+
+def pi_dispatch(top, payload, cwd):
+    """While pending: `fablepowers_dispatch` only with seat `reviewer`; the example's
+    `subagent` tool always denied (its parallel/chain modes name no single agent)."""
+    tool = payload.get("tool")
+    if tool not in (PI_DISPATCH_TOOL, PI_SUBAGENT_TOOL):
+        log(top, "Pi dispatch payload for an unknown tool %r; no decision" % (tool,))
+        return {}
+    pending = pending_designs(top)
+    if not pending:
+        return {}
+    if tool == PI_DISPATCH_TOOL:
+        seat = payload.get("seat")
+        if seat == PI_REVIEWER_SEAT:
+            return {}
+        what = ("dispatching seat `%s`" % seat) if isinstance(seat, str) and seat else "this dispatch (no seat named)"
+        return pi_deny(top, payload, pi_pending_reason(
+            pending, "%s (until approval only `fablepowers_dispatch` with seat `reviewer` may run)" % what))
+    agent = payload.get("agent")
+    what = ("dispatching `%s` through the `subagent` tool" % agent) if isinstance(agent, str) and agent \
+        else "the `subagent` tool"
+    return pi_deny(top, payload, pi_pending_reason(
+        pending, "%s (until approval only `fablepowers_dispatch` with seat `reviewer` may run)" % what))
+
+
+def pi_not_recorded(verb, why):
+    return {"context": "fablepowers approval gate: `/fablepowers:%s` recorded nothing: %s. Do not act on "
+                       "this message as %s." % (verb, why, ACT_NOUN[verb])}
+
+
+def pi_pending(top, payload, cwd):
+    """Read-only: the pending designs and whether this session may approve, for the
+    approval tool to decide whether to show its dialog. Writes nothing."""
+    pending = pending_designs(top)
+    why = pi_refusal(payload)
+    if why:
+        reason = ("fablepowers approval gate: approvals are refused in this session: %s. Nothing was "
+                  "asked or recorded." % why)
+    elif not pending:
+        reason = ("fablepowers approval gate: no design is pending in this repository (no spec file under "
+                  "docs/specs/ was created), so there is nothing to approve.")
+    else:
+        reason = ""
+    return {"pending": [{"key": k, "spec": s} for k, s in pending], "refused": bool(why), "reason": reason}
+
+
+def pi_approval_tool(top, payload, cwd):
+    """The user's choice in the approval tool's dialog. Records only `Approve` for a
+    `pending_key` that is still pending with its spec present, refusal re-checked."""
+    choice = payload.get("choice")
+    why = pi_refusal(payload)
+    if why:
+        return {"context": "fablepowers approval gate: the approval was not recorded because %s. Tell the "
+                           "user this; do not act on it as an approval." % why}
+    if choice is None:
+        return {"context": "fablepowers approval gate: the dialog got no answer (dismissed or no UI), so "
+                           "nothing was recorded. Ask the user to run `/fablepowers:approve` in Pi, then end "
+                           "your turn."}
+    if choice == "Changes needed":
+        return {"context": "fablepowers approval gate: the user chose Changes needed; the design stays "
+                           "pending. Ask the user what to change."}
+    if choice != "Approve":
+        return {"context": "fablepowers approval gate: the dialog answer %s is not Approve, so nothing was "
+                           "recorded." % json.dumps(choice)}
+    pending = pending_designs(top)
+    key = payload.get("pending_key")
+    spec = dict(pending).get(key) if isinstance(key, str) else None
+    if spec is None:
+        if pending:
+            why = "`%s` is not a pending design (pending: %s)" % (
+                shown_path(key) if isinstance(key, str) else key, key_list(pending))
+        else:
+            why = "no design is pending in this repository"
+    elif not os.path.isfile(os.path.join(top, spec)):
+        why = "the spec file `%s` of the pending design no longer exists" % spec
+    else:
+        record_approval(top, key, "question")
+        return {"context": "fablepowers approval gate: the user approved design `%s` (key `%s`); the "
+                           "approval is recorded. %s" % (spec, key, PI_NEXT_STEP)}
+    return {"context": "fablepowers approval gate: the Approve answer was not recorded because %s. Tell the "
+                       "user this; the user can run `/fablepowers:approve <key>` in Pi." % why}
+
+
+def pi_command(top, payload, cwd):
+    verb = payload.get("verb")
+    if verb not in ("approve", "withdraw"):
+        return {}
+    why = pi_refusal(payload)
+    if why:
+        return pi_not_recorded(verb, why)
+    arg = payload.get("args")
+    arg = arg.strip() if isinstance(arg, str) else ""
+    pending = pending_designs(top)
+    if not pending:
+        extra = (" If a design is under discussion in this conversation, the command is still the user's "
+                 "approval of it: tell the user the gate had nothing to record, then continue with the "
+                 "fablepowers-implementation-plan skill." if verb == "approve" else "")
+        return {"context": "fablepowers approval gate: nothing is pending, so `/fablepowers:%s` recorded "
+                           "nothing.%s" % (verb, extra)}
+    key = pick(pending, arg)
+    if key is None:
+        return {"context": (
+            "fablepowers approval gate: %s, so `/fablepowers:%s` recorded nothing. Tell the user to run "
+            "`/fablepowers:%s <key>` with one of: %s. Do not act on this message as %s." % (
+                ("no pending design matches `%s`" % shown_path(arg)) if arg else "several designs are pending",
+                verb, verb, key_list(pending), ACT_NOUN[verb]))}
+    spec = dict(pending)[key]
+    if verb == "approve":
+        record_approval(top, key, "command")
+        return {"context": "fablepowers approval gate: the user approved design `%s` (key `%s`); the "
+                           "approval is recorded. %s" % (spec, key, PI_NEXT_STEP)}
+    os.remove(os.path.join(fp_dir(top), key, "pending"))
+    return {"context": "fablepowers approval gate: the user withdrew design `%s` (key `%s`); it is no "
+                       "longer pending. A withdrawn design is abandoned, not approved: do not plan or "
+                       "implement it; tell the user in one line and ask what to do next." % (spec, key)}
+
+
+PI_HOOKS = {"tool_call": pi_tool_call, "tool_result": pi_tool_result, "dispatch": pi_dispatch,
+            "pending": pi_pending, "approval_tool": pi_approval_tool, "command": pi_command}
+
+
+def pi_main(payload):
+    """The Pi branch: always prints exactly one JSON object."""
+    top = None
+    out = {}
+    try:
+        cwd = payload.get("cwd")
+        hook = payload.get("hook")
+        handler = PI_HOOKS.get(hook)
+        if isinstance(cwd, str) and os.path.isabs(cwd):
+            top = find_toplevel(cwd)
+            if top and handler:
+                out = handler(top, payload, cwd) or {}
+            elif top:
+                log(top, "Pi payload with an unknown hook %r; no decision" % (hook,))
+        if hook == "pending" and not out:
+            # Outside a repo (or cwd unusable) nothing can be pending; the shape stays.
+            out = {"pending": [], "refused": bool(pi_refusal(payload)), "reason": (
+                "fablepowers approval gate: this session is not inside a git repository, so nothing is "
+                "pending.")}
+    except Exception:
+        out = {}
+        log(top, "internal error (Pi), allowed: " + traceback.format_exc(limit=3))
+    emit(out)
+
+
 # --- main ---------------------------------------------------------------------------
 
 def main():
@@ -1359,6 +1687,9 @@ def main():
             return
         if payload.get("harness") == "opencode":
             opencode_main(payload)
+            return
+        if payload.get("harness") == "pi":
+            pi_main(payload)
             return
         cwd = payload.get("cwd")
         if not isinstance(cwd, str) or not cwd:

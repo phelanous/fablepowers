@@ -1,0 +1,12 @@
+{
+  "harness": "pi",
+  "hook": "approval_tool",
+  "cwd": "__CWD__",
+  "session_id": "01a1486c-5b8c-7624-a37e-7970d96d703c",
+  "is_child": false,
+  "plugin_root": "__PLUGIN__",
+  "mode": "tui",
+  "env_session": false,
+  "choice": "__CHOICE__",
+  "pending_key": "__KEY__"
+}

@@ -1,0 +1,22 @@
+{
+  "event": {
+    "type": "tool_call",
+    "toolName": "write",
+    "toolCallId": "call_4ea61ce7cb32425f9826f4bd",
+    "input": {
+      "path": "src",
+      "content": "x"
+    }
+  },
+  "ctx": {
+    "mode": "print",
+    "hasUI": false,
+    "cwd": "__CWD__",
+    "sessionId": "01a1486c-5b8c-7624-a37e-7970d96d703c",
+    "model": "openrouter/deepseek/deepseek-v4-flash",
+    "thinking": "off"
+  },
+  "probe": {
+    "existsBefore": true
+  }
+}

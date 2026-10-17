@@ -1,0 +1,44 @@
+{
+  "event": {
+    "type": "message_end",
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "The user is asking me to reply with exactly \"OK\". This is a simple instruction that doesn't require any tool usage.\n",
+          "thinkingSignature": "[{\"type\":\"reasoning.text\",\"text\":\"The user is asking me to reply with exactly \\\"OK\\\". This is a simple instruction that doesn't require any tool usage.\\n\",\"format\":\"unknown\",\"index\":0}]"
+        },
+        {
+          "type": "text",
+          "text": "OK"
+        }
+      ],
+      "api": "openai-completions",
+      "provider": "openrouter",
+      "model": "qwen/qwen3.6-flash",
+      "usage": {
+        "input": 2024,
+        "output": 30,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 25,
+        "totalTokens": 2054,
+        "cost": {
+          "input": 0.0003795,
+          "output": 3.375e-05,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.00041325
+        }
+      },
+      "stopReason": "stop",
+      "timestamp": 1792216576691,
+      "responseId": "gen-1792216576-AMHSTZIpiSAp9Vtr6WKB",
+      "rawStopReason": "stop",
+      "durationMs": 1091,
+      "thinkingLevel": "low"
+    }
+  },
+  "ctx": null
+}

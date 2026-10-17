@@ -24,3 +24,5 @@ Hand-written models.toml fixtures (not captures):
 - `models-full.toml`: every `[codex]` key set, plus other tables to ignore.
 - `models-both.toml`: a `[codex]` and an `[opencode]` table side by side, for
   the no-cross-warnings checks in both modes.
+- `models-three.toml`: `[codex]`, `[opencode]` and `[pi]` tables side by side,
+  for the no-cross-warnings checks in all three modes.

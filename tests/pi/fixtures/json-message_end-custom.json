@@ -1,0 +1,16 @@
+{
+  "event": {
+    "type": "message_end",
+    "message": {
+      "role": "custom",
+      "customType": "fablepowers-result",
+      "content": "FP-RESULT x",
+      "display": true,
+      "details": {
+        "args": "x"
+      },
+      "timestamp": 1792216591649
+    }
+  },
+  "ctx": null
+}

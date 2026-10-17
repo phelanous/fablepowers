@@ -2140,6 +2140,507 @@ for f in "$OCXDG/opencodex/x" "$OCXDG/fablepowers/models.toml.bak" "$TEST_ROOT/O
 done
 GATE_ENV=()
 
+# --- 33+. Pi branch -------------------------------------------------------------------------
+#
+# The Pi extension (pi/fablepowers.ts) runs approval_gate.py directly as
+# `python3 -I <plugin_root>/hooks/approval_gate.py` with a `harness: "pi"`
+# payload (the plan's gate payload contract plus the plan-review MF3 `pending`
+# hook), so these tests do the same. Fixtures tests/hooks/fixtures/gate/pi-*.json
+# are built from the real Pi 1.2.0 events in tests/pi/fixtures/ (tool_call write/
+# edit/read, tool_result write create/overwrite/EISDIR, fablepowers_dispatch,
+# subagent single/parallel) in the contract's shape. Paths are absolute (SF5:
+# the `@`/`~`/`file://` resolution is the extension's, tested in tests/pi/).
+# PI_EDIT: an optional python statement run on the payload dict `d` before it is
+# sent. The output shapes are OpenCode's ({} / deny / context), so oc_verdict,
+# oc_text and oc_expect apply; `pending` answers get pi_pending_get.
+
+PI_EDIT=""
+pig() {  # pig <fixture-suffix> NAME=value...: stdout -> $OUT, exit -> $RC
+  local input; input="$(payload "pi-$1" "${@:2}")"
+  if [[ -n "$PI_EDIT" ]]; then
+    input="$(printf '%s' "$input" | PI_EDIT="$PI_EDIT" python3 -c '
+import json, os, sys
+d = json.load(sys.stdin); exec(os.environ["PI_EDIT"]); print(json.dumps(d))')"
+  fi
+  RC=0
+  OUT="$(cd "$TEST_ROOT" && printf '%s' "$input" | env -u BASH TMPDIR="$GATE_TMP" ${GATE_ENV[@]+"${GATE_ENV[@]}"} \
+    python3 -I "$PIPLUG/hooks/approval_gate.py" 2>"$TEST_ROOT/stderr")" || RC=$?
+}
+PIPLUG="$TEST_ROOT/piplugin"; mkdir -p "$PIPLUG/hooks"; cp "$GATE_PY" "$PIPLUG/hooks/approval_gate.py"
+# piw <repo> <abs-path> [tool] [plugin_root]: verdict of a write (or edit/read) tool_call.
+piw() { pig "tool_call-${3:-write}" CWD="$1" FILE="$2" PLUGIN="${4:-$PIPLUG}"; oc_verdict; }
+# pidisp <repo> <seat>: verdict of a fablepowers_dispatch; pisub <repo> <agent> [fixture].
+pidisp() { pig dispatch CWD="$1" SEAT="$2" PLUGIN="$PIPLUG"; oc_verdict; }
+pisub() { pig "${3:-dispatch-subagent}" CWD="$1" AGENT="$2" PLUGIN="$PIPLUG"; oc_verdict; }
+# picreate <repo> <relpath> [fixture]: write the file, then its tool_result (absolute path).
+picreate() {
+  mkdir -p "$(dirname "$1/$2")"; printf '# spec\n' > "$1/$2"
+  pig "${3:-tool_result-write-create}" CWD="$1" FILE="$1/$2" PLUGIN="$PIPLUG"
+}
+picmd() { pig command CWD="$1" VERB="$2" ARGS="$3" PLUGIN="$PIPLUG"; }
+piq() { pig approval_tool CWD="$1" CHOICE="$2" KEY="$3" PLUGIN="$PIPLUG"; }
+# pi_pending_get <expr>: a python expression over the parsed `pending` answer `d`.
+pi_pending_get() { printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(eval(sys.argv[1]))' "$1" 2>/dev/null; }
+
+echo "33. Pi: no pending, inert cases"
+
+R="$TEST_ROOT/p1"; new_repo "$R"
+check "write src allowed (exactly {})" test "$(piw "$R" "$R/src/app.py")" == none
+check "edit src allowed" test "$(piw "$R" "$R/src/app.py" edit)" == none
+check "fablepowers_dispatch implementer allowed" test "$(pidisp "$R" implementer)" == none
+check "subagent allowed" test "$(pisub "$R" worker)" == none
+check "no .fablepowers created" test ! -e "$R/.fablepowers"
+NR="$TEST_ROOT/p1-not-a-repo"; mkdir -p "$NR/docs/specs"
+picreate "$NR" docs/specs/x.md
+oc_expect "outside a git repo: spec create" none
+check "  no marker" test ! -e "$NR/.fablepowers"
+pig pending CWD="$NR" PLUGIN="$PIPLUG"
+check "outside a git repo: pending answers the full shape, empty" \
+  test "$(pi_pending_get 'sorted(d) == ["pending", "reason", "refused"] and d["pending"] == [] and d["refused"] is False and bool(d["reason"])')" == True
+mkdir -p "$R/.fablepowers"
+PI_EDIT='d["cwd"] = "p1"'; piw "$R" "$R/.fablepowers/k/approved" >/dev/null; PI_EDIT=""
+oc_expect "cwd not absolute: inert (even a marker path)" none
+PI_EDIT='d["hook"] = "tool_execution_start"'; piw "$R" "$R/.fablepowers/k/approved" >/dev/null; PI_EDIT=""
+oc_expect "unknown hook name: no decision" none
+check "  logged" grep -q "Pi payload with an unknown hook 'tool_execution_start'" "$R/.fablepowers/gate.log"
+PI_EDIT='d["harness"] = "Pi"'; pig tool_call-write CWD="$R" FILE="$R/.fablepowers/k/approved" PLUGIN="$PIPLUG"; PI_EDIT=""
+check "harness other than exactly 'pi': not the Pi branch (Claude path, no output)" test "$RC:$OUT" == "0:"
+
+echo "34. Pi: spec create -> pending (root write only)"
+
+R="$TEST_ROOT/p2"; new_repo "$R"
+picreate "$R" docs/specs/2026-01-01-pi.md
+oc_expect "write existed:false docs/specs/*.md" context
+P="$R/.fablepowers/2026-01-01-pi/pending"
+check "  pending written" test -f "$P"
+check "  pending.spec is the repo-relative path" test "$(json_field "$P" spec)" == '"docs/specs/2026-01-01-pi.md"'
+check "  notice names the spec, fablepowers_ask_approval, /fablepowers:approve, the reviewer seat and subagent (Pi wording)" \
+  bash -c '[[ "$1" == *"docs/specs/2026-01-01-pi.md"* && "$1" == *fablepowers_ask_approval* && "$1" == *'\''`/fablepowers:approve`'\''* && "$1" == *'\''`reviewer`'\''* && "$1" == *'\''`subagent`'\''* && "$1" != *explore* && "$1" != *"whole message"* ]]' _ "$(oc_text)"
+cp "$P" "$TEST_ROOT/p2-pending"
+picreate "$R" docs/specs/2026-01-01-pi.md
+oc_expect "duplicate tool_result for the same spec" none
+check "  pending unchanged" cmp -s "$P" "$TEST_ROOT/p2-pending"
+
+R="$TEST_ROOT/p2b"; new_repo "$R"
+picreate "$R" docs/specs/over.md tool_result-write-overwrite
+oc_expect "write over an existing file (existed:true)" none
+check "  no pending" test ! -e "$R/.fablepowers/over"
+picreate "$R" docs/specs/err.md tool_result-write-isdir-error
+oc_expect "write that failed (is_error true)" none
+check "  no pending" test ! -e "$R/.fablepowers/err"
+PI_EDIT='del d["is_error"]'; picreate "$R" docs/specs/noerr.md; PI_EDIT=""
+check "is_error missing: no pending" test ! -e "$R/.fablepowers/noerr"
+PI_EDIT='d["is_child"] = True'; picreate "$R" docs/specs/child.md; PI_EDIT=""
+oc_expect "child-session write (is_child true)" none
+check "  no pending" test ! -e "$R/.fablepowers/child"
+PI_EDIT='del d["is_child"]'; picreate "$R" docs/specs/nochild.md; PI_EDIT=""
+check "is_child missing counts as root for pending creation: pending" test -f "$R/.fablepowers/nochild/pending"
+PI_EDIT='del d["existed"]'; picreate "$R" docs/specs/noex.md; PI_EDIT=""
+oc_expect "SF4: no existed record: counted as a create" context
+check "  pending written" test -f "$R/.fablepowers/noex/pending"
+check "  logged" grep -q 'Pi write tool_result of `.*noex.md` without an existed record' "$R/.fablepowers/gate.log"
+PI_EDIT='d["tool"] = "edit"'; picreate "$R" docs/specs/ed.md; PI_EDIT=""
+check "edit tool_result (Pi's edit cannot create): no pending" test ! -e "$R/.fablepowers/ed"
+PI_EDIT='d["path"] = "docs/specs/rel.md"'; picreate "$R" docs/specs/rel.md; PI_EDIT=""
+check "relative path (drift): resolved against cwd, pending" test -f "$R/.fablepowers/rel/pending"
+check "  logged" grep -q 'Pi write tool_result with a relative path `docs/specs/rel.md`' "$R/.fablepowers/gate.log"
+PI_EDIT='del d["path"]'; picreate "$R" docs/specs/nopath.md; PI_EDIT=""
+oc_expect "no path" none
+check "  logged" grep -q "Pi write tool_result without a path; ignored" "$R/.fablepowers/gate.log"
+for f in docs/notes.md docs/specs/n.txt docs/specs/d/deep.md; do
+  picreate "$R" "$f"
+  check "write $f: no pending" test "$(oc_verdict)" == none
+done
+
+echo "35. Pi: dispatch while pending"
+
+R="$TEST_ROOT/p3"; new_repo "$R"
+picreate "$R" docs/specs/sp.md
+for s in implementer strict_implementer Reviewer "reviewer " ""; do
+  check "fablepowers_dispatch seat '$s' denied" test "$(pidisp "$R" "$s")" == deny
+done
+check "fablepowers_dispatch seat 'reviewer' allowed" test "$(pidisp "$R" reviewer)" == none
+PI_EDIT='del d["seat"]'; pig dispatch CWD="$R" SEAT=x PLUGIN="$PIPLUG"; PI_EDIT=""
+oc_expect "fablepowers_dispatch with no seat" deny
+pidisp "$R" implementer >/dev/null
+check "deny names the seat, the design, fablepowers_ask_approval and /fablepowers:approve sp (Pi wording)" \
+  bash -c '[[ "$1" == *"seat \`implementer\`"* && "$1" == *docs/specs/sp.md* && "$1" == *fablepowers_ask_approval* && "$1" == *"/fablepowers:approve sp"* && "$1" == *"Do not retry"* && "$1" != *explore* ]]' _ "$(oc_text)"
+for a in reviewer worker scout; do
+  check "SF3: subagent agent '$a' denied" test "$(pisub "$R" "$a")" == deny
+done
+check "SF3: subagent parallel/chain (no agent) denied" test "$(pisub "$R" x dispatch-subagent-parallel)" == deny
+PI_EDIT='d["tool"] = "other_spawner"'; pig dispatch CWD="$R" SEAT=implementer PLUGIN="$PIPLUG"; PI_EDIT=""
+oc_expect "dispatch payload for an unknown tool (accepted gap)" none
+check "  logged" grep -q "Pi dispatch payload for an unknown tool 'other_spawner'" "$R/.fablepowers/gate.log"
+GATE_ENV=("FABLEPOWERS_GATE=off")
+check "FABLEPOWERS_GATE=off: implementer dispatch not denied" test "$(pidisp "$R" implementer)" == none
+check "  would-be denial logged" grep -q "FABLEPOWERS_GATE=off: would deny Pi dispatch fablepowers_dispatch" "$R/.fablepowers/gate.log"
+GATE_ENV=()
+
+echo "36. Pi: write/edit while pending"
+
+R="$TEST_ROOT/p4"; new_repo "$R"
+picreate "$R" docs/specs/ed.md
+check "write src denied" test "$(piw "$R" "$R/src/app.py")" == deny
+piw "$R" "$R/src/app.py" >/dev/null
+check "  deny names the path, the allowlist and the commands" \
+  bash -c '[[ "$1" == *"editing \`src/app.py\`"* && "$1" == *"docs/plans/"* && "$1" == *"/fablepowers:approve ed"* ]]' _ "$(oc_text)"
+check "edit src denied" test "$(piw "$R" "$R/src/app.py" edit)" == deny
+check "SF2: read src allowed" test "$(piw "$R" "$R/src/app.py" read)" == none
+for t in ls grep find bash; do
+  PI_EDIT="d[\"tool\"] = \"$t\""; piw "$R" "$R/src/app.py" >/dev/null; PI_EDIT=""
+  check "SF2: tool_call $t with a src path allowed" test "$(oc_verdict)" == none
+done
+check "README at toplevel denied" test "$(piw "$R" "$R/README.md")" == deny
+check "docs/specs allowed" test "$(piw "$R" "$R/docs/specs/ed.md")" == none
+check "docs/plans allowed (edit)" test "$(piw "$R" "$R/docs/plans/p.md" edit)" == none
+check ".fablepowers/ed/progress.md allowed" test "$(piw "$R" "$R/.fablepowers/ed/progress.md")" == none
+check "path outside the toplevel allowed" test "$(piw "$R" "$TEST_ROOT/elsewhere/x.py")" == none
+check "docs/specsX denied" test "$(piw "$R" "$R/docs/specsX/a.md")" == deny
+check ".. traversal out of docs/specs denied" test "$(piw "$R" "$R/docs/specs/../../src/app.py")" == deny
+ln -s ../../src "$R/docs/plans/srclink"
+check "symlink from docs/plans to src denied" test "$(piw "$R" "$R/docs/plans/srclink/app.py")" == deny
+check "SF4: relative path while pending denied (fails closed)" test "$(piw "$R" docs/plans/p.md)" == deny
+check "  logged" grep -q "Pi write tool_call without an absolute path (docs/plans/p.md)" "$R/.fablepowers/gate.log"
+PI_EDIT='del d["path"]'; piw "$R" x >/dev/null; PI_EDIT=""
+check "SF4: no path while pending denied" test "$(oc_verdict)" == deny
+PI_EDIT='d["path"] = None'; piw "$R" x edit >/dev/null; PI_EDIT=""
+check "SF4: edit with a null path while pending denied" test "$(oc_verdict)" == deny
+PI_EDIT='d["path"] = "/a\u0000b"'; piw "$R" x >/dev/null; PI_EDIT=""
+check "path with a NUL while pending denied" test "$(oc_verdict)" == deny
+PI_EDIT='d["is_child"] = True'; piw "$R" "$R/src/app.py" >/dev/null; PI_EDIT=""
+check "child session write of src denied" test "$(oc_verdict)" == deny
+R2="$TEST_ROOT/p4b"; new_repo "$R2"
+check "no pending: relative path allowed" test "$(piw "$R2" src/app.py)" == none
+PI_EDIT='del d["path"]'; piw "$R2" x >/dev/null; PI_EDIT=""
+check "no pending: no path allowed" test "$(oc_verdict)" == none
+check "  logged" grep -q "Pi write tool_call without an absolute path (None)" "$R2/.fablepowers/gate.log"
+
+echo "37. Pi: config and plugin root closed while pending (Q-K1)"
+
+R="$TEST_ROOT/p5"; new_repo "$R"
+PIHOME="$TEST_ROOT/pihome"; PIXDG="$TEST_ROOT/pixdg"; PIAGENT="$TEST_ROOT/piagent"
+mkdir -p "$PIHOME/.config" "$PIXDG" "$PIAGENT"
+GATE_ENV=("HOME=$PIHOME" "XDG_CONFIG_HOME=$PIXDG")
+# piwa <path>: a write with pi_agent_dir set to $PIAGENT.
+piwa() { PI_EDIT="d[\"pi_agent_dir\"] = \"$PIAGENT\""; piw "$R" "$1" >/dev/null; PI_EDIT=""; oc_verdict; }
+CFG=("$R/.pi/settings.json" "$R/.pi/extensions/x.ts" "$R/docs/plans/.pi/x" "$R/.PI/settings.json" "$R/.pi./x"
+     "$PIHOME/.pi/agent/settings.json" "$PIHOME/.pi/agent/extensions/e.ts" "$TEST_ROOT/other/.pi/agent/models.json"
+     "$PIHOME/.config/fablepowers/models.toml" "$PIXDG/fablepowers/models.toml" "$PIXDG/FablePowers/Models.TOML")
+for f in "${CFG[@]}"; do
+  check "no pending: $f allowed" test "$(piw "$R" "$f")" == none
+done
+check "no pending: pi_agent_dir/x allowed" test "$(piwa "$PIAGENT/settings.json")" == none
+picreate "$R" docs/specs/cf.md
+for f in "${CFG[@]}"; do
+  check "pending: $f denied" test "$(piw "$R" "$f")" == deny
+done
+piw "$R" "$R/.pi/settings.json" >/dev/null
+check "  deny names the Pi config file" bash -c '[[ "$1" == *"Pi config file"* ]]' _ "$(oc_text)"
+check "pending: under pi_agent_dir (\$PI_CODING_AGENT_DIR) denied" test "$(piwa "$PIAGENT/settings.json")" == deny
+check "pending: pi_agent_dir case variant denied" test "$(piwa "${PIAGENT^^}/x")" == deny
+ln -s "$PIAGENT" "$TEST_ROOT/piagent-link"
+check "pending: symlink into pi_agent_dir denied" test "$(piwa "$TEST_ROOT/piagent-link/auth.json")" == deny
+PI_EDIT="d[\"pi_agent_dir\"] = \"$TEST_ROOT/piagent-link\""; piw "$R" "$PIAGENT/auth.json" >/dev/null; PI_EDIT=""
+check "pending: pi_agent_dir given through a symlink, write by its real path denied" test "$(oc_verdict)" == deny
+check "pending: pi_agent_dir absent from the payload: that dir (outside the repo) allowed" \
+  test "$(piw "$R" "$PIAGENT/settings.json")" == none
+PI_EDIT='d["pi_agent_dir"] = "rel/agent"'; piw "$R" "$R/rel/agent/x" >/dev/null; PI_EDIT=""
+check "pending: a relative pi_agent_dir is ignored (the repo rule still denies)" test "$(oc_verdict)" == deny
+for f in "$TEST_ROOT/other/.pi" "$TEST_ROOT/other/.pix/x" "$TEST_ROOT/piagent2/x" "$PIXDG/fablepowers/models.toml.bak"; do
+  check "pending: $f (not config, outside the repo) allowed" test "$(piw "$R" "$f")" == none
+done
+GATE_ENV=()
+check "pending: absolute path under the plugin root denied" test "$(piw "$R" "$PIPLUG/hooks/approval_gate.py")" == deny
+piw "$R" "$PIPLUG/hooks/approval_gate.py" >/dev/null
+check "  deny names the plugin directory" bash -c '[[ "$1" == *"under the fablepowers plugin directory"* ]]' _ "$(oc_text)"
+ln -s "$PIPLUG" "$TEST_ROOT/piplugin-link"
+check "pending: path through a symlink to the plugin root denied" test "$(piw "$R" "$TEST_ROOT/piplugin-link/hooks/x.py")" == deny
+check "pending: plugin root case variant denied" test "$(piw "$R" "${PIPLUG^^}/x.py")" == deny
+check "pending: sibling of the plugin root (prefix only) allowed" test "$(piw "$R" "$TEST_ROOT/piplugin2/x")" == none
+check "plugin root == toplevel: docs/specs allowed" test "$(piw "$R" "$R/docs/specs/cf.md" write "$R")" == none
+check "plugin root == toplevel: hooks/approval_gate.py denied" test "$(piw "$R" "$R/hooks/approval_gate.py" write "$R")" == deny
+
+echo "38. Pi: marker writes denied always"
+
+R="$TEST_ROOT/p6"; new_repo "$R"
+for f in "$R/.fablepowers/k/approved" "$R/.fablepowers/k/pending" "$R/.FablePowers/k/Approved" \
+         "$R/.fablepowers/k/approved/x" "$R/.fablepowers/k/approved." "$TEST_ROOT/other/.fablepowers/k/approved"; do
+  check "no pending: write $f denied" test "$(piw "$R" "$f")" == deny
+done
+check "no pending: edit of a marker denied" test "$(piw "$R" "$R/.fablepowers/k/pending" edit)" == deny
+piw "$R" "$R/.fablepowers/k/approved" >/dev/null
+check "  marker deny names /fablepowers:approve" bash -c '[[ "$1" == *"/fablepowers:approve"* && "$1" == *"Do not retry"* ]]' _ "$(oc_text)"
+check "no pending: .fablepowers/k/approved.md allowed" test "$(piw "$R" "$R/.fablepowers/k/approved.md")" == none
+check "no pending: relative marker-like path denied" test "$(piw "$R" .fablepowers/k/approved)" == deny
+mkdir -p "$R/.fablepowers/k"; ln -s "$R/.fablepowers/k/approved" "$R/docs/plans/alias"
+check "no pending: symlink resolving to a marker denied" test "$(piw "$R" "$R/docs/plans/alias")" == deny
+PI_EDIT='d["is_child"] = True'; piw "$R" "$R/.fablepowers/k/pending" >/dev/null; PI_EDIT=""
+check "no pending: child session marker write denied" test "$(oc_verdict)" == deny
+GATE_ENV=("FABLEPOWERS_GATE=off")
+check "FABLEPOWERS_GATE=off: marker write not denied" test "$(piw "$R" "$R/.fablepowers/k/approved")" == none
+check "  logged" grep -q "FABLEPOWERS_GATE=off: would deny Pi tool_call write" "$R/.fablepowers/gate.log"
+GATE_ENV=()
+
+echo "39. Pi: /fablepowers:approve and withdraw commands"
+
+R="$TEST_ROOT/p7"; new_repo "$R"
+picmd "$R" approve ""
+check "nothing pending: context" bash -c '[[ "$1" == context && "$2" == *"nothing is pending"* && "$2" == *fablepowers-implementation-plan* ]]' _ "$(oc_verdict)" "$(oc_text)"
+picreate "$R" docs/specs/c1.md; picreate "$R" docs/specs/c2.md
+picmd "$R" approve ""
+check "several pending, no args: lists keys, nothing recorded" \
+  bash -c '[[ "$1" == *"c1 (docs/specs/c1.md)"* && "$1" == *"c2 (docs/specs/c2.md)"* && ! -e "$2" && ! -e "$3" ]]' _ "$(oc_text)" "$R/.fablepowers/c1/approved" "$R/.fablepowers/c2/approved"
+picmd "$R" approve "nosuch"
+check "unknown key: context, nothing recorded" \
+  bash -c '[[ "$1" == *"no pending design matches \`nosuch\`"* && ! -e "$2" ]]' _ "$(oc_text)" "$R/.fablepowers/c1/approved"
+picmd "$R" approve " docs/specs/c1.md "
+oc_expect "approve c1 by spec path (args trimmed)" context
+check "  c1 approved via command, c2 not" test "$(json_field "$R/.fablepowers/c1/approved" via)" == '"command"' -a ! -e "$R/.fablepowers/c2/approved"
+check "  spec_sha256 matches the spec" test "$(json_field "$R/.fablepowers/c1/approved" spec_sha256)" == "\"$(sha256sum "$R/docs/specs/c1.md" | cut -d' ' -f1)\""
+check "  context: recorded, plus the next step with the Pi skill name" \
+  bash -c '[[ "$1" == *"approved design \`docs/specs/c1.md\`"* && "$1" == *fablepowers-implementation-plan* && "$1" != *"fablepowers:implementation-plan"* ]]' _ "$(oc_text)"
+picmd "$R" withdraw ""
+oc_expect "withdraw, one pending (c2)" context
+check "  c2/pending removed, spec kept" test ! -e "$R/.fablepowers/c2/pending" -a -f "$R/docs/specs/c2.md"
+check "  context: withdrawn, not approved" bash -c '[[ "$1" == *"withdrew design \`docs/specs/c2.md\`"* && "$1" == *"not approved"* ]]' _ "$(oc_text)"
+picmd "$R" bogus ""
+oc_expect "unknown verb" none
+picreate "$R" docs/specs/c3.md
+PI_EDIT='del d["args"]'; pig command CWD="$R" VERB=approve PLUGIN="$PIPLUG"; PI_EDIT=""
+oc_expect "args missing: as empty" context
+check "  c3 approved" test -f "$R/.fablepowers/c3/approved"
+
+echo "40. Pi: refusal rule for approve/withdraw (Q-A1/Q-R1/Q-R2/Q-C1)"
+
+R="$TEST_ROOT/p8"; new_repo "$R"
+picreate "$R" docs/specs/r.md
+REFUSED=('d["is_child"] = True'
+         'del d["is_child"]'
+         'd["is_child"] = "false"'
+         'd["env_session"] = True; d["mode"] = "print"'
+         'd["env_session"] = True; d["mode"] = "json"'
+         'd["env_session"] = True; d["mode"] = "rpc"'
+         'd["env_session"] = True; del d["mode"]'
+         'd["env_session"] = True; d["mode"] = "TUI"'
+         'd["env_session"] = True; d["mode"] = "tui"'
+         'del d["env_session"]; d["mode"] = "tui"'
+         'd["env_session"] = "false"; d["mode"] = "tui"'
+         'del d["env_session"]; d["mode"] = "print"'
+         'd["env_session"] = True; d["mode"] = "tui"; d["is_child"] = True')
+for e in "${REFUSED[@]}"; do
+  PI_EDIT="$e"; pig command CWD="$R" VERB=approve ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""
+  check "command approve refused ($e)" \
+    bash -c '[[ "$1" == context && "$2" == *"recorded nothing"* && ! -e "$3" ]]' _ "$(oc_verdict)" "$(oc_text)" "$R/.fablepowers/r/approved"
+  PI_EDIT="$e"; pig command CWD="$R" VERB=withdraw ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""
+  check "command withdraw refused ($e)" test -f "$R/.fablepowers/r/pending"
+  PI_EDIT="$e"; piq "$R" Approve r; PI_EDIT=""
+  check "approval tool refused ($e)" \
+    bash -c '[[ "$1" == context && "$2" == *"not recorded"* && ! -e "$3" ]]' _ "$(oc_verdict)" "$(oc_text)" "$R/.fablepowers/r/approved"
+  PI_EDIT="$e"; pig pending CWD="$R" PLUGIN="$PIPLUG"; PI_EDIT=""
+  check "pending hook: refused ($e)" test "$(pi_pending_get 'd["refused"] is True and bool(d["reason"])')" == True
+done
+PI_EDIT='d["env_session"] = True; d["mode"] = "print"'; pig command CWD="$R" VERB=approve ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""
+check "SF-1: env_session refusal addresses the user's action and does not name PI_SESSION_ID" \
+  bash -c '[[ "$1" == *"The user must type \`/fablepowers:approve\` in a Pi they started in their own terminal"* && "$1" != *PI_SESSION_ID* && "$1" != *"you started"* && "$1" != *yourself* ]]' _ "$(oc_text)"
+PI_EDIT='d["env_session"] = True; d["mode"] = "tui"'; pig command CWD="$R" VERB=approve ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""
+check "S1: env_session refusal (even in the TUI) names another Pi's shell and a Pi the user started, not interactivity" \
+  bash -c '[[ "$1" == *"inside another Pi'"'"'s shell"* && "$1" == *"a Pi they started in their own terminal"* && "$1" != *PI_SESSION_ID* && "$1" != *"interactive"* ]]' _ "$(oc_text)"
+PI_EDIT='d["is_child"] = True'; pig command CWD="$R" VERB=approve ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""
+check "child refusal names the child session" bash -c '[[ "$1" == *"child session"* ]]' _ "$(oc_text)"
+PI_EDIT='d["mode"] = "tui"'; pig command CWD="$R" VERB=withdraw ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""
+check "env_session false in the TUI: not refused (withdraw recorded)" test ! -e "$R/.fablepowers/r/pending"
+picreate "$R" docs/specs/r2.md
+PI_EDIT='d["mode"] = "print"'; pig command CWD="$R" VERB=approve ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""
+check "env_session false in print: not refused (approved)" test -f "$R/.fablepowers/r2/approved"
+picreate "$R" docs/specs/r3.md
+PI_EDIT='d["mode"] = "rpc"'; pig command CWD="$R" VERB=approve ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""
+check "env_session false in rpc: not refused (approved)" test -f "$R/.fablepowers/r3/approved"
+
+echo "41. Pi: pending hook (read-only, MF3)"
+
+R="$TEST_ROOT/p9"; new_repo "$R"
+pig pending CWD="$R" PLUGIN="$PIPLUG"
+check "nothing pending: [] , not refused, a reason" \
+  test "$(pi_pending_get 'd["pending"] == [] and d["refused"] is False and "no design is pending" in d["reason"]')" == True
+check "  nothing written" test ! -e "$R/.fablepowers"
+picreate "$R" docs/specs/a.md; picreate "$R" docs/specs/b.md
+mkdir -p "$R/.fablepowers/c"; : > "$R/.fablepowers/c/pending"; mkdir "$R/.fablepowers/c/approved"
+touch "$R/.fablepowers/gate.log"  # the forged approved is logged; the dir mtime must not move for that
+SNAP_BEFORE="$(cd "$R/.fablepowers" && find . -path ./gate.log -prune -o -print0 | sort -z | xargs -0 stat -c '%n %s %Y' )"
+pig pending CWD="$R" PLUGIN="$PIPLUG"
+check "several pending (forged approved ignored): keys and specs, sorted; reason empty" \
+  test "$(pi_pending_get 'd["pending"] == [{"key": "a", "spec": "docs/specs/a.md"}, {"key": "b", "spec": "docs/specs/b.md"}, {"key": "c", "spec": "c"}] and d["refused"] is False and d["reason"] == ""')" == True
+check "  writes no marker (tree unchanged apart from gate.log)" \
+  test "$SNAP_BEFORE" == "$(cd "$R/.fablepowers" && find . -path ./gate.log -prune -o -print0 | sort -z | xargs -0 stat -c '%n %s %Y')"
+PI_EDIT='d["is_child"] = True'; pig pending CWD="$R" PLUGIN="$PIPLUG"; PI_EDIT=""
+check "refused session: still lists the pending designs" test "$(pi_pending_get 'len(d["pending"])')" == 3
+
+echo "42. Pi: approval tool (MF3, Q-A3)"
+
+R="$TEST_ROOT/p10"; new_repo "$R"
+piq "$R" Approve x
+check "Approve with nothing pending: not recorded" \
+  bash -c '[[ "$1" == context && "$2" == *"not recorded because no design is pending"* ]]' _ "$(oc_verdict)" "$(oc_text)"
+picreate "$R" docs/specs/a.md; picreate "$R" docs/specs/b.md
+piq "$R" "Changes needed" a
+check "Changes needed: context (stays pending, ask what to change), nothing recorded" \
+  bash -c '[[ "$1" == context && "$2" == *"chose Changes needed"* && "$2" == *"what to change"* && ! -e "$3" ]]' _ "$(oc_verdict)" "$(oc_text)" "$R/.fablepowers/a/approved"
+PI_EDIT='d["choice"] = None'; piq "$R" x a; PI_EDIT=""
+check "choice null (dismissed / no UI): context, nothing recorded" \
+  bash -c '[[ "$1" == context && "$2" == *"no answer"* && ! -e "$3" ]]' _ "$(oc_verdict)" "$(oc_text)" "$R/.fablepowers/a/approved"
+for c in approve "Approve " "a (docs/specs/a.md)" ""; do
+  piq "$R" "$c" a
+  check "choice '$c': nothing recorded" test "$(oc_verdict)" == context -a ! -e "$R/.fablepowers/a/approved"
+done
+piq "$R" Approve nosuch
+check "Approve for a key that is not pending: not recorded, lists the pending" \
+  bash -c '[[ "$2" == *"\`nosuch\` is not a pending design"* && "$2" == *"a (docs/specs/a.md)"* && ! -e "$3" && ! -e "$4" ]]' _ "$(oc_verdict)" "$(oc_text)" "$R/.fablepowers/a/approved" "$R/.fablepowers/b/approved"
+PI_EDIT='del d["pending_key"]'; piq "$R" Approve x; PI_EDIT=""
+check "Approve with no pending_key: not recorded" test ! -e "$R/.fablepowers/a/approved" -a ! -e "$R/.fablepowers/b/approved"
+piq "$R" Approve b
+oc_expect "several pending, Approve for b" context
+check "  only b approved, via question" test "$(json_field "$R/.fablepowers/b/approved" via)" == '"question"' -a ! -e "$R/.fablepowers/a/approved"
+check "  context: recorded, next step with the Pi skill name" \
+  bash -c '[[ "$1" == *"approved design \`docs/specs/b.md\`"* && "$1" == *fablepowers-implementation-plan* ]]' _ "$(oc_text)"
+cp "$R/.fablepowers/b/approved" "$TEST_ROOT/p10-b-approved"
+piq "$R" Approve b
+check "re-check: Approve for an already approved key not recorded again" \
+  bash -c '[[ "$1" == *"is not a pending design"* ]] && cmp -s "$2" "$3"' _ "$(oc_text)" "$R/.fablepowers/b/approved" "$TEST_ROOT/p10-b-approved"
+check "a still pending: implementer dispatch denied" test "$(pidisp "$R" implementer)" == deny
+rm "$R/docs/specs/a.md"
+piq "$R" Approve a
+check "spec deleted: not recorded" bash -c '[[ "$1" == *"no longer exists"* && ! -e "$2" ]]' _ "$(oc_text)" "$R/.fablepowers/a/approved"
+printf '# spec\n' > "$R/docs/specs/a.md"
+piq "$R" Approve a
+check "Approve for a (sole pending): recorded" test -f "$R/.fablepowers/a/approved"
+check "approved: implementer dispatch allowed" test "$(pidisp "$R" implementer)" == none
+check "approved: subagent allowed" test "$(pisub "$R" worker)" == none
+check "approved: src write allowed" test "$(piw "$R" "$R/src/app.py")" == none
+check "approved: Pi config write allowed" test "$(piw "$R" "$R/.pi/settings.json")" == none
+
+echo "43. Pi: failures fail open with one JSON object"
+
+R="$TEST_ROOT/p11"; new_repo "$R"
+picreate "$R" docs/specs/f.md
+chmod 555 "$R/.fablepowers/f"
+picmd "$R" approve ""
+if [[ ! -w "$R/.fablepowers/f" ]]; then
+  oc_expect "approval write fails (read-only key dir): internal error" none
+  check "  logged" grep -q "internal error (Pi), allowed" "$R/.fablepowers/gate.log"
+else
+  pass "  (skipped: running as a user who can write a 555 directory)"
+fi
+chmod 755 "$R/.fablepowers/f"
+PI_EDIT='d["plugin_root"] = 5; d["pi_agent_dir"] = ["x"]'; piw "$R" "$R/src/app.py" >/dev/null; PI_EDIT=""
+check "malformed plugin_root / pi_agent_dir: ignored, src still denied" test "$(oc_verdict)" == deny
+
+
+# --- 44. Case variants of the toplevel (all harnesses) ------------------------------------
+# realpath() does not canonicalise case, so on a case-insensitive filesystem
+# `<parent>/CI` names the repo `<parent>/ci`. A path under the toplevel only
+# case-insensitively (or by an NTFS name variant) counts as inside the repo: denied
+# while pending unless the rest of it is exactly an allowed dir (fails closed; on a
+# case-sensitive filesystem such a path is a sibling directory, denied too).
+
+echo "44. Case variants of the toplevel count as inside the repo"
+
+ci_variants() {  # ci_variants <repo>: the upper-cased and trailing-dot variants of its last component
+  local base; base="$(basename "$1")"
+  printf '%s\n' "$(dirname "$1")/${base^^}" "$1."
+}
+
+R="$TEST_ROOT/ci-claude"; new_repo "$R"; create_spec "$R" docs/specs/ci.md
+while read -r V; do
+  check "Claude: '$V/src/app.py' denied" test "$(edit_verdict pre-write "$R" "$V/src/app.py")" == deny
+  check "Claude: '$V/docs/specs/n.md' allowed" test "$(edit_verdict pre-write "$R" "$V/docs/specs/n.md")" == allow
+  check "Claude: '$V/Docs/Specs/n.md' denied (rest compared exactly)" test "$(edit_verdict pre-write "$R" "$V/Docs/Specs/n.md")" == deny
+done < <(ci_variants "$R")
+edit_verdict pre-write "$R" "$(dirname "$R")/CI-CLAUDE/src/app.py" >/dev/null
+check "Claude: the deny names the repo-relative path" bash -c '[[ "$1" == *"editing \`src/app.py\`"* ]]' _ "$(text_of)"
+check "Claude: a sibling '${R}x/src/app.py' still outside, allowed" test "$(edit_verdict pre-write "$R" "${R}x/src/app.py")" == allow
+
+R="$TEST_ROOT/ci-codex"; new_repo "$R"; ccreate "$R" docs/specs/ci.md
+while read -r V; do
+  check "Codex: '$V/src/app.py' denied" test "$(cpatch "$R" "$(patch_of "*** Add File: $V/src/app.py"$'\n+x')")" == deny
+  check "Codex: '$V/docs/plans/n.md' allowed" test "$(cpatch "$R" "$(patch_of "*** Add File: $V/docs/plans/n.md"$'\n+x')")" == allow
+  check "Codex: '$V/Docs/Plans/n.md' denied (rest compared exactly)" test "$(cpatch "$R" "$(patch_of "*** Add File: $V/Docs/Plans/n.md"$'\n+x')")" == deny
+done < <(ci_variants "$R")
+cpatch "$R" "$(patch_of "*** Add File: $(dirname "$R")/CI-CODEX/src/app.py"$'\n+x')" >/dev/null
+check "Codex: the deny names the repo-relative path" bash -c '[[ "$1" == *"touches \`src/app.py\`"* ]]' _ "$(text_of)"
+check "Codex: a sibling '${R}x/src/app.py' still outside, allowed" test "$(cpatch "$R" "$(patch_of "*** Add File: ${R}x/src/app.py"$'\n+x')")" == allow
+
+R="$TEST_ROOT/ci-oc"; new_repo "$R"; occreate "$R" docs/specs/ci.md
+while read -r V; do
+  check "OpenCode: '$V/src/app.py' denied" test "$(ocperm "$R" "$V/src/app.py")" == deny
+  check "OpenCode: '$V/.fablepowers/ci/notes.md' allowed" test "$(ocperm "$R" "$V/.fablepowers/ci/notes.md")" == none
+  check "OpenCode: '$V/DOCS/specs/n.md' denied (rest compared exactly)" test "$(ocperm "$R" "$V/DOCS/specs/n.md")" == deny
+done < <(ci_variants "$R")
+ocperm "$R" "$(dirname "$R")/CI-OC/src/app.py" >/dev/null
+check "OpenCode: the deny names the repo-relative path" bash -c '[[ "$1" == *"editing \`src/app.py\`"* ]]' _ "$(oc_text)"
+check "OpenCode: a sibling '${R}x/src/app.py' still outside, allowed" test "$(ocperm "$R" "${R}x/src/app.py")" == none
+
+R="$TEST_ROOT/ci-pi"; new_repo "$R"; picreate "$R" docs/specs/ci.md >/dev/null
+while read -r V; do
+  check "Pi: write '$V/src/app.py' denied" test "$(piw "$R" "$V/src/app.py")" == deny
+  check "Pi: edit '$V/src/app.py' denied" test "$(piw "$R" "$V/src/app.py" edit)" == deny
+  check "Pi: '$V/docs/specs/n.md' allowed" test "$(piw "$R" "$V/docs/specs/n.md")" == none
+  check "Pi: '$V/docs/Specs/n.md' denied (rest compared exactly)" test "$(piw "$R" "$V/docs/Specs/n.md")" == deny
+done < <(ci_variants "$R")
+piw "$R" "$(dirname "$R")/CI-PI/src/app.py" >/dev/null
+check "Pi: the deny names the repo-relative path" bash -c '[[ "$1" == *"editing \`src/app.py\`"* ]]' _ "$(oc_text)"
+check "Pi: a sibling '${R}x/src/app.py' still outside, allowed" test "$(piw "$R" "${R}x/src/app.py")" == none
+check "Pi: the plugin root still denied under a case-variant toplevel" test "$(piw "$R" "$(dirname "$R")/CI-PI/plug/x.js" write "$R/plug")" == deny
+
+# --- 45. Pending creation through case variants (all harnesses) --------------------------
+# A spec created through a case or NTFS-name variant of <toplevel>/docs/specs/<name>.md
+# (the toplevel, docs/specs or the name) still goes pending: on a case-insensitive
+# filesystem it is that spec. Over-marking on a case-sensitive one is the safe side.
+# The spec path is recorded under the toplevel (in_repo), the key keeps its case.
+
+echo "45. Case variants still create pending (all harnesses)"
+
+# spec_variants <repo>: "<abs path>|<key>|<recorded spec>" per variant.
+spec_variants() {
+  local base; base="$(basename "$1")"
+  printf '%s\n' \
+    "$(dirname "$1")/${base^^}/docs/specs/v1.md|v1|docs/specs/v1.md" \
+    "$1./docs/specs/v2.md|v2|docs/specs/v2.md" \
+    "$1/DOCS/Specs/v3.md|v3|DOCS/Specs/v3.md" \
+    "$1/docs/specs./v4.md|v4|docs/specs./v4.md" \
+    "$1/docs/specs/V5.MD|V5|docs/specs/V5.MD" \
+    "$1/docs/specs/v6.md.|v6|docs/specs/v6.md." \
+    "$1/docs/specs/v7.md:s|v7|docs/specs/v7.md:s" \
+    "$1/docs/specs/v8:x.md|v8:x|docs/specs/v8:x.md"
+}
+# not_spec_variants <repo>: paths that must not go pending, "<abs path>|<key>".
+not_spec_variants() {
+  printf '%s\n' "$1/docs/specs/sub/n1.md|n1" "${1}x/docs/specs/n2.md|n2" \
+    "$1/docs/specs/n3.txt|n3" "$1/docs/specs/n4.mdx|n4" "$1/DOCS/n5.md|n5" "$1/docs/specs/.md.|"
+}
+# spec_of <repo> <key>: the spec recorded in the key's pending marker.
+spec_of() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["spec"])' "$1/.fablepowers/$2/pending" 2>/dev/null; }
+
+# mkpend_<harness> <repo> <abs path>: that harness's create hook for the path.
+mkpend_claude() { run_gate PostToolUse Write post-write-create CWD="$1" FILE="$2"; }
+mkpend_codex() { cpost "$1" "$(patch_of "*** Add File: $2"$'\n+# spec')" "$(resp_of "A $2")"; }
+mkpend_opencode() { oc after-write-create CWD="$1" FILE="$2" TARGET="$2" PLUGIN="$OCPLUG"; }
+mkpend_pi() { pig tool_result-write-create CWD="$1" FILE="$2" PLUGIN="$PIPLUG"; }
+
+for H in claude codex opencode pi; do
+  R="$TEST_ROOT/cv-$H"; new_repo "$R"
+  while IFS='|' read -r P K S; do
+    "mkpend_$H" "$R" "$P"
+    check "$H: '${P#"$TEST_ROOT"/}' -> key '$K' pending" test -f "$R/.fablepowers/$K/pending"
+    check "$H:   recorded spec '$S'" test "$(spec_of "$R" "$K")" == "$S"
+  done < <(spec_variants "$R")
+  while IFS='|' read -r P K; do
+    "mkpend_$H" "$R" "$P"
+    check "$H: '${P#"$TEST_ROOT"/}' not pending" test ! -e "$R/.fablepowers/${K:-.md.}"
+  done < <(not_spec_variants "$R")
+  check "$H: exactly the 8 variant keys pending" test "$(cd "$R/.fablepowers" && ls -d */ | wc -l)" -eq 8
+done
+
 echo
 if [[ "$FAILURES" -eq 0 ]]; then
   echo "All approval-gate tests passed."

@@ -1,12 +1,13 @@
 {
   "name": "fablepowers",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Outcome-gated development workflow for frontier orchestrator models, with pinned-model implementer and reviewer agents; forked from superpowers. OpenCode plugin entry.",
   "type": "module",
   "main": "opencode/index.js",
   "files": [
     "index.js",
     "opencode/",
+    "pi/",
     "agents/",
     "skills/",
     "hooks/session-start",
@@ -14,6 +15,14 @@
     "NOTICE",
     "LICENSE"
   ],
+  "pi": {
+    "extensions": [
+      "./pi/fablepowers.ts"
+    ],
+    "skills": [
+      "./pi/skills"
+    ]
+  },
   "license": "MIT",
   "author": "Phelanous",
   "homepage": "https://github.com/phelanous/fablepowers",

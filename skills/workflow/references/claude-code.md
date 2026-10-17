@@ -68,4 +68,5 @@ Transcripts are JSONL files under `~/.claude/projects/<cwd>/`, where `<cwd>` is 
 ## Other harnesses
 
 - **Codex (0.5.0):** supported; see `codex.md` beside this file (seats Sol / Terra / Sol by default, overridable per user in `models.toml`).
-- **OpenCode (0.6.0)** and **Pi (0.7.0):** planned; each gets its own design and reference file.
+- **OpenCode (0.6.0):** supported; see `opencode.md` beside this file (seats pinned per user in `models.toml` `[opencode]`, else the session model).
+- **Pi (0.7.0):** supported; see `pi.md` beside this file (seats dispatched with `fablepowers_dispatch`, pinned per user in `models.toml` `[pi]`, else the session model).

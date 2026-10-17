@@ -23,6 +23,15 @@ adapted (consent from a plan's worktree request; worktree location and cleanup
 anchored at the project root; PR creation via gh, fj or glab). Each SKILL.md
 carries an attribution line under its frontmatter saying what was adapted.
 
+The Pi dispatch tool in pi/fablepowers.ts (fablepowers_dispatch: the child
+`pi` invocation, its JSON-event parsing, the output cap and the abort handling)
+is derived from the subagent example extension of Pi
+(@earendil-works/pi-coding-agent 1.2.0, examples/extensions/subagent/,
+https://github.com/earendil-works/pi) by earendil-works, author Mario Zechner,
+used under the MIT license. The package declares MIT in its package.json and
+ships no LICENSE file; the MIT license text below applies to it as to
+superpowers, with the copyright holder Mario Zechner.
+
 The rest of this repository — every other skill, the agents, the hook, the
 scripts and the docs — is original work licensed under this repository's
 LICENSE. The workflow it encodes is a fork of the ideas in superpowers, but the

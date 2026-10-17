@@ -23,6 +23,13 @@
 #    "reviewer": S}, "warnings": ["...", ...]}
 # where S is {"providerID":"...","id":"...","variant":"..."|null} for a seat
 # pinned in the [opencode] table of models.toml, or null (session model).
+#
+# Pi mode (argv flag --pi, called by the Pi extension pi/fablepowers.ts): stdin
+# is never read, and the output is one JSON object of the same shape
+#   {"context": "...", "seats": {"implementer": S, "strict_implementer": S,
+#    "reviewer": S}, "warnings": ["...", ...]}
+# where S is {"provider":"...","id":"...","thinking":"<level>"|null} for a seat
+# pinned in the [pi] table of models.toml, or null (session model and thinking).
 # bash 3.2-compatible: no associative arrays, no ${x,,}, no mapfile.
 
 set -euo pipefail
@@ -80,13 +87,16 @@ escape_for_json() {
 # The hook payload (JSON) arrives on stdin. One builtin read with a 1-second
 # total timeout, so a stdin that never closes cannot block the session; skipped
 # when stdin is a terminal. Empty or unreadable stdin leaves the payload empty.
-# OpenCode mode is selected by the flag alone and never reads stdin.
+# OpenCode and Pi modes are selected by their flag alone and never read stdin.
 opencode_mode=0
+pi_mode=0
 if [[ "${1:-}" == --opencode ]]; then
     opencode_mode=1
+elif [[ "${1:-}" == --pi ]]; then
+    pi_mode=1
 fi
 payload=""
-if [[ "$opencode_mode" -eq 0 && ! -t 0 ]]; then
+if [[ "$opencode_mode" -eq 0 && "$pi_mode" -eq 0 && ! -t 0 ]]; then
     IFS= read -r -t 1 -d '' payload 2>/dev/null || true
 fi
 
@@ -120,6 +130,8 @@ detect_harness() {
 }
 if [[ "$opencode_mode" -eq 1 ]]; then
     harness="opencode"
+elif [[ "$pi_mode" -eq 1 ]]; then
+    harness="pi"
 else
     detect_harness
 fi
@@ -135,7 +147,7 @@ if [[ "$harness" == claude-code ]]; then
     exit 0
 fi
 
-# --- Codex and OpenCode: plugin root ----------------------------------------------------------
+# --- Codex, OpenCode and Pi: plugin root ----------------------------------------------------------
 
 # Absolute plugin root from this script's directory (builtins only).
 case "$SCRIPT_DIR" in
@@ -159,7 +171,7 @@ normalize_path() {
 }
 plugin_root="$(normalize_path "${plugin_root}/..")"
 
-# --- Codex and OpenCode: seat table from defaults + models.toml ----------------
+# --- Codex, OpenCode and Pi: seat table from defaults + models.toml -----------
 
 D_IMPL_MODEL="gpt-6.1-sol";    D_IMPL_EFFORT="high"
 D_STRICT_MODEL="gpt-5.6-terra"; D_STRICT_EFFORT="medium"
@@ -172,6 +184,14 @@ reviewer="$D_REV_MODEL";              reviewer_effort="$D_REV_EFFORT"
 table="codex"
 if [[ "$harness" == opencode ]]; then
     table="opencode"
+    implementer=""; strict_implementer=""; reviewer=""
+fi
+# On Pi there are no defaults either: an empty seat is unpinned, an empty
+# <seat>_thinking leaves Pi's default for the seat's model, and the effort keys
+# are unused (<seat>_thinking replaces them).
+implementer_thinking=""; strict_implementer_thinking=""; reviewer_thinking=""
+if [[ "$harness" == pi ]]; then
+    table="pi"
     implementer=""; strict_implementer=""; reviewer=""
 fi
 
@@ -200,9 +220,12 @@ default_of() {
     esac
 }
 
-# set_key <key> <value>: key is one of the six known names (checked by the caller).
+# set_key <key> <value>: key is one of the known names (checked by the caller).
 set_key() {
     case "$1" in
+        implementer_thinking) implementer_thinking="$2" ;;
+        strict_implementer_thinking) strict_implementer_thinking="$2" ;;
+        reviewer_thinking) reviewer_thinking="$2" ;;
         implementer) implementer="$2" ;;
         strict_implementer) strict_implementer="$2" ;;
         reviewer) reviewer="$2" ;;
@@ -213,10 +236,16 @@ set_key() {
 }
 
 # reject <line> <key> <why>: warn and put the key back to its default
-# (on OpenCode: unpin the seat).
+# (on OpenCode and Pi: unpin the seat; on Pi a <seat>_thinking key goes back to
+# Pi's default thinking).
 reject() {
     local d
-    if [[ "$table" == opencode ]]; then
+    if [[ "$table" == pi && "$2" == *_thinking ]]; then
+        set_key "$2" ""
+        warn "line $1: $2 $3; using Pi's default thinking."
+        return 0
+    fi
+    if [[ "$table" == opencode || "$table" == pi ]]; then
         set_key "$2" ""
         warn "line $1: $2 $3; using the session model."
         return 0
@@ -248,14 +277,22 @@ trim() {
 # [A-Za-z0-9._:/#-], at most 128 characters, non-empty provider, model path
 # segments and variant, at most one #); a rejected seat is unpinned; a
 # <seat>_effort key warns and is ignored.
+# [pi] takes provider/model-id seats (charset [A-Za-z0-9._:@/-], at most 128
+# characters, non-empty provider and path segments, no trailing :<thinking level>
+# suffix) and <seat>_thinking (off|minimal|low|medium|high|xhigh|max); a rejected
+# seat is unpinned, a rejected thinking key falls back to Pi's default, and a
+# <seat>_effort key warns and is ignored. In [codex] and [opencode] the
+# <seat>_thinking keys are unknown keys.
 parse_models_toml() {
     local LC_ALL=C
     local file="$1" line n=0 in_codex=0 seen=" " hdr name key rest val after
     local re_key='^[A-Za-z0-9_-]+$' re_model='^[A-Za-z0-9._:/-]{1,64}$'
     local re_oc='^[A-Za-z0-9._:-]+/[A-Za-z0-9._:-]+(/[A-Za-z0-9._:-]+)*(#[A-Za-z0-9._:-]+)?$'
+    local re_pi='^[A-Za-z0-9._:@-]+/[A-Za-z0-9._:@-]+(/[A-Za-z0-9._:@-]+)*$'
+    local re_pi_suffix=':(off|minimal|low|medium|high|xhigh|max)$'
     [[ -e "$file" ]] || return 0
     if [[ ! -f "$file" || ! -r "$file" ]]; then
-        if [[ "$table" == opencode ]]; then
+        if [[ "$table" == opencode || "$table" == pi ]]; then
             warn "models.toml is not a readable file; every seat runs on the session model."
         else
             warn "models.toml is not a readable file; using the defaults."
@@ -301,6 +338,12 @@ parse_models_toml() {
         fi
         case "$key" in
             implementer|strict_implementer|reviewer|implementer_effort|strict_implementer_effort|reviewer_effort) ;;
+            implementer_thinking|strict_implementer_thinking|reviewer_thinking)
+                if [[ "$table" != pi ]]; then
+                    warn "line $n: unknown key ${key:0:32}; ignored."
+                    continue
+                fi
+                ;;
             *)
                 warn "line $n: unknown key ${key:0:32}; ignored."
                 continue
@@ -308,6 +351,10 @@ parse_models_toml() {
         esac
         if [[ "$table" == opencode && "$key" == *_effort ]]; then
             warn "line $n: $key is not used on OpenCode (add a #variant to the model id); ignored."
+            continue
+        fi
+        if [[ "$table" == pi && "$key" == *_effort ]]; then
+            warn "line $n: $key is not used on Pi (use ${key%_effort}_thinking); ignored."
             continue
         fi
         if [[ "$seen" == *" $key "* ]]; then
@@ -344,12 +391,26 @@ parse_models_toml() {
                     *) reject "$n" "$key" "is not low, medium, high, xhigh, max or ultra" ;;
                 esac
                 ;;
+            *_thinking)
+                case "$val" in
+                    off|minimal|low|medium|high|xhigh|max) set_key "$key" "$val" ;;
+                    *) reject "$n" "$key" "is not off, minimal, low, medium, high, xhigh or max" ;;
+                esac
+                ;;
             *)
                 if [[ "$table" == opencode ]]; then
                     if [[ "${#val}" -le 128 && "$val" =~ $re_oc ]]; then
                         set_key "$key" "$val"
                     else
                         reject "$n" "$key" "is not a valid provider/model[#variant] id"
+                    fi
+                elif [[ "$table" == pi ]]; then
+                    if [[ "$val" =~ $re_pi_suffix ]]; then
+                        reject "$n" "$key" "ends in a :thinking suffix (use ${key}_thinking)"
+                    elif [[ "${#val}" -le 128 && "$val" =~ $re_pi ]]; then
+                        set_key "$key" "$val"
+                    else
+                        reject "$n" "$key" "is not a valid provider/model-id"
                     fi
                 elif [[ "$val" =~ $re_model ]]; then
                     set_key "$key" "$val"
@@ -369,6 +430,22 @@ models_file=""
 if [[ -n "$config_home" ]]; then
     models_file="${config_home}/fablepowers/models.toml"
     parse_models_toml "$models_file"
+fi
+
+# Pi: a <seat>_thinking without a pinned model for that seat is ignored (the
+# seat inherits the session's model and thinking).
+if [[ "$table" == pi ]]; then
+    for seat in implementer strict_implementer reviewer; do
+        case "$seat" in
+            implementer) v="$implementer"; t="$implementer_thinking" ;;
+            strict_implementer) v="$strict_implementer"; t="$strict_implementer_thinking" ;;
+            reviewer) v="$reviewer"; t="$reviewer_thinking" ;;
+        esac
+        if [[ -z "$v" && -n "$t" ]]; then
+            set_key "${seat}_thinking" ""
+            warn "${seat}_thinking is set but ${seat} has no pinned model; ignored."
+        fi
+    done
 fi
 
 if [[ "$warn_count" -gt 3 ]]; then
@@ -447,6 +524,78 @@ if [[ "$harness" == opencode ]]; then
     printf '{"context":"%s","seats":{"implementer":%s,"strict_implementer":%s,"reviewer":%s},"warnings":[%s]}\n' \
         "$session_context" "$(seat_json "$implementer")" "$(seat_json "$strict_implementer")" \
         "$(seat_json "$reviewer")" "${warn_json#,}"
+    exit 0
+fi
+
+# --- Pi: output ------------------------------------------------------------------
+
+if [[ "$harness" == pi ]]; then
+    # pi_seat_line <seat> <agent file stem> <model> <thinking>: the seat's line in the table.
+    pi_seat_line() {
+        if [[ -z "$3" ]]; then
+            printf -- '- %s (seat %s, agents/%s.md): session model and thinking (unpinned)' "$1" "$1" "$2"
+        elif [[ -n "$4" ]]; then
+            printf -- '- %s (seat %s, agents/%s.md): model %s, thinking %s' "$1" "$1" "$2" "$3" "$4"
+        else
+            printf -- "- %s (seat %s, agents/%s.md): model %s, Pi's default thinking" "$1" "$1" "$2" "$3"
+        fi
+    }
+    # pi_seat_json <model> <thinking>: {"provider","id","thinking"} split from
+    # provider/model-id, or null when the seat is unpinned. Values were validated
+    # by the parser.
+    pi_seat_json() {
+        local m="$1" thinking="null"
+        if [[ -z "$m" ]]; then
+            printf 'null'
+            return 0
+        fi
+        if [[ -n "$2" ]]; then
+            thinking="\"$(escape_for_json "$2")\""
+        fi
+        printf '{"provider":"%s","id":"%s","thinking":%s}' \
+            "$(escape_for_json "${m%%/*}")" "$(escape_for_json "${m#*/}")" "$thinking"
+    }
+
+    # One warning names every unpinned seat (after the parser's warnings).
+    unpinned=""
+    for seat in implementer strict_implementer reviewer; do
+        case "$seat" in
+            implementer) v="$implementer" ;;
+            strict_implementer) v="$strict_implementer" ;;
+            reviewer) v="$reviewer" ;;
+        esac
+        if [[ -z "$v" ]]; then
+            unpinned="${unpinned:+${unpinned}, }${seat}"
+        fi
+    done
+    if [[ -n "$unpinned" ]]; then
+        w="unpinned seats run on the session model: ${unpinned}; pin them in the [pi] table of models.toml."
+        warn_count=$((warn_count + 1))
+        warn_lines="${warn_lines}"$'\n'"- ${w}"
+        warn_json="${warn_json},\"$(escape_for_json "$w")\""
+    fi
+
+    pi_ref="${plugin_root}/skills/workflow/references/pi.md"
+    preamble="You have fablepowers on Pi. The workflow map below is \`fablepowers:workflow\`, your entry point for substantive dev work. Before invoking another fablepowers skill, dispatching a seat or asking for design approval, read the Pi mapping in \`${pi_ref}\`. Plugin root: \`${plugin_root}\`."
+    preamble="${preamble}"$'\n'"Skill names: a skill written \`fablepowers:<x>\` is the Pi skill \`fablepowers-<x>\`."
+    if [[ -n "$models_file" ]]; then
+        seat_source="the [pi] table of ${models_file}"
+    else
+        seat_source="no models.toml since HOME and XDG_CONFIG_HOME are unset"
+    fi
+    preamble="${preamble}"$'\n'"Seat table (${seat_source}); dispatch each seat with the \`fablepowers_dispatch\` tool, which applies its model and thinking:"
+    preamble="${preamble}"$'\n'"$(pi_seat_line implementer implementer "$implementer" "$implementer_thinking")"
+    preamble="${preamble}"$'\n'"$(pi_seat_line strict_implementer strict-implementer "$strict_implementer" "$strict_implementer_thinking")"
+    preamble="${preamble}"$'\n'"$(pi_seat_line reviewer reviewer "$reviewer" "$reviewer_thinking")"
+    if [[ "$warn_count" -gt 0 ]]; then
+        preamble="${preamble}"$'\n'"models.toml warnings (${warn_count}):${warn_lines}"
+    fi
+
+    session_context="$(escape_for_json "${preamble}")\\n\\n$(escape_for_json "${workflow_content}")"
+    printf '{"context":"%s","seats":{"implementer":%s,"strict_implementer":%s,"reviewer":%s},"warnings":[%s]}\n' \
+        "$session_context" "$(pi_seat_json "$implementer" "$implementer_thinking")" \
+        "$(pi_seat_json "$strict_implementer" "$strict_implementer_thinking")" \
+        "$(pi_seat_json "$reviewer" "$reviewer_thinking")" "${warn_json#,}"
     exit 0
 fi
 

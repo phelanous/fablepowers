@@ -1,0 +1,12 @@
+{
+  "harness": "pi",
+  "hook": "dispatch",
+  "cwd": "__CWD__",
+  "session_id": "01a1486c-da07-7462-8c7b-05c4f3d50be9",
+  "is_child": false,
+  "plugin_root": "__PLUGIN__",
+  "mode": "print",
+  "env_session": false,
+  "tool": "subagent",
+  "agent": null
+}

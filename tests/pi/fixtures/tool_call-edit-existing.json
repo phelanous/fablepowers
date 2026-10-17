@@ -1,0 +1,27 @@
+{
+  "event": {
+    "type": "tool_call",
+    "toolName": "edit",
+    "toolCallId": "call_25b28d29606643928bbfbb14",
+    "input": {
+      "path": "src/existing.txt",
+      "edits": [
+        {
+          "oldText": "hello",
+          "newText": "goodbye"
+        }
+      ]
+    }
+  },
+  "ctx": {
+    "mode": "print",
+    "hasUI": false,
+    "cwd": "__CWD__",
+    "sessionId": "01a1486c-5b8c-7624-a37e-7970d96d703c",
+    "model": "openrouter/deepseek/deepseek-v4-flash",
+    "thinking": "off"
+  },
+  "probe": {
+    "existsBefore": true
+  }
+}

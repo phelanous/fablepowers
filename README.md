@@ -260,10 +260,11 @@ over RPC) and records your answer itself. Or type `/fablepowers:approve` (add
 the spec's key when several designs are pending); `/fablepowers:withdraw [key]`
 drops one. Print mode has no dialog, so headless runs end at the ask; continue
 with `pi -c -p '/fablepowers:approve'`. Only the main session approves:
-dispatched children are refused, and so is a non-interactive `pi` started from
+dispatched children are refused, and so is any `pi`, TUI included, started from
 Pi's own shell tool (it carries `PI_SESSION_ID`), which is how a model would
-forge the command. While a design is pending, `fablepowers_dispatch` for any
-seat but `reviewer` and the example `subagent` tool are denied, and so are
+forge the command; approve from a Pi you started in your own terminal. While
+a design is pending, `fablepowers_dispatch` for any seat but `reviewer` and the
+example `subagent` tool are denied, and so are
 `write`/`edit` outside `docs/specs/`, `docs/plans/` and `.fablepowers/`, Pi
 config (`.pi/` anywhere, `$PI_CODING_AGENT_DIR`, `models.toml`) and the plugin
 itself. Set `FABLEPOWERS_GATE=off` in Pi's environment to turn blocking off.

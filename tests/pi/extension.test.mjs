@@ -20,7 +20,7 @@ const ROOT = path.resolve(HERE, '..', '..');
 const FIX = path.join(HERE, 'fixtures');
 const FAKE_PI = path.join(HERE, 'fake-pi.mjs');
 const { createExtension } = await import(pathToFileURL(path.join(ROOT, 'pi', 'fablepowers.ts')).href);
-const { GUARD, SECTION, RESULT_TYPE, OUTPUT_CAP, resolveToCwd, piInvocationFor, findPython } = createExtension.internals;
+const { GUARD, SECTION, RESULT_TYPE, OUTPUT_CAP, resolveToCwd, piInvocationFor, findPython, capOutput } = createExtension.internals;
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fp-pi-test-')));
 process.on('exit', () => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -483,24 +483,29 @@ test('command row: approve records via command, withdraw clears pending; result 
   assert.equal(print.notes.length, 0);
 });
 
-test('refusal rule: PI_SESSION_ID outside the TUI, an unknown mode, and a child session cannot approve', { skip }, async () => {
+test('refusal rule: PI_SESSION_ID in any mode (the TUI included), an unknown mode, and a child session cannot approve', { skip }, async () => {
   const repo = newRepo();
   const base = load();
   await createSpec(base, fakeCtx({ cwd: repo }), repo, 'docs/specs/feat.md');
   const forged = load({ env: envWith({ PI_SESSION_ID: 'abc' }) });
-  for (const mode of ['print', 'json', 'rpc', undefined]) {
+  // S1: a model can give a shell-started pi a pty (`script -qec ...`), so the TUI is not exempt
+  for (const mode of ['tui', 'print', 'json', 'rpc', undefined]) {
     const ctx = fakeCtx({ cwd: repo, mode: 'print' });
-    ctx.mode = mode; // undefined: a ctx without a mode (SF4: unknown mode is not the TUI)
+    ctx.mode = mode; // undefined: a ctx without a mode (SF4: fails closed)
     await forged.commands.get('fablepowers:approve').handler('', ctx);
     assert.ok(!fs.existsSync(approvedMarker(repo, 'feat')), String(mode));
     assert.match(forged.sent.at(-1).m.content, /PI_SESSION_ID is set/);
+    assert.match(forged.sent.at(-1).m.content, /inside another Pi's shell/);
+    assert.doesNotMatch(forged.sent.at(-1).m.content, /interactive/);
   }
+  await forged.commands.get('fablepowers:withdraw').handler('', fakeCtx({ cwd: repo, mode: 'tui' }));
+  assert.ok(fs.existsSync(pendingMarker(repo, 'feat')));
   const child = load({ env: envWith({ FABLEPOWERS_PARENT_SESSION: 'p' }), flags: { 'fablepowers-child': true }, getPpid: () => 9 });
   await child.commands.get('fablepowers:approve').handler('', fakeCtx({ cwd: repo, mode: 'json' }));
   assert.ok(!fs.existsSync(approvedMarker(repo, 'feat')));
   assert.match(child.sent.at(-1).m.content, /dispatched child session/);
-  // the TUI exemption: PI_SESSION_ID in a real interactive TUI may approve
-  await forged.commands.get('fablepowers:approve').handler('', fakeCtx({ cwd: repo, mode: 'tui' }));
+  // a Pi the user started (no PI_SESSION_ID) may approve
+  await base.commands.get('fablepowers:approve').handler('', fakeCtx({ cwd: repo, mode: 'tui' }));
   assert.equal(readJson(approvedMarker(repo, 'feat')).via, 'command');
 });
 
@@ -558,6 +563,7 @@ test('approval tool: refused sessions and print mode get no dialog', { skip }, a
   await createSpec(load(), fakeCtx({ cwd: repo }), repo, 'docs/specs/feat.md');
   const cases = [
     ['PI_SESSION_ID + rpc', load({ env: envWith({ PI_SESSION_ID: 'x' }) }), 'rpc', /approvals are refused in this session/],
+    ['PI_SESSION_ID + tui (S1)', load({ env: envWith({ PI_SESSION_ID: 'x' }) }), 'tui', /approvals are refused in this session.*inside another Pi's shell/],
     ['child', load({ env: envWith({ FABLEPOWERS_PARENT_SESSION: 'p' }), flags: { 'fablepowers-child': true }, getPpid: () => 3 }), 'rpc', /dispatched child session/],
     ['print (no UI)', load(), 'print', /no UI in this mode.*\/fablepowers:approve feat/],
   ];
@@ -897,4 +903,33 @@ test('package.json pi field and NOTICE credit', () => {
   assert.match(notice, /examples\/extensions\/subagent/);
   assert.match(notice, /earendil-works/);
   assert.match(notice, /Mario Zechner/);
+});
+
+test('capOutput: linear on 200k CJK/emoji characters, never splits a character, exact byte budget', () => {
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  const cases = [
+    ['CJK', '\u4e2d'.repeat(200000)],
+    ['emoji', '\u{1F600}'.repeat(200000)],
+    ['mixed', 'a\u00e9\u4e2d\u{1F600}'.repeat(50000)],
+  ];
+  for (const [label, text] of cases) {
+    for (const cap of [OUTPUT_CAP, 1001, 1002, 1003, 1, 0]) {
+      const t0 = performance.now();
+      const out = capOutput(text, cap, '/x/s.jsonl');
+      const ms = performance.now() - t0;
+      assert.ok(ms < 100, `${label} cap ${cap}: ${ms.toFixed(1)} ms`);
+      const cut = out.slice(0, out.indexOf('\n\n[Output truncated: '));
+      assert.ok(text.startsWith(cut), `${label} cap ${cap}: a prefix`);
+      assert.doesNotMatch(cut, lone, `${label} cap ${cap}: no lone surrogate`);
+      assert.ok(!cut.includes('\uFFFD'), `${label} cap ${cap}: no replacement char`);
+      const bytes = Buffer.byteLength(cut, 'utf8');
+      assert.ok(bytes <= cap, `${label} cap ${cap}: ${bytes} <= cap`);
+      // the longest whole-character prefix: one more character would exceed the cap
+      const next = String.fromCodePoint(text.codePointAt(cut.length));
+      assert.ok(bytes + Buffer.byteLength(next, 'utf8') > cap, `${label} cap ${cap}: maximal prefix`);
+      const dropped = Buffer.byteLength(text, 'utf8') - bytes;
+      assert.match(out, new RegExp(`\\[Output truncated: ${dropped} bytes omitted\\. The child's full transcript: /x/s\\.jsonl\\]$`));
+    }
+  }
+  assert.equal(capOutput('\u4e2d\u{1F600}', 7, ''), '\u4e2d\u{1F600}');
 });

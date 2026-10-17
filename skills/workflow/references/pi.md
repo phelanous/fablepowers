@@ -122,7 +122,7 @@ With several designs pending and no key, or an unknown key, nothing is recorded 
 **Refusals.** The command and the approval tool record nothing, and say why, when:
 
 - the session is a dispatched child (or the extension could not tell); or
-- `PI_SESSION_ID` is in the environment and the session is not the interactive TUI. Pi's `bash` tool exports `PI_SESSION_ID` to everything it runs, so a `pi -c -p '/fablepowers:approve'` the model starts through its shell is refused. The TUI is exempt, because it needs a real terminal the model's shell doesn't have.
+- `PI_SESSION_ID` is in the environment, in any mode, the TUI included. Pi's `bash` tool exports `PI_SESSION_ID` to everything it runs, so a `pi -c -p '/fablepowers:approve'` the model starts through its shell is refused, and so is a TUI `pi` it starts under a pty (`script -qec …`). A user who runs Pi from inside another Pi's shell (`!pi`) approves from a Pi started in their own terminal instead.
 
 **Withdrawing.** `/fablepowers:withdraw [key]`, by the same rules. The spec file stays.
 

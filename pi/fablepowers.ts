@@ -199,12 +199,17 @@ function piInvocationFor(args, { argv1 = process.argv[1], execPath = process.exe
 }
 
 // The output text capped at `cap` UTF-8 bytes, with a note naming what was dropped.
+// Linear: one encode, the cut backed off continuation bytes to a character start
+// (so no UTF-8 sequence or surrogate pair is split), one decode. The kept text is
+// sliced from the original by the decoded length: every code point (a lone
+// surrogate too, as U+FFFD) has the same UTF-16 length both ways.
 function capOutput(text, cap, where) {
-  const bytes = Buffer.byteLength(text, 'utf8');
-  if (bytes <= cap) return text;
-  let cut = text.slice(0, cap);
-  while (Buffer.byteLength(cut, 'utf8') > cap) cut = cut.slice(0, -1);
-  const dropped = bytes - Buffer.byteLength(cut, 'utf8');
+  const buf = Buffer.from(text, 'utf8');
+  if (buf.length <= cap) return text;
+  let end = Math.max(0, cap);
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
+  const cut = text.slice(0, buf.subarray(0, end).toString('utf8').length);
+  const dropped = buf.length - end;
   return `${cut}\n\n[Output truncated: ${dropped} bytes omitted.${where ? ` The child's full transcript: ${where}` : ''}]`;
 }
 

@@ -2441,11 +2441,11 @@ for e in "${REFUSED[@]}"; do
   check "pending hook: refused ($e)" test "$(pi_pending_get 'd["refused"] is True and bool(d["reason"])')" == True
 done
 PI_EDIT='d["env_session"] = True; d["mode"] = "print"'; pig command CWD="$R" VERB=approve ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""
-check "env_session refusal says PI_SESSION_ID and the user's own terminal" \
-  bash -c '[[ "$1" == *PI_SESSION_ID* && "$1" == *"own terminal"* ]]' _ "$(oc_text)"
+check "SF-1: env_session refusal addresses the user's action and does not name PI_SESSION_ID" \
+  bash -c '[[ "$1" == *"The user must type \`/fablepowers:approve\` in a Pi they started in their own terminal"* && "$1" != *PI_SESSION_ID* && "$1" != *"you started"* && "$1" != *yourself* ]]' _ "$(oc_text)"
 PI_EDIT='d["env_session"] = True; d["mode"] = "tui"'; pig command CWD="$R" VERB=approve ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""
 check "S1: env_session refusal (even in the TUI) names another Pi's shell and a Pi the user started, not interactivity" \
-  bash -c '[[ "$1" == *"inside another Pi'"'"'s shell"* && "$1" == *"a Pi you started yourself"* && "$1" != *"interactive"* ]]' _ "$(oc_text)"
+  bash -c '[[ "$1" == *"inside another Pi'"'"'s shell"* && "$1" == *"a Pi they started in their own terminal"* && "$1" != *PI_SESSION_ID* && "$1" != *"interactive"* ]]' _ "$(oc_text)"
 PI_EDIT='d["is_child"] = True'; pig command CWD="$R" VERB=approve ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""
 check "child refusal names the child session" bash -c '[[ "$1" == *"child session"* ]]' _ "$(oc_text)"
 PI_EDIT='d["mode"] = "tui"'; pig command CWD="$R" VERB=withdraw ARGS="" PLUGIN="$PIPLUG"; PI_EDIT=""

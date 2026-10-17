@@ -230,6 +230,16 @@ else
   fail "additionalContext is $size characters, over the 6000 cap"
 fi
 
+# Plan-review SF10: the Claude cap leaves ~172 characters, so the Pi port (0.7.0) may
+# add at most 120 characters to the shared workflow map. 5515 is the map's length in
+# 0.6.0 (028bc49). Further growth needs a new budget here, not a quiet bump.
+map_size="$(python3 -c 'import sys; print(len(open(sys.argv[1], encoding="utf-8").read()))' "$REPO_ROOT/skills/workflow/SKILL.md")"
+if (( map_size - 5515 <= 120 )); then
+  pass "workflow map grew $((map_size - 5515)) characters over 0.6.0 (Pi budget 120)"
+else
+  fail "workflow map grew $((map_size - 5515)) characters over 0.6.0, over the Pi budget of 120"
+fi
+
 # --- (a) broken PATH ----------------------------------------------------------
 
 echo "Broken PATH (env -i PATH=/nonexistent)"

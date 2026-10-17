@@ -193,6 +193,91 @@ absolute path in `plugins` (the repository's root `index.js` is the
 local-directory entry) and run `opencode run --standalone …`, which starts a
 private server for that run.
 
+## Pi
+
+fablepowers also runs in Pi 1.x (`@earendil-works/pi-coding-agent`; tested
+with Pi 1.2.0), from the same repository, with the same skills, seats,
+approval gate and workflow map. It runs as one extension (`pi/fablepowers.ts`)
+plus wrapper skills (`pi/skills/`). The extension's gate decisions come from
+the same `hooks/approval_gate.py`, and its seat table from the same
+`hooks/session-start`. What the skills' actions resolve to on Pi is in
+[`skills/workflow/references/pi.md`](skills/workflow/references/pi.md).
+
+**Install.**
+
+```
+pi install git:github.com/phelanous/fablepowers
+```
+
+Pi reads the `pi` field of the root `package.json`. To try a checkout instead,
+run `pi -e /abs/path/to/fablepowers`; if the installed copy is loaded too, the
+first one loaded registers and the other logs a line and stays idle.
+
+**Skill names.** Pi skill names carry no namespace, so each skill is a wrapper
+named `fablepowers-<skill>` (`fablepowers-workflow`,
+`fablepowers-design-spec`, …) that points at the real `skills/<skill>/SKILL.md`.
+Where a skill says `fablepowers:<x>`, Pi uses `fablepowers-<x>`; the bootstrap
+says so too. The prefix keeps them apart from your own skills and from
+superpowers' Pi skills of the same bare name. Approve and withdraw are commands,
+not skills.
+
+**Requirements.** Python 3.8+ for the approval gate, and bash for the
+bootstrap's seat table, found as on OpenCode (`FABLEPOWERS_PYTHON`,
+`FABLEPOWERS_BASH`, PATH, then the usual absolute locations). Without python
+the gate is off and the bootstrap says so in its first line. Headless runs need
+`< /dev/null`: `pi -p` with a piped stdin that never closes waits on it.
+
+**Seats.** Pi has no subagent tool of its own, so the extension adds
+`fablepowers_dispatch {seat, task, cwd?}`. Each call starts a separate `pi`
+process on the seat's model, with the seat's role prompt from `agents/`, the
+gate loaded and no way to dispatch further; calls run one at a time. Child
+transcripts are kept under the parent session's directory in
+`fablepowers-children/`. A seat with no entry runs on your session's model and
+thinking level, and the bootstrap names the unpinned seats. Pin seats in
+`~/.config/fablepowers/models.toml` (or under `$XDG_CONFIG_HOME`), in its
+`[pi]` table:
+
+```toml
+[pi]
+implementer = "openrouter/deepseek/deepseek-v4-flash"
+implementer_thinking = "high"
+strict_implementer = "openrouter/qwen/qwen3.6-flash"
+reviewer = "openrouter/anthropic/claude-x.1"
+```
+
+A seat value is `provider/model-id`, double-quoted, at most 128 characters,
+with no `:level` suffix. `<seat>_thinking` is one of `off`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, `max`; without it a pinned seat gets Pi's default
+thinking for its model. A bad entry warns in the bootstrap and leaves the seat
+on the session model (or, for a bad thinking level, on Pi's default). The
+`[codex]` and `[opencode]` tables can sit in the same file; each harness reads
+only its own. Edits take effect in the next Pi session. If a child reports a
+different model than its pin, the dispatch result says so.
+
+**Approving a design.** The model asks with the `fablepowers_ask_approval`
+tool, which shows you an **Approve** / **Changes needed** dialog in the TUI (or
+over RPC) and records your answer itself. Or type `/fablepowers:approve` (add
+the spec's key when several designs are pending); `/fablepowers:withdraw [key]`
+drops one. Print mode has no dialog, so headless runs end at the ask; continue
+with `pi -c -p '/fablepowers:approve'`. Only the main session approves:
+dispatched children are refused, and so is a non-interactive `pi` started from
+Pi's own shell tool (it carries `PI_SESSION_ID`), which is how a model would
+forge the command. While a design is pending, `fablepowers_dispatch` for any
+seat but `reviewer` and the example `subagent` tool are denied, and so are
+`write`/`edit` outside `docs/specs/`, `docs/plans/` and `.fablepowers/`, Pi
+config (`.pi/` anywhere, `$PI_CODING_AGENT_DIR`, `models.toml`) and the plugin
+itself. Set `FABLEPOWERS_GATE=off` in Pi's environment to turn blocking off.
+
+**Accepted gaps.** The full list is in the Pi reference:
+
+- shell writes;
+- the model running `env -u PI_SESSION_ID pi -c -p '/fablepowers:approve'`,
+  or a `pi` started by a launcher that doesn't set `PI_SESSION_ID`;
+- edits to the installed plugin while no design is pending;
+- other packages' dispatch tools, and writes through MCP or code-mode tools;
+- a print-mode parent killed by SIGINT or SIGKILL: its children notice within
+  about 2 s and exit, but not before then.
+
 ## How it works
 
 Ten workflow skills, invoked through the Skill tool as `fablepowers:<name>`, plus
@@ -339,6 +424,7 @@ bash tests/integration-review/test-review-package.sh    # workspace + review-pac
 bash tests/hooks/test-session-start.sh                  # SessionStart hook, incl. with a broken PATH
 bash tests/hooks/test-approval-gate.sh                  # approval gate hook, launcher and hooks.json wiring
 bash tests/opencode/run.sh                              # OpenCode plugin (node --test; skips without node)
+bash tests/pi/run.sh                                    # Pi extension (node --test; skips without node)
 ```
 
 ## Measuring it
@@ -388,7 +474,9 @@ that content.
 
 The workflow this forks is [superpowers](https://github.com/obra/superpowers) by
 Jesse Vincent, MIT licensed. Three of its skills are vendored here from v7.0.0,
-two of them lightly adapted; the rest of the skills are rewrites informed by it. See
+two of them lightly adapted; the rest of the skills are rewrites informed by it. The
+Pi dispatch tool is derived from the subagent example extension of
+[Pi](https://github.com/earendil-works/pi) by Mario Zechner, MIT licensed. See
 [`NOTICE`](NOTICE) for the attribution and the upstream license text.
 
 This repository is MIT licensed — see [`LICENSE`](LICENSE).

@@ -1,6 +1,6 @@
 # OpenCode harness reference
 
-The fablepowers skills and agent bodies name actions ("dispatch the implementer seat", "ask the user a two-option question", "track tasks"). On OpenCode those actions resolve to the tools, agents and mechanisms below. Tested with OpenCode 2.0.29. The Claude Code mapping is the sibling file `claude-code.md`, the Codex one `codex.md`; where this file says "as on Claude Code", the details are there.
+The fablepowers skills and agent bodies name actions ("dispatch the implementer seat", "ask the user a two-option question", "track tasks"). On OpenCode those actions resolve to the tools, agents and mechanisms below. Tested with OpenCode 2.0.29. The Claude Code mapping is the sibling file `claude-code.md`, the Codex one `codex.md`, the Pi one `pi.md`; where this file says "as on Claude Code", the details are there.
 
 fablepowers runs on OpenCode as a plugin, `opencode/index.js`, loaded by OpenCode's server. The plugin is an adapter: every approval-gate decision and marker write happens in `hooks/approval_gate.py`, and the seat table is parsed by `hooks/session-start`, the same files Claude Code and Codex run. At the start of each root session the plugin injects the bootstrap: a short preamble, the **seat table** and the workflow map. Read this file before invoking another fablepowers skill, dispatching a seat or asking for design approval.
 

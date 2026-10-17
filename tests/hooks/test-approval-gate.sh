@@ -2586,6 +2586,55 @@ check "Pi: the deny names the repo-relative path" bash -c '[[ "$1" == *"editing 
 check "Pi: a sibling '${R}x/src/app.py' still outside, allowed" test "$(piw "$R" "${R}x/src/app.py")" == none
 check "Pi: the plugin root still denied under a case-variant toplevel" test "$(piw "$R" "$(dirname "$R")/CI-PI/plug/x.js" write "$R/plug")" == deny
 
+# --- 45. Pending creation through case variants (all harnesses) --------------------------
+# A spec created through a case or NTFS-name variant of <toplevel>/docs/specs/<name>.md
+# (the toplevel, docs/specs or the name) still goes pending: on a case-insensitive
+# filesystem it is that spec. Over-marking on a case-sensitive one is the safe side.
+# The spec path is recorded under the toplevel (in_repo), the key keeps its case.
+
+echo "45. Case variants still create pending (all harnesses)"
+
+# spec_variants <repo>: "<abs path>|<key>|<recorded spec>" per variant.
+spec_variants() {
+  local base; base="$(basename "$1")"
+  printf '%s\n' \
+    "$(dirname "$1")/${base^^}/docs/specs/v1.md|v1|docs/specs/v1.md" \
+    "$1./docs/specs/v2.md|v2|docs/specs/v2.md" \
+    "$1/DOCS/Specs/v3.md|v3|DOCS/Specs/v3.md" \
+    "$1/docs/specs./v4.md|v4|docs/specs./v4.md" \
+    "$1/docs/specs/V5.MD|V5|docs/specs/V5.MD" \
+    "$1/docs/specs/v6.md.|v6|docs/specs/v6.md." \
+    "$1/docs/specs/v7.md:s|v7|docs/specs/v7.md:s" \
+    "$1/docs/specs/v8:x.md|v8:x|docs/specs/v8:x.md"
+}
+# not_spec_variants <repo>: paths that must not go pending, "<abs path>|<key>".
+not_spec_variants() {
+  printf '%s\n' "$1/docs/specs/sub/n1.md|n1" "${1}x/docs/specs/n2.md|n2" \
+    "$1/docs/specs/n3.txt|n3" "$1/docs/specs/n4.mdx|n4" "$1/DOCS/n5.md|n5" "$1/docs/specs/.md.|"
+}
+# spec_of <repo> <key>: the spec recorded in the key's pending marker.
+spec_of() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["spec"])' "$1/.fablepowers/$2/pending" 2>/dev/null; }
+
+# mkpend_<harness> <repo> <abs path>: that harness's create hook for the path.
+mkpend_claude() { run_gate PostToolUse Write post-write-create CWD="$1" FILE="$2"; }
+mkpend_codex() { cpost "$1" "$(patch_of "*** Add File: $2"$'\n+# spec')" "$(resp_of "A $2")"; }
+mkpend_opencode() { oc after-write-create CWD="$1" FILE="$2" TARGET="$2" PLUGIN="$OCPLUG"; }
+mkpend_pi() { pig tool_result-write-create CWD="$1" FILE="$2" PLUGIN="$PIPLUG"; }
+
+for H in claude codex opencode pi; do
+  R="$TEST_ROOT/cv-$H"; new_repo "$R"
+  while IFS='|' read -r P K S; do
+    "mkpend_$H" "$R" "$P"
+    check "$H: '${P#"$TEST_ROOT"/}' -> key '$K' pending" test -f "$R/.fablepowers/$K/pending"
+    check "$H:   recorded spec '$S'" test "$(spec_of "$R" "$K")" == "$S"
+  done < <(spec_variants "$R")
+  while IFS='|' read -r P K; do
+    "mkpend_$H" "$R" "$P"
+    check "$H: '${P#"$TEST_ROOT"/}' not pending" test ! -e "$R/.fablepowers/${K:-.md.}"
+  done < <(not_spec_variants "$R")
+  check "$H: exactly the 8 variant keys pending" test "$(cd "$R/.fablepowers" && ls -d */ | wc -l)" -eq 8
+done
+
 echo
 if [[ "$FAILURES" -eq 0 ]]; then
   echo "All approval-gate tests passed."

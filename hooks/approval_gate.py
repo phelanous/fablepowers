@@ -489,11 +489,24 @@ def pre_tool_use(top, payload, cwd):
 def mark_pending(top, real):
     """Write the pending marker for the spec at realpath `real` when it is a
     docs/specs/<name>.md whose key has no pending or valid approved marker yet.
-    Returns (spec, key) when it wrote one, else None."""
+    Returns (spec, key) when it wrote one, else None.
+
+    The directory is compared per component as win_parts() normalises it, so a
+    spec created through a case or NTFS-name variant of the toplevel or of
+    docs/specs (which a case-insensitive filesystem resolves to docs/specs itself)
+    still goes pending; on a case-sensitive filesystem that over-marks, the safe
+    side. The name counts as `.md` case-insensitively, as written or with its
+    NTFS stream suffix and trailing dots/spaces dropped; the key keeps its case.
+    The spec path is recorded as written, under top when in_repo() places it."""
     spec_dir = os.path.realpath(os.path.join(top, SPEC_DIR))
-    if os.path.dirname(real) != spec_dir or not real.endswith(".md"):
+    if win_parts(os.path.dirname(real)) != win_parts(spec_dir):
         return None
-    key = os.path.basename(real)[:-3]
+    name = os.path.basename(real)
+    key = None
+    for cand in (name, name.split(":", 1)[0].rstrip(". ")):
+        if cand[-3:].casefold() == ".md":
+            key = cand[:-3]
+            break
     if not key or key.startswith("."):
         return None
     kd = os.path.join(fp_dir(top), key)
@@ -504,7 +517,7 @@ def mark_pending(top, real):
             log(top, "invalid %s marker for `%s` ignored on spec create" % (m, key))
     ensure_fp_dir(top)
     os.makedirs(kd, exist_ok=True)
-    spec = os.path.relpath(real, top).replace(os.sep, "/")
+    spec = os.path.relpath(in_repo(real, top) or real, top).replace(os.sep, "/")
     write_json(os.path.join(kd, "pending"), {"spec": spec, "created": now()})
     return spec, key
 

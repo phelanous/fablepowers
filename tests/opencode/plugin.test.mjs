@@ -813,7 +813,7 @@ test('npm pack --dry-run lists exactly the intended files', { skip: spawnSync('n
   const r = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: ROOT, encoding: 'utf8', env: { ...BASE_ENV, npm_config_loglevel: 'silent' } });
   assert.equal(r.status, 0, r.stderr);
   const got = JSON.parse(r.stdout)[0].files.map((f) => f.path).sort();
-  const git = spawnSync('git', ['ls-files', '--', 'agents', 'skills', 'opencode'], { cwd: ROOT, encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
+  const git = spawnSync('git', ['ls-files', '--', 'agents', 'skills', 'opencode', 'pi'], { cwd: ROOT, encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
   const want = [...git, 'opencode/index.js', 'index.js', 'package.json', 'README.md', 'LICENSE', 'NOTICE', 'hooks/session-start', 'hooks/approval_gate.py'].sort();
   assert.deepEqual(got, [...new Set(want)].sort());
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));

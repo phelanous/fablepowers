@@ -25,7 +25,7 @@ These rules come from the spec's binding resolutions and the plan-review resolut
   - Pi: the sum of `usage.output`.
 - **subs:** every descendant, rolled up into the root. Depth 2 is rolled up too.
 - **spawn model:**
-  - Codex: the requested id.
+  - Codex: the requested id; a spawn of an `fp-`/`fablepowers-` seat agent type (implementer, strict-implementer, reviewer) with no model: `seat`.
   - OpenCode and Pi seats (`fablepowers-<seat>` agents, `fablepowers_dispatch`): `seat`, unless the call passes a model.
   - Pi `subagent` calls (the separate pi-subagents extension): the model the call passes, else `None`.
   - Anything else with no model: `None`, printed as `(unset)`.
@@ -101,7 +101,7 @@ Every real rollout includes the following:
 
 | root (id prefix) | source | date | proj | main model | usr | out | cost | mEdit | mShellW | skills | spawns (role@model) | gap | subs (id: model, out, edits) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 01a13e08-67db | real, v2 | 2026-10-15 | codex-repo | gpt-6-luna | 1 | 264 | None | 0 | 0 | — | 1 × implementer@None, printed `implementerx1` and `(unset)` in the summary (ruling: `agent_type` fp-implementer maps to implementer before the task name `tooling_spike`) | - | 75cd: gpt-5.6-terra, 344, 0; **85ec (depth 2, under 75cd)**: gpt-5.6-terra, 19, 0 → subOut 363 |
+| 01a13e08-67db | real, v2 | 2026-10-15 | codex-repo | gpt-6-luna | 1 | 264 | None | 0 | 0 | — | 1 × implementer@seat, printed `implementer@seatx1` and `seat` in the summary (ruling: `agent_type` fp-implementer maps to implementer before the task name `tooling_spike`; no model passed, so the agent type's config pins it — its child ran gpt-5.6-terra, not the main gpt-6-luna) | - | 75cd: gpt-5.6-terra, 344, 0; **85ec (depth 2, under 75cd)**: gpt-5.6-terra, 19, 0 → subOut 363 |
 | 01a13e09-88c2 | real | 2026-10-15 | codex-repo | gpt-6-luna | 1 | 157 | None | 1 | 0 | — | — (`request_user_input` gives one `ask`) | - | — |
 | 01a1400a-c958 | real, v1 | 2026-10-15 | codex2-repo | gpt-5.6-luna | 1 | 960 | None | **1** (ruling: attempts; one `tools.apply_patch` call with no FileChange) | 0 | fp:workflow, fp:subagent-execution | implementer@gpt-5.6-luna, other@gpt-5.6-luna (from `CollabAgentToolCall`) | - | eaed: gpt-5.6-luna, 218, **1** (an apply_patch attempt with no FileChange); 0093: gpt-5.6-luna, 5, 0 → 223, sEdit 1 |
 | 01a1408c-3129 | real, v1 | 2026-10-15 | codex-port-t0-repo | gpt-5.6-luna | 1 | 339 | None | 1 | 0 | — | reviewer@gpt-5.6-luna (the child's first UserMessage is `fablepowers-seat: reviewer`) | - | 51ab: gpt-5.6-luna, 6, 0 |

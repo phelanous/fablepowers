@@ -341,8 +341,10 @@ def scan_codex(path):
                 args = args if isinstance(args, dict) else {}
                 if name in ("spawn_agent", "collaborationspawn_agent", "multi_agent_v1__spawn_agent"):
                     at, task = args.get("agent_type") or "", args.get("task_name") or ""
-                    r = (seat_role(at) if FP_AGENT.match(at) else None) or seat_role(task)
-                    win["spawns"].append(dict(model=args.get("model"), role=r, task=task,
+                    seat = seat_role(at) if FP_AGENT.match(at) else None
+                    r = seat or seat_role(task)
+                    # A fablepowers agent type pins its model in its config, like a seat elsewhere.
+                    win["spawns"].append(dict(model=args.get("model") or ("seat" if seat else None), role=r, task=task,
                                               msg=args.get("message") or args.get("prompt") or ""))
                 elif name == "apply_patch":
                     win["patches"].append((PATCH_FILE.findall(args.get("input") or "") or [""])[0])
@@ -404,10 +406,11 @@ def read_codex(a):
                 files.append(os.path.join(d, n))
             elif n.endswith(".jsonl.zst"):
                 zst += 1
-    meta, other = {}, 0
+    meta, other, unknown = {}, 0, 0
     for f in sorted(files):
         m = cx_meta(f)
         if not m or not m.get("id"):
+            unknown += 1
             continue
         par = cx_parent(m)
         if par is False:
@@ -472,6 +475,8 @@ def read_codex(a):
         notes.append(f"{zst} .jsonl.zst rollout(s) skipped (zstd is not in the stdlib)")
     if other:
         notes.append(f"{other} non-spawn subagent rollout(s) skipped")
+    if unknown:
+        notes.append(f"{unknown} rollout(s) skipped: no session_meta")
     return rows, "; ".join(notes) or None
 
 
@@ -511,9 +516,10 @@ def scan_opencode(con, sid):
     and spawns count attempts (every tool call, errored ones too). A `subagent`
     call carrying `input.sessionID` resumes an existing child: not a new spawn."""
     s = dict(models=collections.Counter(), out=0, cost=0.0, user_turns=0, skills=[], edits=0, bash_writes=0,
-             seq=[], spawns=[])
+             seq=[], spawns=[], messages=0)
     costs = []
     for typ, data in con.execute("SELECT type, data FROM session_message WHERE session_id = ? ORDER BY seq", (sid,)):
+        s["messages"] += 1
         d = oc_json(data)
         if typ == "user":  # `synthetic` messages (gate notices, reminders) are not user turns
             t = d.get("text") or ""
@@ -554,17 +560,26 @@ def read_opencode(a):
     Descendants at any depth roll up into their root's subs; children whose root
     is missing go to one `(orphan)` record per missing parent. Tokens and cost
     come from `session_message`, not the `session_v2` totals (which also count
-    side calls such as title generation)."""
+    side calls such as title generation). A root with no messages and no
+    descendants is dropped, as the Claude reader drops a transcript with no timestamp. An SQLite error at any
+    point (a locked or corrupt db, an unknown schema) is a note, never a crash."""
     path = a.opencode_db
     if not os.path.isfile(path):
         return [], f"no opencode logs at {path}"
+    con = None
     try:
         con, note = oc_open(path)
-        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        return oc_records(con, path, a.since, note)
     except sqlite3.Error as e:
         return [], f"cannot read {path} ({e})"
+    finally:
+        if con is not None:
+            con.close()
+
+
+def oc_records(con, path, since, note):
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     if "session_v2" not in tables or "session_message" not in tables:
-        con.close()
         return [], f"no session_v2 table in {path} (not an OpenCode 2.x db)"
     sess = {}
     for sid, par, directory, created in con.execute(
@@ -596,21 +611,22 @@ def read_opencode(a):
 
     rows = []
     for sid, x in sess.items():
-        if x["par"] is not None or (a.since and x["ts"] < a.since):
+        if x["par"] is not None or (since and x["ts"] < since):
             continue
         s = scan_opencode(con, sid)
+        if not s["messages"] and not groups.get(sid):
+            continue
         rows.append(dict(harness="oc", ts=x["ts"], proj=x["proj"], models=s["models"], user_turns=s["user_turns"],
                          out=s["out"], cost=s["cost"], skills=s["skills"], spawns=s["spawns"], edits=s["edits"],
                          bash_writes=s["bash_writes"], seq=s["seq"], subs=subs_of(groups.get(sid, []))))
     for key in (k for k in groups if isinstance(k, tuple)):
         first = sess[groups[key][0]]
-        if a.since and first["ts"] < a.since:
+        if since and first["ts"] < since:
             continue
         proj = "(orphan) " + first["proj"]
         rows.append(dict(harness="oc", ts=first["ts"], proj=proj if len(proj) <= 34 else proj[:32] + "..",
                          models=collections.Counter(), user_turns=0, out=0, cost=0.0, skills=[], spawns=[], edits=0,
                          bash_writes=0, seq=[], subs=subs_of(groups[key])))
-    con.close()
     return rows, note
 
 
@@ -658,11 +674,17 @@ def pi_spawn(name, args):
     return dict(role=seat_role(agent) or role(task), model=args.get("model") or None)
 
 
-def scan_pi(path):
+def pi_entry_ids(path):
+    """The entry ids in a Pi session file."""
+    return {o.get("id") for o in recs(path) if isinstance(o, dict) and o.get("id")} if os.path.isfile(path) else set()
+
+
+def scan_pi(path, skip=frozenset()):
     """One Pi session file (every entry, abandoned branches included). Out = Σ
     usage.output, cost = Σ usage.cost.total (fsum); edits and spawns count attempts.
     Approval results become `approved` events; `fablepowers-child` entries map
-    child session ids to this session."""
+    child session ids to this session. Entries whose id is in `skip` (copied
+    from the session this one was forked from) are not counted."""
     s = dict(models=collections.Counter(), out=0, cost=0.0, user_turns=0, skills=[], edits=0, bash_writes=0,
              seq=[], spawns=[], children=[])
     costs = []
@@ -672,6 +694,8 @@ def scan_pi(path):
             s["skills"].append(name); s["seq"].append(("skill", bare_skill(name)))
 
     for o in recs(path):
+        if skip and o.get("id") in skip:
+            continue
         t = o.get("type")
         if t == "custom" and o.get("customType") == "fablepowers-child":
             d = o.get("data") if isinstance(o.get("data"), dict) else {}
@@ -734,7 +758,13 @@ def read_pi(a):
     directory (`fablepowers-children/<parent-id>/`, as `pi/fablepowers.ts`
     places it, which also covers killed parents that wrote no entry).
     Descendants at any depth roll up into the root's subs; children whose root
-    is missing go to one `(orphan)` record per missing parent."""
+    is missing go to one `(orphan)` record per missing parent.
+
+    A fork or clone (`/fork`, `/clone`) is a new session whose header names its
+    source file in `parentSession` and which repeats the source's entries with
+    their entry ids. Those copies belong to the source: the fork counts only the
+    entries it added, so a fork tree counts each entry once. A fork whose source
+    file is not found (matched by path, else by file name) counts every entry."""
     base = a.pi_sessions
     if not os.path.isdir(base):
         return [], f"no pi logs at {base}"
@@ -749,9 +779,14 @@ def read_pi(a):
                 continue
             up = os.path.dirname(f)
             par = os.path.basename(up) if os.path.basename(os.path.dirname(up)) == CHILDREN_DIR else None
-            sess[h["id"]] = dict(path=f, ts=(h.get("timestamp") or "")[:10], proj=path_project(h.get("cwd")), par=par)
+            src = h.get("parentSession") if isinstance(h.get("parentSession"), str) else None
+            sess[h["id"]] = dict(path=f, ts=(h.get("timestamp") or "")[:10], proj=path_project(h.get("cwd")), par=par,
+                                 src=src)
+    by_path = {os.path.abspath(x["path"]): x["path"] for x in sess.values()}
+    by_name = {os.path.basename(x["path"]): x["path"] for x in sess.values()}
     for sid, x in sess.items():
-        x["scan"] = scan_pi(x["path"])
+        src = x["src"] and (by_path.get(os.path.abspath(x["src"])) or by_name.get(os.path.basename(x["src"])))
+        x["scan"] = scan_pi(x["path"], pi_entry_ids(src) if src and src != x["path"] else frozenset())
     for sid, x in sess.items():  # the parent's entry wins over the directory
         for c in x["scan"]["children"]:
             if c in sess and c != sid:
@@ -873,12 +908,24 @@ def summary_line(label, rows):
             f"  spend {spend}  spawns {dict(spawns)}")
 
 
+def model_cell(m):
+    """A model id for a table cell: no `claude-` and no provider prefix
+    (`deepseek/deepseek-v4-flash` -> `deepseek-v4-flash`)."""
+    return short(m).rsplit("/", 1)[-1]
+
+
+def fit(text, width):
+    """Pad to `width`, or cut to it with a trailing `..`."""
+    return f"{text:{width}}" if len(text) <= width else text[:width - 2] + ".."
+
+
 def print_multi(rows, notes, selected):
     """One date-sorted table with a harness column, a summary line per harness, an
     `all` line, then the legend. Costs print with 2 decimals (`-` = not recorded),
-    and are summed with fsum so the totals do not depend on file order."""
+    and are summed with fsum so the totals do not depend on file order. Model
+    cells drop provider prefixes; the `main` cell is 18 wide, longer ids are cut."""
     rows = sorted(rows, key=lambda s: s["ts"])
-    print(f"{'date':10} {'h':2} {'project':34} {'main':10} {'usr':>3} {'mainOut':>9} {'subOut':>8} {'sub%':>4} {'mEdit':>5} {'mBashW':>6} {'sEdit':>5} {'$main':>6} {'$sub':>5} {'apprv':>5}  sub-models | skills | spawns")
+    print(f"{'date':10} {'h':2} {'project':34} {'main':18} {'usr':>3} {'mainOut':>9} {'subOut':>8} {'sub%':>4} {'mEdit':>5} {'mBashW':>6} {'sEdit':>5} {'$main':>9} {'$sub':>8} {'apprv':>5}  sub-models | skills | spawns")
     sub_out_by_model = collections.Counter()
     for s in rows:
         so = sum(x["out"] for x in s["subs"]); se = sum(x["edits"] for x in s["subs"])
@@ -887,12 +934,11 @@ def print_multi(rows, notes, selected):
             sm.update(x["models"])
             for k in x["models"]: sub_out_by_model[k] += x["out"]
         pct = f"{so / (so + s['out']):.0%}" if so + s["out"] else "-"
-        # Provider prefixes (opencode/…, deepseek/…) would push the 10-wide column out.
-        mm = short(s["models"].most_common(1)[0][0]).rsplit("/", 1)[-1] if s["models"] else "?"
+        mm = fit(model_cell(s["models"].most_common(1)[0][0]) if s["models"] else "?", 18)
         skills = ",".join(dict.fromkeys(k.replace("superpowers:", "sp:").replace("fablepowers:", "fp:") for k in s["skills"]))
         spawns = " ".join(f"{k}x{v}" for k, v in collections.Counter(f"{x['role']}" + (f"@{x['model']}" if x["model"] else "") for x in s["spawns"]).items())
         ag = approval_gap(s["seq"]); ag = "-" if ag is None else str(ag)
-        print(f"{s['ts']:10} {s['harness']:2} {s['proj']:34} {mm:10} {s['user_turns']:3d} {s['out']:9,d} {so:8,d} {pct:>4} {s['edits']:5d} {s['bash_writes']:6d} {se:5d} {money(s['cost'], 6)} {money(sub_cost(s), 5)} {ag:>5}  {' '.join(f'{short(k)}:{v}' for k, v in sm.most_common(2)):20} | {skills} | {spawns}")
+        print(f"{s['ts']:10} {s['harness']:2} {s['proj']:34} {mm} {s['user_turns']:3d} {s['out']:9,d} {so:8,d} {pct:>4} {s['edits']:5d} {s['bash_writes']:6d} {se:5d} {money(s['cost'], 9)} {money(sub_cost(s), 8)} {ag:>5}  {' '.join(f'{model_cell(k)}:{v}' for k, v in sm.most_common(2)):20} | {skills} | {spawns}")
 
     print()
     for name in selected:

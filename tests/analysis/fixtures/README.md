@@ -91,6 +91,8 @@ Summary lines:
 
 The `YYYY/MM/DD` directories use **local** dates. 67db and 88c2 sit under `2026/10/14` but start at UTC 2026-10-15, so `--since 2026-10-15` must include them.
 
+Edits and spawns count **attempts** (orchestrator ruling): every `tools.apply_patch(` / top-level `apply_patch` call and every spawn call counts, whether or not it ran. A FileChange item supplies the files of the call that ran (one edit per file); a CollabAgentToolCall supplies the requested model and the child of a v1 spawn. The orphan record's project prints as `(orphan) <proj>`.
+
 Every real rollout includes the following:
 
 - **A catalogue stub.** `world_state.host_skills` names `skills/design-spec/SKILL.md` without loading it. It must not count as a skill or as a gap start.
@@ -98,14 +100,14 @@ Every real rollout includes the following:
 
 | root (id prefix) | source | date | proj | main model | usr | out | cost | mEdit | mShellW | skills | spawns (role@model) | gap | subs (id: model, out, edits) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 01a13e08-67db | real, v2 | 2026-10-15 | codex-repo | gpt-6-luna | 1 | 264 | None | 0 | 0 | — | 1 × other@None, printed `(unset)` (open: task_name `tooling_spike`; `agent_type` fp-implementer gives implementer if Task 3 maps agent types) | - | 75cd: gpt-5.6-terra, 344, 0; **85ec (depth 2, under 75cd)**: gpt-5.6-terra, 19, 0 → subOut 363 |
+| 01a13e08-67db | real, v2 | 2026-10-15 | codex-repo | gpt-6-luna | 1 | 264 | None | 0 | 0 | — | 1 × implementer@None, printed `implementerx1` and `(unset)` in the summary (ruling: `agent_type` fp-implementer maps to implementer before the task name `tooling_spike`) | - | 75cd: gpt-5.6-terra, 344, 0; **85ec (depth 2, under 75cd)**: gpt-5.6-terra, 19, 0 → subOut 363 |
 | 01a13e09-88c2 | real | 2026-10-15 | codex-repo | gpt-6-luna | 1 | 157 | None | 1 | 0 | — | — (`request_user_input` gives one `ask`) | - | — |
-| 01a1400a-c958 | real, v1 | 2026-10-15 | codex2-repo | gpt-5.6-luna | 1 | 960 | None | 0 | 0 | fp:workflow, fp:subagent-execution | implementer@gpt-5.6-luna, other@gpt-5.6-luna (from `CollabAgentToolCall`) | - | eaed: gpt-5.6-luna, 218, 0; 0093: gpt-5.6-luna, 5, 0 → 223 |
+| 01a1400a-c958 | real, v1 | 2026-10-15 | codex2-repo | gpt-5.6-luna | 1 | 960 | None | **1** (ruling: attempts; one `tools.apply_patch` call with no FileChange) | 0 | fp:workflow, fp:subagent-execution | implementer@gpt-5.6-luna, other@gpt-5.6-luna (from `CollabAgentToolCall`) | - | eaed: gpt-5.6-luna, 218, **1** (an apply_patch attempt with no FileChange); 0093: gpt-5.6-luna, 5, 0 → 223, sEdit 1 |
 | 01a1408c-3129 | real, v1 | 2026-10-15 | codex-port-t0-repo | gpt-5.6-luna | 1 | 339 | None | 1 | 0 | — | reviewer@gpt-5.6-luna (the child's first UserMessage is `fablepowers-seat: reviewer`) | - | 51ab: gpt-5.6-luna, 6, 0 |
 | 01a1408d-0374 | real, **compaction** | 2026-10-15 | codex-port-t0-repo | gpt-6-luna (5 turn_contexts) | 3 | **103**; the last `token_count` total is 27, which is wrong | None | 0 | 0 | fp:approve (`$skill` selected twice) | — | - | — |
 | 01a14920-3524 | real, v2 | 2026-10-17 | codex-r1 | gpt-6-luna | 4 | 4,026 | None | 3 | 0 | fp:approve, fp:implementation-plan, fp:subagent-execution, fp:behavioral-testing, fp:integration-review | 5 × gpt-6-luna: implementer ×3, reviewer ×2 (task names `fablepowers_<seat>_*`; implementer_t1 has no child rollout) | - | 9bfe 6; 0b6c 1,143; 70f4 835, 1 edit; 0e87 142 (all gpt-6-luna) → subOut 2,126, sEdit 1 |
 | 01a1fe00-…01 | synthetic | 2026-10-18 | cx-synth | gpt-6-sol | 5 | 600 | None | 2 | 1 | fp:design-spec | reviewer@gpt-6-luna | **3** | …02: gpt-6-luna, 450 (records 400 + 50), 1 edit |
-| `(orphan)` | synthetic …03 | 2026-10-18 | cx-synth | — | — | — | — | — | — | — | — | - | …03: parent …ff is missing; gpt-6-luna, 70 |
+| `(orphan)` | synthetic …03 | 2026-10-18 | `(orphan) cx-synth` | — | — | — | — | — | — | — | — | - | …03: parent …ff is missing; gpt-6-luna, 70 |
 
 Synthetic cases:
 

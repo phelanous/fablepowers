@@ -78,6 +78,9 @@ LEGEND = ("approval-gap column: user turns between design-spec and first impleme
           "0 with an AskUserQuestion approval still counts as approved — check the ASK text)")
 HEADER_TAIL = ("project                            main       usr   mainOut   subOut sub% mEdit mBashW sEdit  $main  $sub apprv"
                "  sub-models | skills | spawns")
+# The multi-harness layout: an 18-wide main model and cost columns sized for 2 decimals.
+HEADER_MULTI = ("date       h  project                            main               usr   mainOut   subOut sub% mEdit mBashW sEdit"
+                "     $main     $sub apprv  sub-models | skills | spawns")
 
 # --- byte identity, --harness claude -------------------------------------------------
 out = identity("claude fixtures", "--projects-dir", fixtures)
@@ -105,14 +108,14 @@ else:
     print("skip real ~/.claude/projects snapshot (set ANALYZE_REAL=1; needs ~/.claude/projects)")
 
 # --- multi-harness layout ---------------------------------------------------------------
-ROW_B2 = ("2026-10-03 cc fixture-alpha                      gpt-unknown   1       700        0   0%     0      0     0"
-          "   0.00  0.00     0                       | design-spec,fp:implementation-plan | ")
-ROW_A1 = ("2026-10-12 cc fixture-alpha                      sonnet-5     2     2,000        0   0%     0      0     0"
-          "   0.12  0.00     -                       | fp:verify-done,sp:brainstorming | ")
+ROW_B2 = ("2026-10-03 cc fixture-alpha                      gpt-unknown          1       700        0   0%     0      0     0"
+          "      0.00     0.00     0                       | design-spec,fp:implementation-plan | ")
+ROW_A1 = ("2026-10-12 cc fixture-alpha                      sonnet-5             2     2,000        0   0%     0      0     0"
+          "      0.12     0.00     -                       | fp:verify-done,sp:brainstorming | ")
 # c3's two printed sub-models come from a three-way tie, so they follow the
 # filesystem's glob order (see the fixture README); everything else is pinned.
-ROW_C3 = re.compile(re.escape("2026-10-07 cc fixture-beta/feat-x                opus-5       4    57,000    9,000  14%     2      1     3"
-                              "   4.25  2.10     2  ") + r"\S+:1 \S+:1"
+ROW_C3 = re.compile(re.escape("2026-10-07 cc fixture-beta/feat-x                opus-5               4    57,000    9,000  14%     2      1     3"
+                              "      4.25     2.10     2  ") + r"\S+:1 \S+:1"
                     + re.escape(" | fp:design-spec | implementer@sonnetx1 reviewerx1 explorerx1") + "$")
 # Summary: main 59,700 sub 9,000; spend 4.37 + 2.095 = 6.465, which is the double
 # 6.4649999... and prints as 6.46.
@@ -124,7 +127,7 @@ for label, extra in (("default harness", []), ("--harness all", ["--harness", "a
     r = run(new, "--projects-dir", fixtures, *nowhere, *extra)
     out = r.stdout.decode(); lines = out.split("\n")
     check(f"{label}: exit 0", r.returncode == 0 and r.stderr == b"", r.stderr.decode())
-    check(f"{label}: header has the h column after date", lines[0] == f"date       h  {HEADER_TAIL}", lines[0])
+    check(f"{label}: header has the h column after date", lines[0] == HEADER_MULTI, lines[0])
     check(f"{label}: rows sorted by date", lines[1] == ROW_B2 and ROW_C3.match(lines[2]) is not None and lines[3] == ROW_A1,
           "\n".join(lines[1:4]))
     check(f"{label}: blank line, then the cc summary line", lines[4] == "" and lines[5] == CC, "\n".join(lines[4:6]))
@@ -175,6 +178,19 @@ check("cost None: spend n/a for cx, $ for pi, all sums only recorded costs",
       and lines[6].startswith("all sessions 2 ") and " spend $3.35 " in lines[6], buf.getvalue())
 check("main model column drops the provider prefix", lines[1].split()[3] == "deepseek-v4-flash", buf.getvalue())
 
+# Widths: a model id longer than 18 is cut with `..`; a 5-digit cost keeps its 2 decimals in the column;
+# sub-model cells drop provider prefixes.
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    ad.print_multi([dict(rec("cc", "2026-10-13", 10291.234, [2.5], model="openrouter/some-very-long-model-id-x"),
+                         subs=[dict(models=collections.Counter({"qwen/qwen3.6-flash": 2}), out=50, cost=2.5, edits=0)])],
+                   {}, ["claude"])
+lines = buf.getvalue().split("\n")
+check("multi widths: long main id cut to 18, 5-digit cost aligned, sub-model prefix dropped",
+      lines[1] == "2026-10-13 cc p                                  some-very-long-m..   1       100       50  33%     0      0     0"
+                  "  10291.23     2.50     -  qwen3.6-flash:2      |  | "
+      and lines[1].index("10291.23") + 8 == HEADER_MULTI.index("$main") + 5, buf.getvalue())
+
 # --- Codex reader ---------------------------------------------------------------------------
 # Expected values: tests/analysis/fixtures/README.md (Codex table), hand-derived, with the
 # orchestrator rulings applied (agent_type -> role; edits/spawns count attempts).
@@ -194,8 +210,9 @@ def cx(ts, proj, models, usr, out, skills, spawns, edits, bw, seq, subs):
 
 L, T, S6 = "gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-luna"
 CX_EXPECTED = [
-    # 67db (v2): agent_type fp-implementer -> implementer, no model passed; depth-2 grandchild 85ec rolled up.
-    cx("2026-10-15", "codex-repo", {S6: 1}, 1, 264, [], [("implementer", None)], 0, 0, [("user", IMP)],
+    # 67db (v2): agent_type fp-implementer -> implementer; no model passed, so the seat's config pins it:
+    # `seat`, not (unset). Depth-2 grandchild 85ec rolled up.
+    cx("2026-10-15", "codex-repo", {S6: 1}, 1, 264, [], [("implementer", "seat")], 0, 0, [("user", IMP)],
        [sub(T, 344, 0), sub(T, 19, 0)]),
     # 88c2: one FileChange (code file), request_user_input -> ask.
     cx("2026-10-15", "codex-repo", {S6: 1}, 1, 157, [], [], 1, 0,
@@ -256,22 +273,22 @@ check("codex: approval gap 3 on the synthetic root, '-' elsewhere",
       [ad.approval_gap(r["seq"]) for r in got] == [None] * 6 + [3, None], [ad.approval_gap(r["seq"]) for r in got])
 
 CX_ROWS = [
-    "2026-10-15 cx codex-repo                         gpt-6-luna   1       264      363  58%     0      0     0      -     -     -  gpt-5.6-terra:2      |  | implementerx1",
-    "2026-10-15 cx codex-repo                         gpt-6-luna   1       157        0   0%     1      0     0      -     -     -                       |  | ",
-    "2026-10-15 cx codex2-repo                        gpt-5.6-luna   1       960      223  19%     1      0     1      -     -     -  gpt-5.6-luna:2       | fp:workflow,fp:subagent-execution | implementer@gpt-5.6-lunax1 other@gpt-5.6-lunax1",
-    "2026-10-15 cx codex-port-t0-repo                 gpt-5.6-luna   1       339        6   2%     1      0     0      -     -     -  gpt-5.6-luna:1       |  | reviewer@gpt-5.6-lunax1",
-    "2026-10-15 cx codex-port-t0-repo                 gpt-6-luna   3       103        0   0%     0      0     0      -     -     -                       | fp:approve | ",
-    "2026-10-17 cx codex-r1                           gpt-6-luna   4     4,026    2,126  35%     3      0     1      -     -     -  gpt-6-luna:4         | fp:approve,fp:implementation-plan,fp:subagent-execution,fp:behavioral-testing,fp:integration-review | implementer@gpt-6-lunax3 reviewer@gpt-6-lunax2",
-    "2026-10-18 cx cx-synth                           gpt-6-sol    5       600      450  43%     2      1     1      -     -     3  gpt-6-luna:1         | fp:design-spec | reviewer@gpt-6-lunax1",
-    "2026-10-18 cx (orphan) cx-synth                  ?            0         0       70 100%     0      0     0      -     -     -  gpt-6-luna:1         |  | ",
+    "2026-10-15 cx codex-repo                         gpt-6-luna           1       264      363  58%     0      0     0         -        -     -  gpt-5.6-terra:2      |  | implementer@seatx1",
+    "2026-10-15 cx codex-repo                         gpt-6-luna           1       157        0   0%     1      0     0         -        -     -                       |  | ",
+    "2026-10-15 cx codex2-repo                        gpt-5.6-luna         1       960      223  19%     1      0     1         -        -     -  gpt-5.6-luna:2       | fp:workflow,fp:subagent-execution | implementer@gpt-5.6-lunax1 other@gpt-5.6-lunax1",
+    "2026-10-15 cx codex-port-t0-repo                 gpt-5.6-luna         1       339        6   2%     1      0     0         -        -     -  gpt-5.6-luna:1       |  | reviewer@gpt-5.6-lunax1",
+    "2026-10-15 cx codex-port-t0-repo                 gpt-6-luna           3       103        0   0%     0      0     0         -        -     -                       | fp:approve | ",
+    "2026-10-17 cx codex-r1                           gpt-6-luna           4     4,026    2,126  35%     3      0     1         -        -     -  gpt-6-luna:4         | fp:approve,fp:implementation-plan,fp:subagent-execution,fp:behavioral-testing,fp:integration-review | implementer@gpt-6-lunax3 reviewer@gpt-6-lunax2",
+    "2026-10-18 cx cx-synth                           gpt-6-sol            5       600      450  43%     2      1     1         -        -     3  gpt-6-luna:1         | fp:design-spec | reviewer@gpt-6-lunax1",
+    "2026-10-18 cx (orphan) cx-synth                  ?                    0         0       70 100%     0      0     0         -        -     -  gpt-6-luna:1         |  | ",
 ]
 # main 264+157+960+339+103+4026+600 = 6,449; sub 363+223+6+2126+450+70 = 3,238 (33.4%);
-# edits 1+1+1+3+2 = 8, shell 1, sub 1+1+1 = 3; spawns (unset) 1, gpt-5.6-luna 3, gpt-6-luna 6.
+# edits 1+1+1+3+2 = 8, shell 1, sub 1+1+1 = 3; spawns seat 1, gpt-5.6-luna 3, gpt-6-luna 6.
 CX_SUM = ("sessions 8  out main 6,449 sub 3,238 (33.4% sub)  edits main 8 shell 1 sub 3  spend n/a  "
-          "spawns {'(unset)': 1, 'gpt-5.6-luna': 3, 'gpt-6-luna': 6}")
+          "spawns {'seat': 1, 'gpt-5.6-luna': 3, 'gpt-6-luna': 6}")
 r = run(new, "--harness", "codex", "--codex-home", codex_home)
 lines = r.stdout.decode().split("\n")
-check("codex printed: header and exact rows", r.returncode == 0 and r.stderr == b"" and lines[0] == f"date       h  {HEADER_TAIL}"
+check("codex printed: header and exact rows", r.returncode == 0 and r.stderr == b"" and lines[0] == HEADER_MULTI
       and lines[1:9] == CX_ROWS, "\n".join(f"got {a!r}\nexp {b!r}" for a, b in zip(lines[1:9], CX_ROWS) if a != b) + r.stderr.decode())
 check("codex printed: summary, note, all line", lines[9:13] == ["", "cx " + CX_SUM, "cx note: " + note, "all " + CX_SUM],
       "\n".join(lines[9:13]))
@@ -328,6 +345,12 @@ rollout(synth, "a", "r1", [
     ("response_item", {"type": "function_call", "name": "spawn_agent", "call_id": "c4",
                        "arguments": json.dumps({"agent_type": "fp-strict-implementer", "task_name": "gone", "model": "m-d",
                                                 "message": "review x"})}),
+    # v2 spawns naming a fablepowers seat agent type without a model: `seat` (the agent type's config pins it);
+    # an fp- agent type that is not a seat stays unset.
+    ("response_item", {"type": "function_call", "name": "spawn_agent", "call_id": "c5",
+                       "arguments": json.dumps({"agent_type": "fablepowers-reviewer", "task_name": "gone2", "message": "x"})}),
+    ("response_item", {"type": "function_call", "name": "spawn_agent", "call_id": "c6",
+                       "arguments": json.dumps({"agent_type": "fp-explorer", "task_name": "gone3", "message": "implement x"})}),
     # a shell read of a non-fablepowers SKILL.md is listed bare; `rg` over a SKILL.md is not a read.
     item({"type": "CommandExecution", "command": ["bash", "-lc", "rg foo /x/skills/other/SKILL.md; nl -ba /x/skills/mine/SKILL.md"]}),
     # no token_usage_record: fall back to the last token_count total.
@@ -340,12 +363,18 @@ rollout(synth, "b", "k1", [("turn_context", {"model": "m-a"}),
 rollout(synth, "c", "k2", [("turn_context", {"model": "m-c"})], src={"subagent": {"thread_spawn": {
     "parent_thread_id": "r1", "agent_path": "/root/probe", "agent_role": "fp-reviewer"}}})
 rollout(synth, "d", "k3", [], src={"subagent": "review"})
+# not recognisable as a rollout: a first line that is not session_meta, and an empty file.
+d_ = os.path.join(synth, "sessions", "2026", "10", "20")
+with open(os.path.join(d_, "rollout-e-old.jsonl"), "w") as fh:
+    fh.write(json.dumps({"type": "turn_context", "payload": {"model": "m-old"}}) + "\n")
+open(os.path.join(d_, "rollout-f-empty.jsonl"), "w").close()
 got, note = read_cx(synth)
 g = plain(got[0]) if got else {}
 check("codex synthetic: one root", len(got) == 1, [x["proj"] for x in got])
-check("codex synthetic: spawns -- JS attempt without a CollabAgentToolCall (literal model + seat), child seat line, child agent_role, agent_type",
+check("codex synthetic: spawns -- JS attempt without a CollabAgentToolCall (literal model + seat), child seat line, child agent_role, agent_type, seat agent_type without a model",
       g.get("spawns") == [dict(role="implementer", model="m-a"), dict(role="implementer", model="m-b"),
-                          dict(role="reviewer", model=None), dict(role="implementer", model="m-d")], g.get("spawns"))
+                          dict(role="reviewer", model=None), dict(role="implementer", model="m-d"),
+                          dict(role="reviewer", model="seat"), dict(role="implementer", model=None)], g.get("spawns"))
 check("codex synthetic: a top-level apply_patch attempt is an edit of the patched file; a FileChange counts its files",
       g.get("edits") == 3 and [x for x in g.get("seq", []) if x[0] == "edit"]
       == [("edit", "docs/plans/p.md"), ("edit", "docs/specs/s.md"), ("edit", "src/x.py")], g)
@@ -353,8 +382,8 @@ check("codex synthetic: only read verbs load a skill; non-fablepowers skills lis
 check("codex synthetic: out falls back to the last token_count total", g.get("out") == 9, g.get("out"))
 check("codex synthetic: worktree cwd -> repo/worktree", g.get("proj") == "repo/wt", g.get("proj"))
 check("codex synthetic: subs are k1 and k2", [s["models"] for s in g.get("subs", [])] == [{"m-a": 1}, {"m-c": 1}], g.get("subs"))
-check("codex synthetic: a non-spawn subagent rollout is skipped with a note",
-      note == "1 non-spawn subagent rollout(s) skipped", note)
+check("codex synthetic: a non-spawn subagent rollout and rollouts without session_meta are skipped with notes",
+      note == "1 non-spawn subagent rollout(s) skipped; 2 rollout(s) skipped: no session_meta", note)
 
 # --- OpenCode reader ------------------------------------------------------------------------
 # Expected values: tests/analysis/fixtures/README.md (OpenCode table), hand-derived from the
@@ -455,12 +484,12 @@ check("opencode: approval gap 2 on the synthetic root, '-' elsewhere",
       [ad.approval_gap(r["seq"]) for r in got] == [None] * 4 + [2, None], [ad.approval_gap(r["seq"]) for r in got])
 
 OC_ROWS = [
-    "2026-10-15 oc opencode-scratch-repo              big-pickle   3     1,923      249  11%     0      0     0   0.00  0.00     -  mimo-v2.6-flash-free:2 |  | reviewer@opencode/mimo-v2.6-flash-freex1 implementer@opencode/nemotron-3.5-lightning-freex1",
-    "2026-10-16 oc opencode-t0-repo                   big-pickle   2     1,160      131  10%     2      0     1   0.00  0.00     -  big-pickle:3 cat-jam-free:2 | fp-probe:base | otherx3",
-    "2026-10-16 oc opencode-t5-r1                     big-pickle   3     7,750    5,391  41%    11      0     5   0.00  0.00     -  cat-jam-free:10 deepseek-v4.1-flash-free:10 | fp:implementation-plan,fp:subagent-execution,fp:integration-review,fp:verify-done | implementer@seatx2 reviewer@seatx3",
-    "2026-10-16 oc opencode-t5-r2                     big-pickle   2    10,215    7,016  41%     7      0     7   0.00  0.00     -  deepseek-v4.1-flash-free:12 cat-jam-free:11 | fp:implementation-plan,fp:subagent-execution,fp:integration-review,fp:verify-done,fp:finishing-a-development-branch | implementer@seatx2 reviewer@seatx2",
-    "2026-10-18 oc oc-synth                           big-pickle   4       325      340  51%     2      1     3   2.50  2.75     2  big-pickle:2 deepseek-v4.1-flash-free:1 | fp:design-spec | implementer@seatx1 reviewerx1 reviewer@opencode/cat-jam-freex1",
-    "2026-10-18 oc (orphan) oc-synth                  ?            0         0       60 100%     0      0     0   0.00  1.00     -  cat-jam-free:1       |  | ",
+    "2026-10-15 oc opencode-scratch-repo              big-pickle           3     1,923      249  11%     0      0     0      0.00     0.00     -  mimo-v2.6-flash-free:2 |  | reviewer@opencode/mimo-v2.6-flash-freex1 implementer@opencode/nemotron-3.5-lightning-freex1",
+    "2026-10-16 oc opencode-t0-repo                   big-pickle           2     1,160      131  10%     2      0     1      0.00     0.00     -  big-pickle:3 cat-jam-free:2 | fp-probe:base | otherx3",
+    "2026-10-16 oc opencode-t5-r1                     big-pickle           3     7,750    5,391  41%    11      0     5      0.00     0.00     -  cat-jam-free:10 deepseek-v4.1-flash-free:10 | fp:implementation-plan,fp:subagent-execution,fp:integration-review,fp:verify-done | implementer@seatx2 reviewer@seatx3",
+    "2026-10-16 oc opencode-t5-r2                     big-pickle           2    10,215    7,016  41%     7      0     7      0.00     0.00     -  deepseek-v4.1-flash-free:12 cat-jam-free:11 | fp:implementation-plan,fp:subagent-execution,fp:integration-review,fp:verify-done,fp:finishing-a-development-branch | implementer@seatx2 reviewer@seatx2",
+    "2026-10-18 oc oc-synth                           big-pickle           4       325      340  51%     2      1     3      2.50     2.75     2  big-pickle:2 deepseek-v4.1-flash-free:1 | fp:design-spec | implementer@seatx1 reviewerx1 reviewer@opencode/cat-jam-freex1",
+    "2026-10-18 oc (orphan) oc-synth                  ?                    0         0       60 100%     0      0     0      0.00     1.00     -  cat-jam-free:1       |  | ",
 ]
 # main 1923+1160+7750+10215+325 = 21,373; sub 249+131+5391+7016+340+60 = 13,187 (38.2%); edits 2+11+7+2 = 22,
 # shell 1, sub 1+5+7+3 = 16; spend 2.50 + 2.75 + 1.00 = 6.25; spawns in first-seen order.
@@ -469,7 +498,7 @@ OC_SUM = ("sessions 6  out main 21,373 sub 13,187 (38.2% sub)  edits main 22 she
           "'seat': 10, 'opencode/cat-jam-free': 1}")
 r = run(new, "--harness", "opencode", "--opencode-db", oc_path)
 lines = r.stdout.decode().split("\n")
-check("opencode printed: header and exact rows", r.returncode == 0 and r.stderr == b"" and lines[0] == f"date       h  {HEADER_TAIL}"
+check("opencode printed: header and exact rows", r.returncode == 0 and r.stderr == b"" and lines[0] == HEADER_MULTI
       and lines[1:7] == OC_ROWS, "\n".join(f"got {a!r}\nexp {b!r}" for a, b in zip(lines[1:7], OC_ROWS) if a != b) + r.stderr.decode())
 check("opencode printed: summary and all line", lines[7:10] == ["", "oc " + OC_SUM, "all " + OC_SUM], "\n".join(lines[7:10]))
 
@@ -548,6 +577,45 @@ with open(junk, "w") as fh:
 got_j, note_j = read_oc(junk)
 check("opencode: a file that is not a db -> a note, no crash",
       got_j == [] and note_j.startswith(f"cannot read {junk} ("), note_j)
+
+# A root session with no messages is dropped (as the Claude reader drops a transcript with no
+# timestamp); a child with no messages is still a sub.
+nomsg = os.path.join(work, "oc-nomsg", "opencode.db")
+oc_db(nomsg)
+c_ = sqlite3.connect(nomsg)
+cols = "(id, project_id, parent_id, slug, directory, title, version, time_created, time_updated)"
+c_.execute(f"INSERT INTO session_v2 {cols} VALUES ('ses_empty_root', 'p', NULL, 's', '/fixture/oc-empty', 't', '2', 1792285200000, 1792285200000)")
+c_.execute(f"INSERT INTO session_v2 {cols} VALUES ('ses_empty_kid', 'p', 'ses_fixture000000ocRootGap0001', 's', '/fixture/oc-synth', 't', '2', 1792285390000, 1792285390000)")
+# a root with no messages whose child has some is kept, so the child's work is not lost
+c_.execute(f"INSERT INTO session_v2 {cols} VALUES ('ses_empty_root2', 'p', NULL, 's', '/fixture/oc-empty2', 't', '2', 1792371600000, 1792371600000)")
+c_.execute(f"INSERT INTO session_v2 {cols} VALUES ('ses_busy_kid', 'p', 'ses_empty_root2', 's', '/fixture/oc-empty2', 't', '2', 1792371660000, 1792371660000)")
+c_.execute("INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES "
+           "('msg_busy', 'ses_busy_kid', 'assistant', 1, 1792371670000, 1792371670000, "
+           "'{\"model\": {\"id\": \"m-x\"}, \"tokens\": {\"output\": 7}, \"cost\": 0.5}')")
+c_.commit(); c_.close()
+got_nm, _ = read_oc(nomsg)
+exp_nm = [dict(e) for e in OC_EXPECTED]
+exp_nm[4] = dict(exp_nm[4], subs=exp_nm[4]["subs"] + [osub({}, 0, 0.0, 0)])
+exp_nm.insert(5, oc("2026-10-19", "oc-empty2", {}, 0, 0, 0.0, [], [], 0, 0, [], [osub({"m-x": 1}, 7, 0.5, 0)]))
+check("opencode: a root with no messages is dropped unless it has descendants; a child with none is still a sub",
+      [plain(g) for g in got_nm] == exp_nm, [(g["ts"], g["proj"], len(g["subs"])) for g in got_nm])
+
+# An SQLite error after the open succeeds (schema drift here: session_message without `seq`; on a live
+# db, `database is locked`) is a note, never a crash.
+drift = os.path.join(work, "oc-drift", "opencode.db")
+os.makedirs(os.path.dirname(drift))
+c_ = sqlite3.connect(drift)
+c_.execute("CREATE TABLE session_v2 (id text, parent_id text, directory text, time_created integer)")
+c_.execute("CREATE TABLE session_message (session_id text, type text, data text)")
+c_.execute("INSERT INTO session_v2 VALUES ('s1', NULL, '/fixture/x', 1792285200000)")
+c_.commit(); c_.close()
+got_dr, note_dr = read_oc(drift)
+check("opencode: an SQLite error after the open -> no records and a note",
+      got_dr == [] and note_dr == f"cannot read {drift} (no such column: seq)", (got_dr, note_dr))
+r = run(new, "--harness", "opencode", "--opencode-db", drift)
+check("opencode: an SQLite error after the open does not crash the run",
+      r.returncode == 0 and r.stderr == b"" and f"oc note: cannot read {drift} (no such column: seq)" in r.stdout.decode(),
+      r.stdout.decode() + r.stderr.decode())
 
 # --- Pi reader ------------------------------------------------------------------------------
 # Expected values: tests/analysis/fixtures/README.md (Pi table), hand-derived, with the rulings
@@ -654,16 +722,16 @@ got_b, _ = read_p(both)
 same("pi both layouts", got_b, PI_DEFAULT[:1] + PI_FLAT + PI_DEFAULT[1:])
 
 PI_ROWS_FLAT = [
-    "2026-10-17 pi pi2-work                           deepseek-v4-flash   1         8        0   0%     0      0     0   0.00  0.00     -                       | fp:nsdemo | ",
-    "2026-10-17 pi pi-t0-work                         deepseek-v4-flash   1       462        0   0%     1      0     0   0.00  0.00     -                       |  | reviewer@seatx1 implementer@seatx1 reviewerx1 otherx2",
-    "2026-10-17 pi pi-t5-r1                           deepseek-v4-flash   3       925    2,754  75%     1      0     2   0.00  0.01     -  qwen/qwen3.6-flash:9 google/gemini-3.1-flash-lite:1 |  | implementer@seatx2 reviewer@seatx1",
-    "2026-10-17 pi pi-t5-r2                           deepseek-v4-flash   3       612        0   0%     1      0     0   0.00  0.00     -                       |  | ",
-    "2026-10-17 pi pi-t5-r1                           deepseek-v4-flash   2       295        0   0%     2      0     0   0.00  0.00     -                       |  | ",
-    "2026-10-17 pi pi-t5-r4                           deepseek-v4-flash   1       129      121  48%     0      0     0   0.00  0.00     -  qwen/qwen3.6-flash:1 |  | implementer@seatx1",
+    "2026-10-17 pi pi2-work                           deepseek-v4-flash    1         8        0   0%     0      0     0      0.00     0.00     -                       | fp:nsdemo | ",
+    "2026-10-17 pi pi-t0-work                         deepseek-v4-flash    1       462        0   0%     1      0     0      0.00     0.00     -                       |  | reviewer@seatx1 implementer@seatx1 reviewerx1 otherx2",
+    "2026-10-17 pi pi-t5-r1                           deepseek-v4-flash    3       925    2,754  75%     1      0     2      0.00     0.01     -  qwen3.6-flash:9 gemini-3.1-flash-lite:1 |  | implementer@seatx2 reviewer@seatx1",
+    "2026-10-17 pi pi-t5-r2                           deepseek-v4-flash    3       612        0   0%     1      0     0      0.00     0.00     -                       |  | ",
+    "2026-10-17 pi pi-t5-r1                           deepseek-v4-flash    2       295        0   0%     2      0     0      0.00     0.00     -                       |  | ",
+    "2026-10-17 pi pi-t5-r4                           deepseek-v4-flash    1       129      121  48%     0      0     0      0.00     0.00     -  qwen3.6-flash:1      |  | implementer@seatx1",
 ]
 PI_ROWS_DEFAULT = [
-    "2026-10-18 pi pi-synth                           deepseek-v4-flash   3       250      340  58%     2      1     2   2.25  3.25     3  qwen/qwen3.6-flash:1 google/gemini-3.1-flash-lite:1 | fp:design-spec,fp:verify-done | implementer@seatx1 reviewer@seatx1",
-    "2026-10-18 pi (orphan) pi-synth                  ?            0         0       60 100%     0      0     0   0.00  1.00     -  qwen/qwen3.6-flash:1 |  | ",
+    "2026-10-18 pi pi-synth                           deepseek-v4-flash    3       250      340  58%     2      1     2      2.25     3.25     3  qwen3.6-flash:1 gemini-3.1-flash-lite:1 | fp:design-spec,fp:verify-done | implementer@seatx1 reviewer@seatx1",
+    "2026-10-18 pi (orphan) pi-synth                  ?                    0         0       60 100%     0      0     0      0.00     1.00     -  qwen3.6-flash:1      |  | ",
 ]
 # flat: main 8+462+925+612+295+129 = 2,431; sub 2,754+121 = 2,875 (54.2%); edits 1+1+1+2 = 5; sub 2;
 # spend ≈ $0.02; spawns seat 2+3+1 = 6, (unset) 3. default: main 250, sub 340+60 = 400 (61.5%); spend
@@ -675,7 +743,7 @@ for label, d, rows_, sum_ in (("flat", flat, PI_ROWS_FLAT, PI_SUM_FLAT), ("defau
     lines = r.stdout.decode().split("\n")
     n = len(rows_)
     check(f"pi {label} printed: header and exact rows", r.returncode == 0 and r.stderr == b""
-          and lines[0] == f"date       h  {HEADER_TAIL}" and lines[1:n + 1] == rows_,
+          and lines[0] == HEADER_MULTI and lines[1:n + 1] == rows_,
           "\n".join(f"got {a!r}\nexp {b!r}" for a, b in zip(lines[1:n + 1], rows_) if a != b) + r.stderr.decode())
     check(f"pi {label} printed: summary and all line", lines[n + 1:n + 4] == ["", "pi " + sum_, "all " + sum_],
           "\n".join(lines[n + 1:n + 4]))
@@ -772,6 +840,50 @@ check("pi synthetic: subs in path order -- entry-linked child elsewhere, depth-2
       g.get("subs") == [psub({"m-c": 1}, 7, [0.5], 0), psub({"m-g": 1}, 2, [0.125], 1), psub({"m-d": 1}, 3, [0.25], 0)],
       g.get("subs"))
 check("pi synthetic: R2 has no subs (its directory child belongs to R1)", got[1]["subs"] == [] if len(got) > 1 else False)
+
+# Pi forks and clones (`/fork`, `/clone`: SessionManager.createBranchedSession / forkFrom) write a new
+# session file with a new header id, `parentSession` = the source file's path, and copies of the source's
+# entries with their entry ids. Copied entries belong to the source; the fork's row counts only its own.
+forks = os.path.join(work, "pi-forks")
+shutil.copytree(flat, forks)
+D69C = os.path.join(forks, "2026-10-17T09-03-12-541Z_01a14919-d69c-767d-a208-b1af3b3ae282.jsonl")
+P850C = os.path.join(forks, "2026-10-17T09-02-51-661Z_01a14919-850c-77d5-8e65-641713cdb743.jsonl")
+
+
+def fork(src, name, sid, new_entries, ts="2026-10-19T10:00:00.000Z", parent=None):
+    with open(src) as fh:
+        lines = fh.read().splitlines()
+    with open(os.path.join(forks, name), "w") as fh:
+        fh.write(json.dumps({"type": "session", "version": 3, "id": sid, "timestamp": ts, "cwd": "/fixture/pi-fork",
+                             "parentSession": parent or src}) + "\n")
+        for l in lines[1:]:
+            fh.write(l + "\n")
+        for e in new_entries:
+            fh.write(json.dumps(e) + "\n")
+
+
+fork(D69C, "2026-10-19T10-00-00-000Z_fork-1.jsonl", "FORK-1",
+     [dict(umsg("go on"), id="new00001"), dict(amsg(("edit", {"path": "/fixture/pi-fork/f9.py"}), out=5, cost=0.5), id="new00002")])
+# a clone of the fork (fork of a fork): its parent file is the fork; the parent path is given relative
+# to another directory, so the reader matches it by file name.
+fork(os.path.join(forks, "2026-10-19T10-00-00-000Z_fork-1.jsonl"), "2026-10-19T11-00-00-000Z_fork-2.jsonl", "FORK-2",
+     [dict(amsg(out=3, cost=0.25), id="new00003")], ts="2026-10-19T11:00:00.000Z",
+     parent="/elsewhere/2026-10-19T10-00-00-000Z_fork-1.jsonl")
+# a clone of 850c copies its fablepowers-child entries: the children stay with 850c.
+fork(P850C, "2026-10-19T12-00-00-000Z_clone-3.jsonl", "CLONE-3", [], ts="2026-10-19T12:00:00.000Z")
+# a same-id entry in an unrelated session (no parentSession) is counted: dedup is per fork tree only.
+pi_session(os.path.join(forks, "2026-10-19T13-00-00-000Z_unrelated.jsonl"), "UNREL",
+           [dict(amsg(out=4, cost=0.125), id="dc1b57e8")], ts="2026-10-19T13:00:00.000Z", cwd="/fixture/pi-fork")
+got_f, note_f = read_p(forks)
+PI_FORKS = PI_FLAT + [
+    pi("2026-10-19", "pi-fork", {"m-main": 1}, 1, 5, [0.5], [], [], 1, 0,
+       [("user", "go on"), ("edit", "/fixture/pi-fork/f9.py")], []),
+    pi("2026-10-19", "pi-fork", {"m-main": 1}, 0, 3, [0.25], [], [], 0, 0, [], []),
+    pi("2026-10-19", "pi-fork", {}, 0, 0, [], [], [], 0, 0, [], []),
+    pi("2026-10-19", "pi-fork", {"m-main": 1}, 0, 4, [0.125], [], [], 0, 0, [], []),
+]
+same("pi forks: originals unchanged, each fork counts only its own entries", got_f, PI_FORKS)
+check("pi forks: no note", note_f is None, note_f)
 
 # approval_gap: an `approved` event counts as a user turn; nothing else new counts.
 check("approval_gap counts `approved` events like user turns",

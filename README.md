@@ -471,7 +471,14 @@ all sessions N  out main X sub Y (Z% sub)  edits main A shell B sub C  spend $S 
 
 A harness with no logs on this machine prints `<h> note: no <harness> logs at
 <path>` instead of a summary, never an error. Other notes: Codex `.jsonl.zst`
-rollouts are skipped (zstd is not in the stdlib) and counted in a note.
+rollouts (zstd is not in the stdlib) and rollouts whose first line is not a
+`session_meta` are skipped and counted in a note; an OpenCode db that SQLite
+cannot read (locked, corrupt, an unknown schema) gives a note. OpenCode root
+sessions with no messages are left out, as Claude transcripts with no timestamp
+are. A Pi `/fork` or `/clone` repeats its source's entries: they are counted
+once, in the source, and the fork's row shows only what it added. Model cells
+drop the provider prefix (`deepseek/deepseek-v4-flash` prints as
+`deepseek-v4-flash`).
 
 | Column | Meaning |
 |---|---|
@@ -484,7 +491,7 @@ rollouts are skipped (zstd is not in the stdlib) and counted in a note.
 | `apprv` | user turns between `design-spec` and the first implementation action. `-` means no design-spec. `0` is worth reading the transcript for. On Pi an approval recorded by the gate counts as the approving turn, as `/fablepowers:approve` does elsewhere. |
 | `sub-models` | the model each subagent actually ran on |
 | `skills` | skills loaded, in order, fablepowers or not |
-| `spawns` | agent spawns by inferred role, annotated with the requested model. `seat` means a fablepowers seat dispatch on a harness whose seats are pinned by config (OpenCode, Pi) — the model is whatever `models.toml` pins for that seat. **`(unset)` in the summary line means a non-seat subagent silently inherited the orchestrator's model** — that is the defect this plugin's pinned-model agents exist to fix. |
+| `spawns` | agent spawns by inferred role, annotated with the requested model. `seat` means a fablepowers seat dispatch whose model is pinned by config, not by the call: an OpenCode or Pi seat, or a Codex spawn of an `fp-<seat>`/`fablepowers-<seat>` agent type that passes no model — the model is whatever the seat's config pins. **`(unset)` in the summary line means a non-seat subagent silently inherited the orchestrator's model** — that is the defect this plugin's pinned-model agents exist to fix. |
 
 Edits and spawns count attempts: every edit or spawn tool call the model made,
 including ones that failed or were denied, as the Claude reader always did.

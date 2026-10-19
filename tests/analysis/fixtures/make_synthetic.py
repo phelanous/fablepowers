@@ -316,14 +316,16 @@ PI_GONE = "01a1fe10-0000-7000-8000-0000000000ff"
 
 
 class Tree:
-    """Pi entries are an id/parentId chain."""
+    """Pi entries are an id/parentId chain. Ids are 8 hex digits; each file gets its
+    own first digit, so no two sessions share an id (the reader deduplicates entry
+    ids across the whole store, as for real Pi's random ids)."""
 
-    def __init__(self):
-        self.n, self.last = 0, None
+    def __init__(self, first="e"):
+        self.n, self.last, self.first = 0, None, first
 
     def e(self, ts, typ, **kw):
         self.n += 1
-        eid = "e%07d" % self.n
+        eid = self.first + "%07d" % self.n
         r = dict(type=typ, id=eid, parentId=self.last, timestamp=ts, **kw)
         self.last = eid
         return r
@@ -383,7 +385,7 @@ def pi():
     ]
     write_jsonl(PI_DIR + "2026-10-18T13-00-00-000Z_%s.jsonl" % PI_ROOT, recs)
     kid = PI_DIR + "fablepowers-children/%s/" % PI_ROOT
-    tr = Tree()
+    tr = Tree("c")
     write_jsonl(kid + "2026-10-18T13-09-30-000Z_%s.jsonl" % PI_C1, [
         dict(type="session", version=3, id=PI_C1, timestamp="2026-10-18T13:09:30.000Z", cwd="/fixture/pi-synth"),
         pi_user(tr, "2026-10-18T13:09:31.000Z", "placeholder text"),
@@ -391,13 +393,13 @@ def pi():
                 [("write", dict(path="/fixture/pi-synth/src/f3.py")), ("edit", dict(path="/fixture/pi-synth/src/f3.py")),
                  ("bash", dict(command="sed -i s/a/b/ /fixture/pi-synth/src/f3.py"))]),
     ])
-    tr = Tree()
+    tr = Tree("d")
     write_jsonl(kid + "2026-10-18T13-11-30-000Z_%s.jsonl" % PI_C2, [
         dict(type="session", version=3, id=PI_C2, timestamp="2026-10-18T13:11:30.000Z", cwd="/fixture/pi-synth"),
         pi_user(tr, "2026-10-18T13:11:31.000Z", "placeholder text"),
         pi_asst(tr, "2026-10-18T13:11:40.000Z", "google/gemini-3.1-flash-lite", 40, 0, 1.05, []),
     ])
-    tr = Tree()
+    tr = Tree("f")
     write_jsonl(PI_DIR + "fablepowers-children/%s/2026-10-18T14-00-00-000Z_%s.jsonl" % (PI_GONE, PI_ORPH), [
         dict(type="session", version=3, id=PI_ORPH, timestamp="2026-10-18T14:00:00.000Z", cwd="/fixture/pi-synth"),
         pi_user(tr, "2026-10-18T14:00:01.000Z", "placeholder text"),

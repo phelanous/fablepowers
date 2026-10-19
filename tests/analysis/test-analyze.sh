@@ -15,7 +15,11 @@
 #   * the OpenCode reader: exact record dicts and printed rows for every OpenCode
 #     fixture session (both SQL files loaded into a temp db), --since, the
 #     read-only WAL-safe open (and its immutable fallback), seq order without the
-#     index, and the notes for a missing db, a db without session_v2 and a non-db.
+#     index, and the notes for a missing db, a db without session_v2 and a non-db;
+#   * the Pi reader: exact record dicts and printed rows for both layouts (flat
+#     --session-dir, default --<cwd>--, and both in one dir), child linkage by
+#     entry and by directory, depth-2 roll-up, orphans, --since, approval results
+#     as gap events, and sessions written by the test for the remaining rules.
 #
 # Expected values come from tests/analysis/fixtures/README.md (hand-derived).
 # Usage: tests/analysis/test-analyze.sh   (needs python3 and git)
@@ -544,6 +548,234 @@ with open(junk, "w") as fh:
 got_j, note_j = read_oc(junk)
 check("opencode: a file that is not a db -> a note, no crash",
       got_j == [] and note_j.startswith(f"cannot read {junk} ("), note_j)
+
+# --- Pi reader ------------------------------------------------------------------------------
+# Expected values: tests/analysis/fixtures/README.md (Pi table), hand-derived, with the rulings
+# applied (usr = user messages only; an approval result is an `approved` gap event; the separate
+# extension's `subagent` calls are spawns; every skill listed). Costs: the per-message
+# usage.cost.total values, listed here and compared at 10 decimals.
+import math
+pi_fx = os.path.join(repo, "tests", "analysis", "fixtures", "pi")
+DSF, QW, GE = "deepseek/deepseek-v4-flash", "qwen/qwen3.6-flash", "google/gemini-3.1-flash-lite"
+
+
+def psub(models, out, costs, edits):
+    return dict(models=models, out=out, cost=round(math.fsum(costs), 10), edits=edits)
+
+
+def pi(ts, proj, models, usr, out, costs, skills, spawns, edits, bw, seq, subs):
+    return dict(harness="pi", ts=ts, proj=proj, models=models, user_turns=usr, out=out, cost=round(math.fsum(costs), 10),
+                skills=skills, spawns=[dict(role=r, model=m) for r, m in spawns], edits=edits, bash_writes=bw, seq=seq,
+                subs=subs)
+
+
+def pplain(r):
+    r = plain(r)
+    return dict(r, cost=round(r["cost"], 10), subs=[dict(x, cost=round(x["cost"], 10)) for x in r["subs"]])
+
+
+FX = "/fixture/"
+PI_FLAT = [
+    # e336 (pi2): a `/skill:` message is a user turn and a skill load.
+    pi("2026-10-17", "pi2-work", {DSF: 1}, 1, 8, [4.96026e-05], ["fablepowers:nsdemo"], [], 0, 0,
+       [("user", '<skill name="fablepowers:nsdemo" location="/fixture/plugins/'), ("skill", "nsdemo")], []),
+    # da07 (pi-t0 r4): 76+116+63+62+70+72+3 = 462. Two seat dispatches, then three `subagent` calls of the
+    # separate extension (all errored; attempts): agent x + "review placeholder" -> reviewer, `tasks`/`chain`
+    # (no agent, no task) -> other; none passes a model.
+    pi("2026-10-17", "pi-t0-work", {DSF: 7}, 1, 462,
+       [0.000208152, 0.000173439, 0.0001105632, 0.0001168812, 0.0001212624, 0.0001276164, 0.0000437436], [],
+       [("reviewer", "seat"), ("implementer", "seat"), ("reviewer", None), ("other", None), ("other", None)], 1, 0,
+       [("user", REV), ("edit", FX + "pi-t0-work/f1.txt")], []),
+    # 850c (pi-t5 main): 155+96+95+70+264+121+124 = 925; the first dispatch errored (still an attempt).
+    # Approved result, no design-spec -> gap '-'. Children 9b68 and b8fa via fablepowers-child entries.
+    pi("2026-10-17", "pi-t5-r1", {DSF: 7}, 3, 925,
+       [0.00042705, 0.0001873764, 0.0001858896, 0.0001590948, 0.0003940578, 0.0002321172, 0.0002440134], [],
+       [("implementer", "seat"), ("reviewer", "seat"), ("implementer", "seat")], 1, 0,
+       [("user", PH), ("edit", FX + "pi-t5-r1/docs/specs/f1.md"), ("user", REV), ("approved", "k1"), ("user", IMP)],
+       [psub({GE: 1}, 2, [0.001295], 0),
+        psub({QW: 9}, 205 + 213 + 542 + 445 + 465 + 187 + 242 + 177 + 276,
+             [0.0011821875, 0.001231875, 0.001651125, 0.001656375, 0.001729125, 0.0014615625, 0.0015500625, 0.001540125,
+              0.00167775], 2)]),
+    # d69c (pi-t5 r2): 74+41+55+79+232+131 = 612; two not-recorded results (no event), one approved.
+    pi("2026-10-17", "pi-t5-r2", {DSF: 6}, 3, 612,
+       [0.000332928, 0.0001278162, 0.0001424844, 0.0001677726, 0.0003568086, 0.000238167], [], [], 1, 0,
+       [("user", PH), ("edit", FX + "pi-t5-r2/docs/specs/f1.md"), ("user", PH), ("ask", ""), ("user", PH),
+        ("approved", "k1")], []),
+    # 1892 (pi-t5 main): 131+74+55+35 = 295; a withdraw result (no event).
+    pi("2026-10-17", "pi-t5-r1", {DSF: 4}, 2, 295, [0.000399492, 0.0001777572, 0.0001464246, 0.0001210248], [], [], 2, 0,
+       [("user", PH), ("edit", FX + "pi-t5-r1/docs/specs/f1.md"), ("edit", FX + "pi-t5-r1/docs/specs/f2.md"),
+        ("user", PH), ("ask", "")], []),
+    # ad38 (killed parent, no entry): child b9ba linked by its directory only.
+    pi("2026-10-17", "pi-t5-r4", {DSF: 1}, 1, 129, [0.000398493], [], [("implementer", "seat")], 0, 0, [("user", IMP)],
+       [psub({QW: 1}, 121, [0.001089375], 0)]),
+]
+PI_DEFAULT = [
+    # synthetic root: out 100+50+80+20, cost 1.1+0.4+0.75+0; the wrapper read and the SKILL.md read are one
+    # load; withdraw / not-recorded results add nothing, the approved one is an event; gap 3.
+    pi("2026-10-18", "pi-synth", {DSF: 4}, 3, 250, [1.1, 0.4, 0.75, 0.0], ["fablepowers:design-spec", "fablepowers:verify-done"],
+       [("implementer", "seat"), ("reviewer", "seat")], 2, 1,
+       [("user", PH), ("skill", "design-spec"), ("user", PH), ("ask", ""), ("edit", FX + "pi-synth/docs/specs/f1.md"),
+        ("approved", "k1"), ("user", '<skill name="fablepowers-verify-done" location="/fixture/plu'),
+        ("skill", "verify-done"), ("edit", "bash-write"), ("edit", FX + "pi-synth/src/f2.py")],
+       # …02 via the entry (write + edit; the sed -i is not a sub edit), …03 via the directory only.
+       [psub({QW: 1}, 300, [2.2], 2), psub({GE: 1}, 40, [1.05], 0)]),
+    # orphan: …04 sits under fablepowers-children/…ff/, whose session does not exist.
+    pi("2026-10-18", "(orphan) pi-synth", {}, 0, 0, [0.0], [], [], 0, 0, [], [psub({QW: 1}, 60, [1.0], 0)]),
+]
+
+
+def read_p(d, since=None):
+    return ad.read_pi(argparse.Namespace(pi_sessions=d, since=since))
+
+
+def same(name, got, exp):
+    check(f"{name}: {len(exp)} records", len(got) == len(exp), [(g["ts"], g["proj"]) for g in got])
+    for i, (g, e) in enumerate(zip(got, exp)):
+        g = pplain(g)
+        check(f"{name} record {i} ({e['proj']} {e['ts']}): exact dict", g == e,
+              "\n".join(f"  {k}: got {g.get(k)!r}\n  {' ' * len(k)}  exp {e[k]!r}" for k in e if g.get(k) != e[k]))
+
+
+flat, default = os.path.join(pi_fx, "flat"), os.path.join(pi_fx, "default")
+got, note = read_p(flat)
+same("pi flat (--session-dir layout)", got, PI_FLAT)
+check("pi flat: no note", note is None, note)
+got_d, note_d = read_p(default)
+same("pi default (--<cwd>-- layout)", got_d, PI_DEFAULT)
+check("pi default: no note; notes.txt ignored", note_d is None, note_d)
+check("pi: approval gap 3 on the synthetic root, '-' elsewhere",
+      [ad.approval_gap(r["seq"]) for r in got + got_d] == [None] * 6 + [3, None], [ad.approval_gap(r["seq"]) for r in got + got_d])
+
+# Both layouts under one sessions dir (a flat dir and a --<cwd>-- dir side by side). Roots in path
+# order (`--fixture-pi-synth--/` sorts before the flat files), then the orphan.
+both = os.path.join(work, "pi-both")
+shutil.copytree(flat, both); shutil.copytree(os.path.join(default, "--fixture-pi-synth--"), os.path.join(both, "--fixture-pi-synth--"))
+got_b, _ = read_p(both)
+same("pi both layouts", got_b, PI_DEFAULT[:1] + PI_FLAT + PI_DEFAULT[1:])
+
+PI_ROWS_FLAT = [
+    "2026-10-17 pi pi2-work                           deepseek-v4-flash   1         8        0   0%     0      0     0   0.00  0.00     -                       | fp:nsdemo | ",
+    "2026-10-17 pi pi-t0-work                         deepseek-v4-flash   1       462        0   0%     1      0     0   0.00  0.00     -                       |  | reviewer@seatx1 implementer@seatx1 reviewerx1 otherx2",
+    "2026-10-17 pi pi-t5-r1                           deepseek-v4-flash   3       925    2,754  75%     1      0     2   0.00  0.01     -  qwen/qwen3.6-flash:9 google/gemini-3.1-flash-lite:1 |  | implementer@seatx2 reviewer@seatx1",
+    "2026-10-17 pi pi-t5-r2                           deepseek-v4-flash   3       612        0   0%     1      0     0   0.00  0.00     -                       |  | ",
+    "2026-10-17 pi pi-t5-r1                           deepseek-v4-flash   2       295        0   0%     2      0     0   0.00  0.00     -                       |  | ",
+    "2026-10-17 pi pi-t5-r4                           deepseek-v4-flash   1       129      121  48%     0      0     0   0.00  0.00     -  qwen/qwen3.6-flash:1 |  | implementer@seatx1",
+]
+PI_ROWS_DEFAULT = [
+    "2026-10-18 pi pi-synth                           deepseek-v4-flash   3       250      340  58%     2      1     2   2.25  3.25     3  qwen/qwen3.6-flash:1 google/gemini-3.1-flash-lite:1 | fp:design-spec,fp:verify-done | implementer@seatx1 reviewer@seatx1",
+    "2026-10-18 pi (orphan) pi-synth                  ?            0         0       60 100%     0      0     0   0.00  1.00     -  qwen/qwen3.6-flash:1 |  | ",
+]
+# flat: main 8+462+925+612+295+129 = 2,431; sub 2,754+121 = 2,875 (54.2%); edits 1+1+1+2 = 5; sub 2;
+# spend ≈ $0.02; spawns seat 2+3+1 = 6, (unset) 3. default: main 250, sub 340+60 = 400 (61.5%); spend
+# 2.25 + 3.25 + 1.00 = 6.50.
+PI_SUM_FLAT = "sessions 6  out main 2,431 sub 2,875 (54.2% sub)  edits main 5 shell 0 sub 2  spend $0.02  spawns {'seat': 6, '(unset)': 3}"
+PI_SUM_DEFAULT = "sessions 2  out main 250 sub 400 (61.5% sub)  edits main 2 shell 1 sub 2  spend $6.50  spawns {'seat': 2}"
+for label, d, rows_, sum_ in (("flat", flat, PI_ROWS_FLAT, PI_SUM_FLAT), ("default", default, PI_ROWS_DEFAULT, PI_SUM_DEFAULT)):
+    r = run(new, "--harness", "pi", "--pi-sessions", d)
+    lines = r.stdout.decode().split("\n")
+    n = len(rows_)
+    check(f"pi {label} printed: header and exact rows", r.returncode == 0 and r.stderr == b""
+          and lines[0] == f"date       h  {HEADER_TAIL}" and lines[1:n + 1] == rows_,
+          "\n".join(f"got {a!r}\nexp {b!r}" for a, b in zip(lines[1:n + 1], rows_) if a != b) + r.stderr.decode())
+    check(f"pi {label} printed: summary and all line", lines[n + 1:n + 4] == ["", "pi " + sum_, "all " + sum_],
+          "\n".join(lines[n + 1:n + 4]))
+
+# --since compares each session's UTC start date; children go with their root.
+got17, _ = read_p(flat, "2026-10-17")
+check("pi --since 2026-10-17 keeps every flat session", [pplain(g) for g in got17] == PI_FLAT, [(g["ts"], g["proj"]) for g in got17])
+got18, _ = read_p(both, "2026-10-18")
+check("pi --since 2026-10-18: the synthetic root and the orphan", [pplain(g) for g in got18] == PI_DEFAULT,
+      [(g["ts"], g["proj"]) for g in got18])
+check("pi --since 2026-10-19: nothing, the orphan included", read_p(both, "2026-10-19")[0] == [])
+
+nopi = os.path.join(work, "no-pi")
+check("pi: missing dir -> no records and a note", read_p(nopi) == ([], f"no pi logs at {nopi}"), read_p(nopi))
+
+# --- Pi rules the fixtures do not exercise: sessions written here ----------------------------
+def pi_session(path, sid, entries, ts="2026-10-20T10:00:00.000Z", cwd="/w/pi-rules"):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(json.dumps({"type": "session", "version": 3, "id": sid, "timestamp": ts, "cwd": cwd}) + "\n")
+        for e in entries:
+            fh.write(json.dumps(e) + "\n")
+
+
+def amsg(*calls, model="m-main", out=10, cost=1.0):
+    return {"type": "message", "message": {"role": "assistant", "model": model, "content": [
+        {"type": "toolCall", "name": n, "arguments": a} for n, a in calls],
+        "usage": {"output": out, "cost": {"total": cost}}}}
+
+
+def umsg(text):
+    return {"type": "message", "message": {"role": "user", "content": text}}
+
+
+def result(text, ctype="fablepowers-result"):
+    return {"type": "custom_message", "customType": ctype, "content": [{"type": "text", "text": text}]}
+
+
+prs = os.path.join(work, "pi-rules")
+CH = "fablepowers-children"
+pi_session(os.path.join(prs, "a.jsonl"), "R1", [
+    umsg("start"),
+    # a bash cat of the real SKILL.md right after the wrapper read is the same load; a later one is a new load.
+    amsg(("read", {"path": "/p/fablepowers/pi/skills/fablepowers-design-spec/SKILL.md"}),
+         ("bash", {"command": "cat /p/fablepowers/skills/design-spec/SKILL.md"}),
+         ("write", {"path": "/p/x/skills/design-spec/SKILL.md"}),  # writing a SKILL.md is an edit, not a load
+         ("bash", {"command": "rg x /p/skills/other/SKILL.md"}),  # rg is not a read
+         ("read", {"path": "/p/other/skills/mine/SKILL.md"})),  # a non-fablepowers skill, listed bare
+    # dispatches: a strict-implementer seat; a seat call passing a model; a dispatch without a seat (heuristic);
+    # the extension's `tasks` list (role from the first item's agent, model from the args).
+    amsg(("fablepowers_dispatch", {"seat": "strict-implementer", "task": "review it"}),
+         ("fablepowers_dispatch", {"seat": "reviewer", "task": "x", "model": "m-req"}),
+         ("fablepowers_dispatch", {"task": "please review this"}),
+         ("subagent", {"tasks": [{"agent": "reviewer", "task": "implement x"}, {"agent": "worker", "task": "y"}],
+                       "model": "m-sub"})),
+    {"type": "custom", "customType": "fablepowers-child", "data": {"seat": "implementer", "childSessionId": "C-ELSE"}},
+    {"type": "custom", "customType": "fablepowers-child", "data": {"seat": "reviewer", "childSessionId": "C-MOVED"}},
+    # the gate's other approved wording (no key): the design path is the value.
+    result("fablepowers approval gate: the user approved design `docs/specs/s.md`; the approval is recorded."),
+    # the ask-approval tool's own result is a tool result, not an approval event; other custom types neither.
+    {"type": "message", "message": {"role": "toolResult", "toolName": "fablepowers_ask_approval",
+                                    "content": [{"type": "text", "text": "the user approved design `x` (key `t`)"}]}},
+    result("fablepowers approval gate: the user approved design `y` (key `z`)", ctype="fp-approve"),
+    amsg(("bash", {"command": "cat /p/fablepowers/skills/design-spec/SKILL.md"})),
+])
+# linked by R1's entry only, from a directory that says nothing about its parent
+pi_session(os.path.join(prs, "elsewhere", "c.jsonl"), "C-ELSE", [amsg(model="m-c", out=7, cost=0.5)], ts="2026-10-20T10:01:00.000Z")
+# R1's entry wins over the directory, which names R2
+pi_session(os.path.join(prs, CH, "R2", "d.jsonl"), "C-MOVED", [amsg(model="m-d", out=3, cost=0.25)], ts="2026-10-20T10:02:00.000Z")
+# depth 2: a child of C-ELSE placed under the child's own fablepowers-children dir
+pi_session(os.path.join(prs, "elsewhere", CH, "C-ELSE", "g.jsonl"), "G1", [amsg(("edit", {"path": "f"}), model="m-g", out=2, cost=0.125)],
+           ts="2026-10-20T10:03:00.000Z")
+pi_session(os.path.join(prs, "b.jsonl"), "R2", [umsg("x")], ts="2026-10-21T10:00:00.000Z")
+# not sessions: a .jsonl without a session header, an empty .jsonl, a header without a timestamp
+with open(os.path.join(prs, "junk.jsonl"), "w") as fh:
+    fh.write('{"type":"message","id":"J1","timestamp":"2026-10-20T10:00:00.000Z"}\n')
+open(os.path.join(prs, "empty.jsonl"), "w").close()
+with open(os.path.join(prs, "nots.jsonl"), "w") as fh:
+    fh.write('{"type":"session","id":"N1"}\n')
+got, note = read_p(prs)
+g = pplain(got[0]) if got else {}
+check("pi synthetic: two roots (R1, R2), non-session files and an undated header ignored",
+      [(x["ts"], x["proj"]) for x in got] == [("2026-10-20", "pi-rules"), ("2026-10-21", "pi-rules")] and note is None,
+      [(x["ts"], x["proj"]) for x in got])
+check("pi synthetic: skills -- wrapper + bash cat is one load, a later cat a new one, non-fablepowers listed bare",
+      g.get("skills") == ["fablepowers:design-spec", "mine", "fablepowers:design-spec"], g.get("skills"))
+check("pi synthetic: a write to a SKILL.md is an edit", g.get("edits") == 1, g.get("edits"))
+check("pi synthetic: spawns -- strict seat, requested model, no seat, extension `tasks` list",
+      g.get("spawns") == [dict(role="implementer", model="seat"), dict(role="reviewer", model="m-req"),
+                          dict(role="reviewer", model="seat"), dict(role="reviewer", model="m-sub")], g.get("spawns"))
+check("pi synthetic: approval without a key -> the design path; tool results and other custom types are not events",
+      [x for x in g.get("seq", []) if x[0] == "approved"] == [("approved", "docs/specs/s.md")], g.get("seq"))
+check("pi synthetic: subs in path order -- entry-linked child elsewhere, depth-2 grandchild rolled up, entry beats directory",
+      g.get("subs") == [psub({"m-c": 1}, 7, [0.5], 0), psub({"m-g": 1}, 2, [0.125], 1), psub({"m-d": 1}, 3, [0.25], 0)],
+      g.get("subs"))
+check("pi synthetic: R2 has no subs (its directory child belongs to R1)", got[1]["subs"] == [] if len(got) > 1 else False)
+
+# approval_gap: an `approved` event counts as a user turn; nothing else new counts.
+check("approval_gap counts `approved` events like user turns",
+      ad.approval_gap([("skill", "design-spec"), ("approved", "k"), ("ask", ""), ("user", "u"), ("edit", "src/x.py"), ("approved", "k")]) == 2)
 
 # --- --harness parsing ---------------------------------------------------------------------
 r = run(new, "--projects-dir", fixtures, *nowhere, "--harness", "pi,claude")

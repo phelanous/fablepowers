@@ -473,11 +473,19 @@ A harness with no logs on this machine prints `<h> note: no <harness> logs at
 <path>` instead of a summary, never an error. Other notes: Codex `.jsonl.zst`
 rollouts (zstd is not in the stdlib) and rollouts whose first line is not a
 `session_meta` are skipped and counted in a note; an OpenCode db that SQLite
-cannot read (locked, corrupt, an unknown schema) gives a note. OpenCode root
-sessions with no messages are left out, as Claude transcripts with no timestamp
-are. A Pi `/fork` or `/clone` repeats its source's entries: they are counted
-once, in the source, and the fork's row shows only what it added. Model cells
-drop the provider prefix (`deepseek/deepseek-v4-flash` prints as
+cannot read (locked, corrupt, an unknown schema) gives a note. A root session
+with no messages of its own (OpenCode; Pi after the fork rule below) is left
+out, as Claude transcripts with no timestamp are, unless it has subagent
+sessions under it: an empty root with descendants keeps its row. A Pi `/fork`
+or `/clone` repeats its source's entries with their entry ids. Each entry id is
+counted once in the whole sessions store, in the earliest session that holds it
+(by header timestamp, then file name), so nothing is counted twice even when a
+fork's source or a middle fork was deleted: a fork's row shows what it added,
+plus any entries of a deleted source that survive only in its copy. An unused
+clone has no row. Pi entry ids are 8 random hex digits, so two unrelated
+sessions sharing one (which would drop that entry from the later session) is a
+negligible risk. In the multi-harness table `mainOut` and `subOut` are 10 wide.
+Model cells drop the provider prefix (`deepseek/deepseek-v4-flash` prints as
 `deepseek-v4-flash`).
 
 | Column | Meaning |
@@ -491,7 +499,7 @@ drop the provider prefix (`deepseek/deepseek-v4-flash` prints as
 | `apprv` | user turns between `design-spec` and the first implementation action. `-` means no design-spec. `0` is worth reading the transcript for. On Pi an approval recorded by the gate counts as the approving turn, as `/fablepowers:approve` does elsewhere. |
 | `sub-models` | the model each subagent actually ran on |
 | `skills` | skills loaded, in order, fablepowers or not |
-| `spawns` | agent spawns by inferred role, annotated with the requested model. `seat` means a fablepowers seat dispatch whose model is pinned by config, not by the call: an OpenCode or Pi seat, or a Codex spawn of an `fp-<seat>`/`fablepowers-<seat>` agent type that passes no model — the model is whatever the seat's config pins. **`(unset)` in the summary line means a non-seat subagent silently inherited the orchestrator's model** — that is the defect this plugin's pinned-model agents exist to fix. |
+| `spawns` | agent spawns by inferred role, annotated with the requested model. `seat` means a fablepowers seat dispatch whose model is pinned by config, not by the call: an OpenCode or Pi seat (the model `models.toml` pins), or a Codex spawn of an `fp-<seat>`/`fablepowers-<seat>` agent type that passes no model. fablepowers ships no Codex agent types, so on Codex that is a user-defined agent type in your own Codex agent config, assumed config-pinned; the script does not read that config. **`(unset)` in the summary line means a non-seat subagent silently inherited the orchestrator's model** — that is the defect this plugin's pinned-model agents exist to fix. |
 
 Edits and spawns count attempts: every edit or spawn tool call the model made,
 including ones that failed or were denied, as the Claude reader always did.

@@ -78,8 +78,8 @@ LEGEND = ("approval-gap column: user turns between design-spec and first impleme
           "0 with an AskUserQuestion approval still counts as approved — check the ASK text)")
 HEADER_TAIL = ("project                            main       usr   mainOut   subOut sub% mEdit mBashW sEdit  $main  $sub apprv"
                "  sub-models | skills | spawns")
-# The multi-harness layout: an 18-wide main model and cost columns sized for 2 decimals.
-HEADER_MULTI = ("date       h  project                            main               usr   mainOut   subOut sub% mEdit mBashW sEdit"
+# The multi-harness layout: an 18-wide main model, 10-wide token columns and cost columns sized for 2 decimals.
+HEADER_MULTI = ("date       h  project                            main               usr    mainOut     subOut sub% mEdit mBashW sEdit"
                 "     $main     $sub apprv  sub-models | skills | spawns")
 
 # --- byte identity, --harness claude -------------------------------------------------
@@ -108,13 +108,13 @@ else:
     print("skip real ~/.claude/projects snapshot (set ANALYZE_REAL=1; needs ~/.claude/projects)")
 
 # --- multi-harness layout ---------------------------------------------------------------
-ROW_B2 = ("2026-10-03 cc fixture-alpha                      gpt-unknown          1       700        0   0%     0      0     0"
+ROW_B2 = ("2026-10-03 cc fixture-alpha                      gpt-unknown          1        700          0   0%     0      0     0"
           "      0.00     0.00     0                       | design-spec,fp:implementation-plan | ")
-ROW_A1 = ("2026-10-12 cc fixture-alpha                      sonnet-5             2     2,000        0   0%     0      0     0"
+ROW_A1 = ("2026-10-12 cc fixture-alpha                      sonnet-5             2      2,000          0   0%     0      0     0"
           "      0.12     0.00     -                       | fp:verify-done,sp:brainstorming | ")
 # c3's two printed sub-models come from a three-way tie, so they follow the
 # filesystem's glob order (see the fixture README); everything else is pinned.
-ROW_C3 = re.compile(re.escape("2026-10-07 cc fixture-beta/feat-x                opus-5               4    57,000    9,000  14%     2      1     3"
+ROW_C3 = re.compile(re.escape("2026-10-07 cc fixture-beta/feat-x                opus-5               4     57,000      9,000  14%     2      1     3"
                               "      4.25     2.10     2  ") + r"\S+:1 \S+:1"
                     + re.escape(" | fp:design-spec | implementer@sonnetx1 reviewerx1 explorerx1") + "$")
 # Summary: main 59,700 sub 9,000; spend 4.37 + 2.095 = 6.465, which is the double
@@ -187,9 +187,29 @@ with contextlib.redirect_stdout(buf):
                    {}, ["claude"])
 lines = buf.getvalue().split("\n")
 check("multi widths: long main id cut to 18, 5-digit cost aligned, sub-model prefix dropped",
-      lines[1] == "2026-10-13 cc p                                  some-very-long-m..   1       100       50  33%     0      0     0"
+      lines[1] == "2026-10-13 cc p                                  some-very-long-m..   1        100         50  33%     0      0     0"
                   "  10291.23     2.50     -  qwen3.6-flash:2      |  | "
       and lines[1].index("10291.23") + 8 == HEADER_MULTI.index("$main") + 5, buf.getvalue())
+
+# Token columns: mainOut and subOut are 10 wide in the multi layout, so 7- and 8-digit counts
+# (1,234,567 and 12,345,678) end at their header's right edge and the columns after them stay put.
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    ad.print_multi([dict(rec("cc", "2026-10-13", 1.0, [2.0]), out=12345678,
+                         subs=[dict(models=collections.Counter({"s": 1}), out=1234567, cost=2.0, edits=0)]),
+                    dict(rec("cc", "2026-10-14", 1.0, [2.0]), out=1234567,
+                         subs=[dict(models=collections.Counter({"s": 1}), out=12345678, cost=2.0, edits=0)])],
+                   {}, ["claude"])
+lines = buf.getvalue().split("\n")
+check("multi widths: 7- and 8-digit mainOut/subOut keep every column aligned",
+      lines[0] == HEADER_MULTI
+      and lines[1] == "2026-10-13 cc p                                  m                    1 12,345,678  1,234,567   9%     0      0     0"
+                      "      1.00     2.00     -  s:1                  |  | "
+      and lines[2] == "2026-10-14 cc p                                  m                    1  1,234,567 12,345,678  91%     0      0     0"
+                      "      1.00     2.00     -  s:1                  |  | "
+      and all(l.index(v) + len(v) == HEADER_MULTI.index(col) + len(col)
+              for l, vs in ((lines[1], ("12,345,678", "1,234,567")), (lines[2], ("1,234,567", "12,345,678")))
+              for v, col in zip(vs, ("mainOut", "subOut"))), buf.getvalue())
 
 # --- Codex reader ---------------------------------------------------------------------------
 # Expected values: tests/analysis/fixtures/README.md (Codex table), hand-derived, with the
@@ -273,14 +293,14 @@ check("codex: approval gap 3 on the synthetic root, '-' elsewhere",
       [ad.approval_gap(r["seq"]) for r in got] == [None] * 6 + [3, None], [ad.approval_gap(r["seq"]) for r in got])
 
 CX_ROWS = [
-    "2026-10-15 cx codex-repo                         gpt-6-luna           1       264      363  58%     0      0     0         -        -     -  gpt-5.6-terra:2      |  | implementer@seatx1",
-    "2026-10-15 cx codex-repo                         gpt-6-luna           1       157        0   0%     1      0     0         -        -     -                       |  | ",
-    "2026-10-15 cx codex2-repo                        gpt-5.6-luna         1       960      223  19%     1      0     1         -        -     -  gpt-5.6-luna:2       | fp:workflow,fp:subagent-execution | implementer@gpt-5.6-lunax1 other@gpt-5.6-lunax1",
-    "2026-10-15 cx codex-port-t0-repo                 gpt-5.6-luna         1       339        6   2%     1      0     0         -        -     -  gpt-5.6-luna:1       |  | reviewer@gpt-5.6-lunax1",
-    "2026-10-15 cx codex-port-t0-repo                 gpt-6-luna           3       103        0   0%     0      0     0         -        -     -                       | fp:approve | ",
-    "2026-10-17 cx codex-r1                           gpt-6-luna           4     4,026    2,126  35%     3      0     1         -        -     -  gpt-6-luna:4         | fp:approve,fp:implementation-plan,fp:subagent-execution,fp:behavioral-testing,fp:integration-review | implementer@gpt-6-lunax3 reviewer@gpt-6-lunax2",
-    "2026-10-18 cx cx-synth                           gpt-6-sol            5       600      450  43%     2      1     1         -        -     3  gpt-6-luna:1         | fp:design-spec | reviewer@gpt-6-lunax1",
-    "2026-10-18 cx (orphan) cx-synth                  ?                    0         0       70 100%     0      0     0         -        -     -  gpt-6-luna:1         |  | ",
+    "2026-10-15 cx codex-repo                         gpt-6-luna           1        264        363  58%     0      0     0         -        -     -  gpt-5.6-terra:2      |  | implementer@seatx1",
+    "2026-10-15 cx codex-repo                         gpt-6-luna           1        157          0   0%     1      0     0         -        -     -                       |  | ",
+    "2026-10-15 cx codex2-repo                        gpt-5.6-luna         1        960        223  19%     1      0     1         -        -     -  gpt-5.6-luna:2       | fp:workflow,fp:subagent-execution | implementer@gpt-5.6-lunax1 other@gpt-5.6-lunax1",
+    "2026-10-15 cx codex-port-t0-repo                 gpt-5.6-luna         1        339          6   2%     1      0     0         -        -     -  gpt-5.6-luna:1       |  | reviewer@gpt-5.6-lunax1",
+    "2026-10-15 cx codex-port-t0-repo                 gpt-6-luna           3        103          0   0%     0      0     0         -        -     -                       | fp:approve | ",
+    "2026-10-17 cx codex-r1                           gpt-6-luna           4      4,026      2,126  35%     3      0     1         -        -     -  gpt-6-luna:4         | fp:approve,fp:implementation-plan,fp:subagent-execution,fp:behavioral-testing,fp:integration-review | implementer@gpt-6-lunax3 reviewer@gpt-6-lunax2",
+    "2026-10-18 cx cx-synth                           gpt-6-sol            5        600        450  43%     2      1     1         -        -     3  gpt-6-luna:1         | fp:design-spec | reviewer@gpt-6-lunax1",
+    "2026-10-18 cx (orphan) cx-synth                  ?                    0          0         70 100%     0      0     0         -        -     -  gpt-6-luna:1         |  | ",
 ]
 # main 264+157+960+339+103+4026+600 = 6,449; sub 363+223+6+2126+450+70 = 3,238 (33.4%);
 # edits 1+1+1+3+2 = 8, shell 1, sub 1+1+1 = 3; spawns seat 1, gpt-5.6-luna 3, gpt-6-luna 6.
@@ -484,12 +504,12 @@ check("opencode: approval gap 2 on the synthetic root, '-' elsewhere",
       [ad.approval_gap(r["seq"]) for r in got] == [None] * 4 + [2, None], [ad.approval_gap(r["seq"]) for r in got])
 
 OC_ROWS = [
-    "2026-10-15 oc opencode-scratch-repo              big-pickle           3     1,923      249  11%     0      0     0      0.00     0.00     -  mimo-v2.6-flash-free:2 |  | reviewer@opencode/mimo-v2.6-flash-freex1 implementer@opencode/nemotron-3.5-lightning-freex1",
-    "2026-10-16 oc opencode-t0-repo                   big-pickle           2     1,160      131  10%     2      0     1      0.00     0.00     -  big-pickle:3 cat-jam-free:2 | fp-probe:base | otherx3",
-    "2026-10-16 oc opencode-t5-r1                     big-pickle           3     7,750    5,391  41%    11      0     5      0.00     0.00     -  cat-jam-free:10 deepseek-v4.1-flash-free:10 | fp:implementation-plan,fp:subagent-execution,fp:integration-review,fp:verify-done | implementer@seatx2 reviewer@seatx3",
-    "2026-10-16 oc opencode-t5-r2                     big-pickle           2    10,215    7,016  41%     7      0     7      0.00     0.00     -  deepseek-v4.1-flash-free:12 cat-jam-free:11 | fp:implementation-plan,fp:subagent-execution,fp:integration-review,fp:verify-done,fp:finishing-a-development-branch | implementer@seatx2 reviewer@seatx2",
-    "2026-10-18 oc oc-synth                           big-pickle           4       325      340  51%     2      1     3      2.50     2.75     2  big-pickle:2 deepseek-v4.1-flash-free:1 | fp:design-spec | implementer@seatx1 reviewerx1 reviewer@opencode/cat-jam-freex1",
-    "2026-10-18 oc (orphan) oc-synth                  ?                    0         0       60 100%     0      0     0      0.00     1.00     -  cat-jam-free:1       |  | ",
+    "2026-10-15 oc opencode-scratch-repo              big-pickle           3      1,923        249  11%     0      0     0      0.00     0.00     -  mimo-v2.6-flash-free:2 |  | reviewer@opencode/mimo-v2.6-flash-freex1 implementer@opencode/nemotron-3.5-lightning-freex1",
+    "2026-10-16 oc opencode-t0-repo                   big-pickle           2      1,160        131  10%     2      0     1      0.00     0.00     -  big-pickle:3 cat-jam-free:2 | fp-probe:base | otherx3",
+    "2026-10-16 oc opencode-t5-r1                     big-pickle           3      7,750      5,391  41%    11      0     5      0.00     0.00     -  cat-jam-free:10 deepseek-v4.1-flash-free:10 | fp:implementation-plan,fp:subagent-execution,fp:integration-review,fp:verify-done | implementer@seatx2 reviewer@seatx3",
+    "2026-10-16 oc opencode-t5-r2                     big-pickle           2     10,215      7,016  41%     7      0     7      0.00     0.00     -  deepseek-v4.1-flash-free:12 cat-jam-free:11 | fp:implementation-plan,fp:subagent-execution,fp:integration-review,fp:verify-done,fp:finishing-a-development-branch | implementer@seatx2 reviewer@seatx2",
+    "2026-10-18 oc oc-synth                           big-pickle           4        325        340  51%     2      1     3      2.50     2.75     2  big-pickle:2 deepseek-v4.1-flash-free:1 | fp:design-spec | implementer@seatx1 reviewerx1 reviewer@opencode/cat-jam-freex1",
+    "2026-10-18 oc (orphan) oc-synth                  ?                    0          0         60 100%     0      0     0      0.00     1.00     -  cat-jam-free:1       |  | ",
 ]
 # main 1923+1160+7750+10215+325 = 21,373; sub 249+131+5391+7016+340+60 = 13,187 (38.2%); edits 2+11+7+2 = 22,
 # shell 1, sub 1+5+7+3 = 16; spend 2.50 + 2.75 + 1.00 = 6.25; spawns in first-seen order.
@@ -722,16 +742,16 @@ got_b, _ = read_p(both)
 same("pi both layouts", got_b, PI_DEFAULT[:1] + PI_FLAT + PI_DEFAULT[1:])
 
 PI_ROWS_FLAT = [
-    "2026-10-17 pi pi2-work                           deepseek-v4-flash    1         8        0   0%     0      0     0      0.00     0.00     -                       | fp:nsdemo | ",
-    "2026-10-17 pi pi-t0-work                         deepseek-v4-flash    1       462        0   0%     1      0     0      0.00     0.00     -                       |  | reviewer@seatx1 implementer@seatx1 reviewerx1 otherx2",
-    "2026-10-17 pi pi-t5-r1                           deepseek-v4-flash    3       925    2,754  75%     1      0     2      0.00     0.01     -  qwen3.6-flash:9 gemini-3.1-flash-lite:1 |  | implementer@seatx2 reviewer@seatx1",
-    "2026-10-17 pi pi-t5-r2                           deepseek-v4-flash    3       612        0   0%     1      0     0      0.00     0.00     -                       |  | ",
-    "2026-10-17 pi pi-t5-r1                           deepseek-v4-flash    2       295        0   0%     2      0     0      0.00     0.00     -                       |  | ",
-    "2026-10-17 pi pi-t5-r4                           deepseek-v4-flash    1       129      121  48%     0      0     0      0.00     0.00     -  qwen3.6-flash:1      |  | implementer@seatx1",
+    "2026-10-17 pi pi2-work                           deepseek-v4-flash    1          8          0   0%     0      0     0      0.00     0.00     -                       | fp:nsdemo | ",
+    "2026-10-17 pi pi-t0-work                         deepseek-v4-flash    1        462          0   0%     1      0     0      0.00     0.00     -                       |  | reviewer@seatx1 implementer@seatx1 reviewerx1 otherx2",
+    "2026-10-17 pi pi-t5-r1                           deepseek-v4-flash    3        925      2,754  75%     1      0     2      0.00     0.01     -  qwen3.6-flash:9 gemini-3.1-flash-lite:1 |  | implementer@seatx2 reviewer@seatx1",
+    "2026-10-17 pi pi-t5-r2                           deepseek-v4-flash    3        612          0   0%     1      0     0      0.00     0.00     -                       |  | ",
+    "2026-10-17 pi pi-t5-r1                           deepseek-v4-flash    2        295          0   0%     2      0     0      0.00     0.00     -                       |  | ",
+    "2026-10-17 pi pi-t5-r4                           deepseek-v4-flash    1        129        121  48%     0      0     0      0.00     0.00     -  qwen3.6-flash:1      |  | implementer@seatx1",
 ]
 PI_ROWS_DEFAULT = [
-    "2026-10-18 pi pi-synth                           deepseek-v4-flash    3       250      340  58%     2      1     2      2.25     3.25     3  qwen3.6-flash:1 gemini-3.1-flash-lite:1 | fp:design-spec,fp:verify-done | implementer@seatx1 reviewer@seatx1",
-    "2026-10-18 pi (orphan) pi-synth                  ?                    0         0       60 100%     0      0     0      0.00     1.00     -  qwen3.6-flash:1      |  | ",
+    "2026-10-18 pi pi-synth                           deepseek-v4-flash    3        250        340  58%     2      1     2      2.25     3.25     3  qwen3.6-flash:1 gemini-3.1-flash-lite:1 | fp:design-spec,fp:verify-done | implementer@seatx1 reviewer@seatx1",
+    "2026-10-18 pi (orphan) pi-synth                  ?                    0          0         60 100%     0      0     0      0.00     1.00     -  qwen3.6-flash:1      |  | ",
 ]
 # flat: main 8+462+925+612+295+129 = 2,431; sub 2,754+121 = 2,875 (54.2%); edits 1+1+1+2 = 5; sub 2;
 # spend ≈ $0.02; spawns seat 2+3+1 = 6, (unset) 3. default: main 250, sub 340+60 = 400 (61.5%); spend
@@ -869,21 +889,89 @@ fork(D69C, "2026-10-19T10-00-00-000Z_fork-1.jsonl", "FORK-1",
 fork(os.path.join(forks, "2026-10-19T10-00-00-000Z_fork-1.jsonl"), "2026-10-19T11-00-00-000Z_fork-2.jsonl", "FORK-2",
      [dict(amsg(out=3, cost=0.25), id="new00003")], ts="2026-10-19T11:00:00.000Z",
      parent="/elsewhere/2026-10-19T10-00-00-000Z_fork-1.jsonl")
-# a clone of 850c copies its fablepowers-child entries: the children stay with 850c.
+# an unused clone of 850c copies its fablepowers-child entries: the children stay with 850c, and the
+# clone, with no entries of its own and no descendants, has no row.
 fork(P850C, "2026-10-19T12-00-00-000Z_clone-3.jsonl", "CLONE-3", [], ts="2026-10-19T12:00:00.000Z")
-# a same-id entry in an unrelated session (no parentSession) is counted: dedup is per fork tree only.
+# dedup is store-wide by entry id: an unrelated session (no parentSession) that holds an id an earlier
+# session holds (dc1b57e8, from d69c) does not count that entry. Pi ids are 8 random hex digits checked
+# unique per file, so a true collision between unrelated sessions is negligible; this one is planted.
 pi_session(os.path.join(forks, "2026-10-19T13-00-00-000Z_unrelated.jsonl"), "UNREL",
-           [dict(amsg(out=4, cost=0.125), id="dc1b57e8")], ts="2026-10-19T13:00:00.000Z", cwd="/fixture/pi-fork")
+           [dict(amsg(out=4, cost=0.125), id="dc1b57e8"), dict(amsg(out=6, cost=0.25), id="unrel001")],
+           ts="2026-10-19T13:00:00.000Z", cwd="/fixture/pi-fork")
 got_f, note_f = read_p(forks)
 PI_FORKS = PI_FLAT + [
     pi("2026-10-19", "pi-fork", {"m-main": 1}, 1, 5, [0.5], [], [], 1, 0,
        [("user", "go on"), ("edit", "/fixture/pi-fork/f9.py")], []),
     pi("2026-10-19", "pi-fork", {"m-main": 1}, 0, 3, [0.25], [], [], 0, 0, [], []),
-    pi("2026-10-19", "pi-fork", {}, 0, 0, [], [], [], 0, 0, [], []),
-    pi("2026-10-19", "pi-fork", {"m-main": 1}, 0, 4, [0.125], [], [], 0, 0, [], []),
+    pi("2026-10-19", "pi-fork", {"m-main": 1}, 0, 6, [0.25], [], [], 0, 0, [], []),
 ]
 same("pi forks: originals unchanged, each fork counts only its own entries", got_f, PI_FORKS)
 check("pi forks: no note", note_f is None, note_f)
+
+
+# Store-wide dedup: an entry id is counted once, in the earliest session (header timestamp, then file
+# name) that holds it, whichever `parentSession` files exist. S -> F1 -> F2: S has 600 out (100 with an
+# edit, 200, 300) and $0.6, F1 adds 7, F2 adds 11. Before this rule a deleted F1 made F2 618. File names sort against the timestamps (F2's first),
+# so the owner comes from the header timestamp, not the file name.
+def chain(d, keep):
+    S = [dict(umsg("start"), id="s0000001"), dict(amsg(("edit", {"path": "f"}), out=100, cost=0.1), id="s0000002"),
+         dict(amsg(out=200, cost=0.2), id="s0000003"), dict(amsg(out=300, cost=0.3), id="s0000004")]
+    F1 = S + [dict(amsg(out=7, cost=0.007), id="f1000001")]
+    F2 = F1 + [dict(amsg(out=11, cost=0.011), id="f2000001")]
+    for name, sid, entries, ts in (("c-s.jsonl", "S", S, "2026-10-22T09:00:00.000Z"),
+                                   ("b-f1.jsonl", "F1", F1, "2026-10-22T10:00:00.000Z"),
+                                   ("a-f2.jsonl", "F2", F2, "2026-10-22T11:00:00.000Z")):
+        if sid in keep:
+            pi_session(os.path.join(d, name), sid, entries, ts=ts, cwd="/w/pi-chain")
+            if sid != "S":  # parentSession names the direct source, which may be gone
+                with open(os.path.join(d, name)) as fh:
+                    lines = fh.read().splitlines()
+                h = json.loads(lines[0]); h["parentSession"] = os.path.join(d, "c-s.jsonl" if sid == "F1" else "b-f1.jsonl")
+                with open(os.path.join(d, name), "w") as fh:
+                    fh.write("\n".join([json.dumps(h)] + lines[1:]) + "\n")
+    return read_p(d)[0]
+
+
+def outs(rows):
+    return [(r["out"], round(r["cost"], 10), r["edits"], r["user_turns"]) for r in sorted(rows, key=lambda r: r["out"])]
+
+
+for label, keep, want in (("all present", ("S", "F1", "F2"), [(7, 0.007, 0, 0), (11, 0.011, 0, 0), (600, 0.6, 1, 1)]),
+                          # F1's own +7 now exists only in F2's copy: counted once, there; S's 600 is not repeated.
+                          ("middle link F1 deleted", ("S", "F2"), [(18, 0.018, 0, 0), (600, 0.6, 1, 1)]),
+                          ("source S deleted", ("F1", "F2"), [(11, 0.011, 0, 0), (607, 0.607, 1, 1)])):
+    got_c = chain(os.path.join(work, "pi-chain-" + "".join(keep)), keep)
+    check(f"pi fork chain, {label}: each entry counted once, in its earliest session", outs(got_c) == want, outs(got_c))
+
+# Same header timestamp: the file name breaks the tie. Both hold entry `same0001` (5 out).
+tie = os.path.join(work, "pi-tie")
+pi_session(os.path.join(tie, "b.jsonl"), "TB", [dict(amsg(out=5, cost=0.5), id="same0001"), dict(amsg(out=2, cost=0.25), id="tb000001")],
+           ts="2026-10-22T09:00:00.000Z")
+pi_session(os.path.join(tie, "a.jsonl"), "TA", [dict(amsg(out=5, cost=0.5), id="same0001"), dict(amsg(out=1, cost=0.125), id="ta000001")],
+           ts="2026-10-22T09:00:00.000Z")
+got_t = read_p(tie)[0]
+check("pi dedup tie on timestamp: the earlier file name owns the shared entry",
+      [(r["out"], r["cost"]) for r in got_t] == [(6, 0.625), (2, 0.25)], [(r["out"], r["cost"]) for r in got_t])
+# A header without a timestamp has no row; it holds a copy of TA's shared entry and sorts first by
+# name, but undated sessions own nothing ahead of dated ones, so the rows above do not change.
+with open(os.path.join(tie, "0.jsonl"), "w") as fh:
+    fh.write(json.dumps({"type": "session", "id": "UNDATED"}) + "\n"
+             + json.dumps(dict(amsg(out=5, cost=0.5), id="same0001")) + "\n")
+got_t = read_p(tie)[0]
+check("pi dedup: an undated session owns no entry ahead of dated ones",
+      [(r["out"], r["cost"]) for r in got_t] == [(6, 0.625), (2, 0.25)], [(r["out"], r["cost"]) for r in got_t])
+
+# A root with no counted entries is left out unless it has descendants (OpenCode's rule): an empty
+# session is dropped, an empty parent of a child with work is kept (the clone case is CLONE-3 above).
+emp = os.path.join(work, "pi-empty")
+pi_session(os.path.join(emp, "a.jsonl"), "EMPTY", [], ts="2026-10-22T09:00:00.000Z", cwd="/w/pi-empty")
+pi_session(os.path.join(emp, "b.jsonl"), "EMPTY-P", [], ts="2026-10-22T09:01:00.000Z", cwd="/w/pi-empty")
+pi_session(os.path.join(emp, CH, "EMPTY-P", "c.jsonl"), "KID", [amsg(model="m-k", out=5, cost=0.5)], ts="2026-10-22T09:02:00.000Z", cwd="/w/pi-empty")
+pi_session(os.path.join(emp, "d.jsonl"), "ONLY-USER", [umsg("hi")], ts="2026-10-22T09:03:00.000Z", cwd="/w/pi-empty")
+got_e = read_p(emp)[0]
+same("pi empty roots: dropped unless they have descendants; a user message counts", got_e, [
+    pi("2026-10-22", "pi-empty", {}, 0, 0, [], [], [], 0, 0, [], [psub({"m-k": 1}, 5, [0.5], 0)]),
+    pi("2026-10-22", "pi-empty", {}, 1, 0, [0.0], [], [], 0, 0, [("user", "hi")], [])])
 
 # approval_gap: an `approved` event counts as a user turn; nothing else new counts.
 check("approval_gap counts `approved` events like user turns",

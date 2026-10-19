@@ -683,10 +683,10 @@ def scan_pi(path, skip=frozenset()):
     """One Pi session file (every entry, abandoned branches included). Out = Σ
     usage.output, cost = Σ usage.cost.total (fsum); edits and spawns count attempts.
     Approval results become `approved` events; `fablepowers-child` entries map
-    child session ids to this session. Entries whose id is in `skip` (copied
-    from the session this one was forked from) are not counted."""
+    child session ids to this session. Entries whose id is in `skip` (held by an
+    earlier session, e.g. copied into a fork) are not counted."""
     s = dict(models=collections.Counter(), out=0, cost=0.0, user_turns=0, skills=[], edits=0, bash_writes=0,
-             seq=[], spawns=[], children=[])
+             seq=[], spawns=[], children=[], messages=0)
     costs = []
 
     def skill(name):
@@ -710,6 +710,7 @@ def scan_pi(path, skip=frozenset()):
             continue
         if t != "message":
             continue
+        s["messages"] += 1
         m = o.get("message") or {}
         if m.get("role") == "user":
             text = text_of(m.get("content"))
@@ -760,11 +761,15 @@ def read_pi(a):
     Descendants at any depth roll up into the root's subs; children whose root
     is missing go to one `(orphan)` record per missing parent.
 
-    A fork or clone (`/fork`, `/clone`) is a new session whose header names its
-    source file in `parentSession` and which repeats the source's entries with
-    their entry ids. Those copies belong to the source: the fork counts only the
-    entries it added, so a fork tree counts each entry once. A fork whose source
-    file is not found (matched by path, else by file name) counts every entry."""
+    A fork or clone (`/fork`, `/clone`) is a new session that repeats its
+    source's entries with their entry ids (its header's `parentSession` names
+    the source file, which is not needed here). Each entry id is counted once in
+    the whole store, in the earliest session holding it (header timestamp, then
+    file name, then path), so nothing is counted twice even when a fork's source
+    or a middle link of the chain was deleted. Pi's ids are 8 random hex
+    digits, unique per file only, so an unrelated session sharing an id loses
+    that entry; the chance is negligible. A root with no counted message entries
+    (an unused clone) and no descendants is left out, as on OpenCode."""
     base = a.pi_sessions
     if not os.path.isdir(base):
         return [], f"no pi logs at {base}"
@@ -779,14 +784,13 @@ def read_pi(a):
                 continue
             up = os.path.dirname(f)
             par = os.path.basename(up) if os.path.basename(os.path.dirname(up)) == CHILDREN_DIR else None
-            src = h.get("parentSession") if isinstance(h.get("parentSession"), str) else None
-            sess[h["id"]] = dict(path=f, ts=(h.get("timestamp") or "")[:10], proj=path_project(h.get("cwd")), par=par,
-                                 src=src)
-    by_path = {os.path.abspath(x["path"]): x["path"] for x in sess.values()}
-    by_name = {os.path.basename(x["path"]): x["path"] for x in sess.values()}
-    for sid, x in sess.items():
-        src = x["src"] and (by_path.get(os.path.abspath(x["src"])) or by_name.get(os.path.basename(x["src"])))
-        x["scan"] = scan_pi(x["path"], pi_entry_ids(src) if src and src != x["path"] else frozenset())
+            ts = h.get("timestamp") if isinstance(h.get("timestamp"), str) else ""
+            sess[h["id"]] = dict(path=f, start=ts, ts=ts[:10], proj=path_project(h.get("cwd")), par=par)
+    seen = set()  # entry ids already held by an earlier session; undated headers go last
+    for x in sorted(sess.values(), key=lambda x: (not x["start"], x["start"], os.path.basename(x["path"]), x["path"])):
+        ids = pi_entry_ids(x["path"])
+        x["scan"] = scan_pi(x["path"], frozenset(ids & seen))
+        seen |= ids
     for sid, x in sess.items():  # the parent's entry wins over the directory
         for c in x["scan"]["children"]:
             if c in sess and c != sid:
@@ -816,6 +820,8 @@ def read_pi(a):
         if x["par"] is not None or not x["ts"] or (a.since and x["ts"] < a.since):
             continue
         s = x["scan"]
+        if not s["messages"] and not groups.get(sid):
+            continue
         rows.append(dict(harness="pi", ts=x["ts"], proj=x["proj"], models=s["models"], user_turns=s["user_turns"],
                          out=s["out"], cost=s["cost"], skills=s["skills"], spawns=s["spawns"], edits=s["edits"],
                          bash_writes=s["bash_writes"], seq=s["seq"], subs=subs_of(groups.get(sid, []))))
@@ -923,9 +929,10 @@ def print_multi(rows, notes, selected):
     """One date-sorted table with a harness column, a summary line per harness, an
     `all` line, then the legend. Costs print with 2 decimals (`-` = not recorded),
     and are summed with fsum so the totals do not depend on file order. Model
-    cells drop provider prefixes; the `main` cell is 18 wide, longer ids are cut."""
+    cells drop provider prefixes; the `main` cell is 18 wide, longer ids are cut.
+    mainOut and subOut are 10 wide (up to 99,999,999 aligned)."""
     rows = sorted(rows, key=lambda s: s["ts"])
-    print(f"{'date':10} {'h':2} {'project':34} {'main':18} {'usr':>3} {'mainOut':>9} {'subOut':>8} {'sub%':>4} {'mEdit':>5} {'mBashW':>6} {'sEdit':>5} {'$main':>9} {'$sub':>8} {'apprv':>5}  sub-models | skills | spawns")
+    print(f"{'date':10} {'h':2} {'project':34} {'main':18} {'usr':>3} {'mainOut':>10} {'subOut':>10} {'sub%':>4} {'mEdit':>5} {'mBashW':>6} {'sEdit':>5} {'$main':>9} {'$sub':>8} {'apprv':>5}  sub-models | skills | spawns")
     sub_out_by_model = collections.Counter()
     for s in rows:
         so = sum(x["out"] for x in s["subs"]); se = sum(x["edits"] for x in s["subs"])
@@ -938,7 +945,7 @@ def print_multi(rows, notes, selected):
         skills = ",".join(dict.fromkeys(k.replace("superpowers:", "sp:").replace("fablepowers:", "fp:") for k in s["skills"]))
         spawns = " ".join(f"{k}x{v}" for k, v in collections.Counter(f"{x['role']}" + (f"@{x['model']}" if x["model"] else "") for x in s["spawns"]).items())
         ag = approval_gap(s["seq"]); ag = "-" if ag is None else str(ag)
-        print(f"{s['ts']:10} {s['harness']:2} {s['proj']:34} {mm} {s['user_turns']:3d} {s['out']:9,d} {so:8,d} {pct:>4} {s['edits']:5d} {s['bash_writes']:6d} {se:5d} {money(s['cost'], 9)} {money(sub_cost(s), 8)} {ag:>5}  {' '.join(f'{model_cell(k)}:{v}' for k, v in sm.most_common(2)):20} | {skills} | {spawns}")
+        print(f"{s['ts']:10} {s['harness']:2} {s['proj']:34} {mm} {s['user_turns']:3d} {s['out']:10,d} {so:10,d} {pct:>4} {s['edits']:5d} {s['bash_writes']:6d} {se:5d} {money(s['cost'], 9)} {money(sub_cost(s), 8)} {ag:>5}  {' '.join(f'{model_cell(k)}:{v}' for k, v in sm.most_common(2)):20} | {skills} | {spawns}")
 
     print()
     for name in selected:

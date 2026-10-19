@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-10-07T09:30:00.000Z","message":{"role":"user","content":"placeholder text"}}
+{"type":"assistant","timestamp":"2026-10-07T09:30:01.000Z","message":{"role":"assistant","model":"claude-sonnet-5","usage":{"input_tokens":1000000,"output_tokens":6000},"content":[{"type":"tool_use","id":"toolu_edit","name":"Edit","input":{"file_path":"/fixture/beta/src/f2.py"}},{"type":"tool_use","id":"toolu_write","name":"Write","input":{"file_path":"/fixture/beta/src/f3.py"}}]}}

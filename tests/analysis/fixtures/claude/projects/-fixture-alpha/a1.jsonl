@@ -1,0 +1,4 @@
+{"type":"user","timestamp":"2026-10-12T14:00:00.000Z","message":{"role":"user","content":"placeholder text"}}
+{"type":"assistant","timestamp":"2026-10-12T14:01:00.000Z","message":{"role":"assistant","model":"claude-sonnet-5","usage":{"input_tokens":50000,"output_tokens":1500},"content":[{"type":"tool_use","id":"toolu_skill","name":"Skill","input":{"skill":"fablepowers:verify-done"}},{"type":"tool_use","id":"toolu_skill","name":"Skill","input":{"skill":"superpowers:brainstorming"}},{"type":"tool_use","id":"toolu_skill","name":"Skill","input":{"skill":"fablepowers:verify-done"}}]}}
+{"type":"user","timestamp":"2026-10-12T14:02:00.000Z","message":{"role":"user","content":"placeholder text"}}
+{"type":"assistant","timestamp":"2026-10-12T14:03:00.000Z","message":{"role":"assistant","model":"claude-sonnet-5","usage":{"output_tokens":500},"content":[{"type":"tool_use","id":"toolu_bash","name":"Bash","input":{"command":"ls -la"}}]}}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-session delegation analysis for Claude Code session logs.
+"""Per-session delegation analysis for Claude Code, Codex, OpenCode and Pi session logs.
 
 Answers one question: when you ran this workflow, who actually did the work --
 the orchestrator in the main loop, or the subagents it dispatched?
@@ -17,12 +17,22 @@ transcript with its subagent transcripts and reports, per session:
   * skills invoked, and whether design-spec's approval checkpoint got a user turn
   * a rough $ estimate per session (see PRICE below)
 
+Each harness has a reader that yields the same session record (see
+`read_claude`); one printer shows them. `--harness claude` prints exactly the
+Claude-only report this script printed before it read other harnesses, so
+earlier audits stay reproducible. Any other selection (the default is `all`)
+prints one date-sorted table with a harness column (cc, cx, oc, pi), then one
+summary line per harness and an `all` line. A harness with no logs on this
+machine is skipped with a note.
+
 Usage:
-    python3 scripts/analyze_delegation.py [--since YYYY-MM-DD] [--projects-dir DIR]
+    python3 scripts/analyze_delegation.py [--harness all|claude,codex,opencode,pi]
+        [--since YYYY-MM-DD] [--projects-dir DIR] [--codex-home DIR]
+        [--opencode-db FILE] [--pi-sessions DIR]
 
 Stdlib only.
 """
-import argparse, collections, glob, json, os, re
+import argparse, collections, glob, json, math, os, re
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 # $/MTok: input, cache_write, cache_read, output.
@@ -164,12 +174,20 @@ def approval_gap(seq):
     return sum(1 for k, _ in after[:stop] if k == "user")
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--projects-dir", default=os.path.expanduser("~/.claude/projects"))
-    ap.add_argument("--since", default=None, help="only sessions whose first timestamp is >= this date (default: all)")
-    a = ap.parse_args()
+# --harness names -> the short code in the record's `harness` field and the `h` column.
+HARNESSES = {"claude": "cc", "codex": "cx", "opencode": "oc", "pi": "pi"}
 
+
+def read_claude(a):
+    """Claude Code reader: one record per main transcript, in sorted path order.
+
+    A record is a dict: harness, ts (YYYY-MM-DD), proj, models (Counter of
+    main-loop model ids), user_turns, out, cost (float, or None where the harness
+    records no price), skills, spawns ([{role, model}]), edits, bash_writes,
+    seq (approval-gap events) and subs ([{models, out, cost, edits}]).
+    Every reader returns (records, note) -- note is None or one line for the summary."""
+    if not os.path.isdir(a.projects_dir):
+        return [], f"no claude logs at {a.projects_dir}"
     rows = []
     for main in sorted(glob.glob(os.path.join(a.projects_dir, "*", "*.jsonl"))):
         if "/memory/" in main:
@@ -177,11 +195,47 @@ def main():
         s = scan_main(main)
         if not s["ts"] or (a.since and s["ts"] < a.since):
             continue
+        s["harness"] = "cc"
         s["proj"] = short_project(os.path.basename(os.path.dirname(main)))
         s["subs"] = scan_subs(os.path.join(os.path.dirname(main), os.path.basename(main)[:-6]))
         rows.append(s)
+    return rows, None
 
-    short = lambda m: (m or "?").replace("claude-", "")
+
+def read_codex(a):
+    return [], "not implemented"
+
+
+def read_opencode(a):
+    return [], "not implemented"
+
+
+def read_pi(a):
+    return [], "not implemented"
+
+
+READERS = {"claude": read_claude, "codex": read_codex, "opencode": read_opencode, "pi": read_pi}
+
+
+def harness_list(value):
+    """`all`, or a comma list of harness names -> the selected names in canonical order."""
+    names = [n.strip() for n in value.split(",")]
+    if "all" in names:
+        names = [n for n in names if n != "all"] + list(HARNESSES)
+    bad = [n for n in names if n not in HARNESSES]
+    if bad or not names:
+        raise argparse.ArgumentTypeError(
+            f"unknown harness {', '.join(repr(n) for n in bad) or repr(value)} (choose from all, {', '.join(HARNESSES)})")
+    return [n for n in HARNESSES if n in names]
+
+
+short = lambda m: (m or "?").replace("claude-", "")
+LEGEND = "approval-gap column: user turns between design-spec and first implementation action ('-' = no design-spec; 0 with an AskUserQuestion approval still counts as approved — check the ASK text)"
+
+
+def print_claude_only(rows, since):
+    """The pre-multi-harness report, byte for byte: path order, unsorted subagent
+    glob order, the same summation order and the blank line when nothing was output."""
     print(f"{'date':10} {'project':34} {'main':10} {'usr':>3} {'mainOut':>9} {'subOut':>8} {'sub%':>4} {'mEdit':>5} {'mBashW':>6} {'sEdit':>5} {'$main':>6} {'$sub':>5} {'apprv':>5}  sub-models | skills | spawns")
     T = collections.Counter(); sub_models = collections.Counter(); sub_out_by_model = collections.Counter(); spawn_model = collections.Counter()
     for s in rows:
@@ -204,13 +258,101 @@ def main():
             T["main_msgs_" + short(k)] += v
 
     tot = T["main_out"] + T["sub_out"]
-    print(f"\nsessions: {len(rows)} (since {a.since})" if a.since else f"\nsessions: {len(rows)} (all dates)")
+    print(f"\nsessions: {len(rows)} (since {since})" if since else f"\nsessions: {len(rows)} (all dates)")
     print(f"output tokens: main-loop {T['main_out']:,}  subagents {T['sub_out']:,}  subagent share {T['sub_out'] / tot:.1%}" if tot else "")
     print(f"file edits: main-loop Edit/Write {T['main_edits']}  main-loop Bash writes {T['main_bashw']}  subagent Edit/Write {T['sub_edits']}")
     print(f"est. spend: main-loop ${T['main_cost']:,.0f}  subagents ${T['sub_cost']:,.0f}")
     print("Agent spawn `model` param:", dict(spawn_model))
     print("subagent output tokens by actual model:", {short(k): f"{v:,}" for k, v in sub_out_by_model.most_common()})
-    print("approval-gap column: user turns between design-spec and first implementation action ('-' = no design-spec; 0 with an AskUserQuestion approval still counts as approved — check the ASK text)")
+    print(LEGEND)
+
+
+def sub_cost(s):
+    """Sum of the subagents' recorded/estimated costs; None when neither the session
+    nor any subagent carries a cost (Codex logs no price)."""
+    known = [x["cost"] for x in s["subs"] if x["cost"] is not None]
+    if not known and s["cost"] is None:
+        return None
+    return math.fsum(known)
+
+
+def money(v, width):
+    return f"{'-':>{width}}" if v is None else f"{v:{width}.2f}"
+
+
+def summary_line(label, rows):
+    mo = sum(s["out"] for s in rows); so = sum(x["out"] for s in rows for x in s["subs"])
+    me = sum(s["edits"] for s in rows); sh = sum(s["bash_writes"] for s in rows)
+    se = sum(x["edits"] for s in rows for x in s["subs"])
+    costs = [c for s in rows for c in [s["cost"]] + [x["cost"] for x in s["subs"]] if c is not None]
+    spend = f"${math.fsum(costs):,.2f}" if costs else "n/a"
+    share = f"{100 * so / (mo + so):.1f}" if mo + so else "-"
+    spawns = collections.Counter(sp["model"] or "(unset)" for s in rows for sp in s["spawns"])
+    return (f"{label} sessions {len(rows)}  out main {mo:,} sub {so:,} ({share}% sub)  edits main {me} shell {sh} sub {se}"
+            f"  spend {spend}  spawns {dict(spawns)}")
+
+
+def print_multi(rows, notes, selected):
+    """One date-sorted table with a harness column, a summary line per harness, an
+    `all` line, then the legend. Costs print with 2 decimals (`-` = not recorded),
+    and are summed with fsum so the totals do not depend on file order."""
+    rows = sorted(rows, key=lambda s: s["ts"])
+    print(f"{'date':10} {'h':2} {'project':34} {'main':10} {'usr':>3} {'mainOut':>9} {'subOut':>8} {'sub%':>4} {'mEdit':>5} {'mBashW':>6} {'sEdit':>5} {'$main':>6} {'$sub':>5} {'apprv':>5}  sub-models | skills | spawns")
+    sub_out_by_model = collections.Counter()
+    for s in rows:
+        so = sum(x["out"] for x in s["subs"]); se = sum(x["edits"] for x in s["subs"])
+        sm = collections.Counter()
+        for x in s["subs"]:
+            sm.update(x["models"])
+            for k in x["models"]: sub_out_by_model[k] += x["out"]
+        pct = f"{so / (so + s['out']):.0%}" if so + s["out"] else "-"
+        # Provider prefixes (opencode/…, deepseek/…) would push the 10-wide column out.
+        mm = short(s["models"].most_common(1)[0][0]).rsplit("/", 1)[-1] if s["models"] else "?"
+        skills = ",".join(dict.fromkeys(k.replace("superpowers:", "sp:").replace("fablepowers:", "fp:") for k in s["skills"]))
+        spawns = " ".join(f"{k}x{v}" for k, v in collections.Counter(f"{x['role']}" + (f"@{x['model']}" if x["model"] else "") for x in s["spawns"]).items())
+        ag = approval_gap(s["seq"]); ag = "-" if ag is None else str(ag)
+        print(f"{s['ts']:10} {s['harness']:2} {s['proj']:34} {mm:10} {s['user_turns']:3d} {s['out']:9,d} {so:8,d} {pct:>4} {s['edits']:5d} {s['bash_writes']:6d} {se:5d} {money(s['cost'], 6)} {money(sub_cost(s), 5)} {ag:>5}  {' '.join(f'{short(k)}:{v}' for k, v in sm.most_common(2)):20} | {skills} | {spawns}")
+
+    print()
+    for name in selected:
+        h = HARNESSES[name]
+        mine = [s for s in rows if s["harness"] == h]
+        if mine or not notes.get(name):
+            print(summary_line(h, mine))
+        if notes.get(name):
+            print(f"{h} note: {notes[name]}")
+    print(summary_line("all", rows))
+    print("subagent output tokens by actual model:", {short(k): f"{v:,}" for k, v in sub_out_by_model.most_common()})
+    print(LEGEND)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--harness", type=harness_list, default="all",
+                    help="all (default), or a comma list of: " + ", ".join(HARNESSES)
+                    + ". `claude` alone prints the legacy Claude-only report.")
+    ap.add_argument("--projects-dir", default=os.path.expanduser("~/.claude/projects"))
+    ap.add_argument("--codex-home", default=os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"),
+                    help="Codex home; rollouts are read from its sessions/ (default: $CODEX_HOME or ~/.codex)")
+    ap.add_argument("--opencode-db", default=os.path.join(
+                        os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "opencode", "opencode.db"),
+                    help="OpenCode SQLite db, opened read-only (default: $XDG_DATA_HOME/opencode/opencode.db or ~/.local/share/opencode/opencode.db)")
+    ap.add_argument("--pi-sessions", default=os.environ.get("PI_CODING_AGENT_SESSION_DIR") or os.path.join(
+                        os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent"), "sessions"),
+                    help="Pi sessions dir (default: $PI_CODING_AGENT_SESSION_DIR, else $PI_CODING_AGENT_DIR/sessions or ~/.pi/agent/sessions)")
+    ap.add_argument("--since", default=None, help="only sessions whose first timestamp is >= this date (default: all)")
+    a = ap.parse_args()
+
+    rows, notes = [], {}
+    for name in a.harness:
+        recs_, note = READERS[name](a)
+        rows.extend(recs_)
+        if note:
+            notes[name] = note
+    if a.harness == ["claude"]:
+        print_claude_only(rows, a.since)
+    else:
+        print_multi(rows, notes, a.harness)
 
 
 if __name__ == "__main__":

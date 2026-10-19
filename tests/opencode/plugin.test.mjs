@@ -817,7 +817,7 @@ test('npm pack --dry-run lists exactly the intended files', { skip: spawnSync('n
   const want = [...git, 'opencode/index.js', 'index.js', 'package.json', 'README.md', 'LICENSE', 'NOTICE', 'hooks/session-start', 'hooks/approval_gate.py'].sort();
   assert.deepEqual(got, [...new Set(want)].sort());
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  assert.equal(pkg.version, '0.7.0');
+  assert.equal(pkg.version, '0.7.1');
   assert.equal(pkg.type, 'module');
   assert.equal(pkg.main, 'opencode/index.js');
 });

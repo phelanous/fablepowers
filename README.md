@@ -426,35 +426,78 @@ bash tests/hooks/test-session-start.sh                  # SessionStart hook, inc
 bash tests/hooks/test-approval-gate.sh                  # approval gate hook, launcher and hooks.json wiring
 bash tests/opencode/run.sh                              # OpenCode plugin (node --test; skips without node)
 bash tests/pi/run.sh                                    # Pi extension (node --test; skips without node)
+bash tests/analysis/test-analyze.sh                      # delegation analysis, all four readers
+bash tests/analysis/test-fixture-privacy.sh              # analysis fixtures carry no private data
 ```
 
 ## Measuring it
 
-The workflow's own claims are measurable, and the script that produced the
-numbers in `docs/rationale.md` ships with the plugin:
+The workflow's own claims are measurable. The script that produced the numbers
+in `docs/rationale.md` is in the repo (`scripts/`; it is not part of the npm
+package that OpenCode and Pi install):
 
 ```
-python3 scripts/analyze_delegation.py --since 2026-08-01
+python3 scripts/analyze_delegation.py                      # every harness with logs here
+python3 scripts/analyze_delegation.py --harness claude --since 2026-08-01
 ```
 
-It reads Claude Code's session transcripts under `~/.claude/projects`
-(`--projects-dir` to point elsewhere; `--since YYYY-MM-DD` to window, default is
-all sessions), pairs each session with its own subagent transcripts, and prints
-one row per session plus a summary. Stdlib only, read-only.
+It reads the session logs of Claude Code, Codex, OpenCode and Pi, pairs each
+session with its own subagent sessions, and prints one row per session plus a
+summary. Stdlib only (`sqlite3` for OpenCode), read-only: it never writes to a
+harness's log store.
+
+| Harness | `h` | Read from | Override |
+|---|---|---|---|
+| Claude Code | `cc` | `~/.claude/projects` | `--projects-dir` |
+| Codex | `cx` | `<codex home>/sessions/YYYY/MM/DD/*.jsonl` (`$CODEX_HOME` or `~/.codex`) | `--codex-home` |
+| OpenCode | `oc` | `~/.local/share/opencode/opencode.db` (`$XDG_DATA_HOME` honoured), opened `mode=ro`, safe while the server runs | `--opencode-db` |
+| Pi | `pi` | `~/.pi/agent/sessions` (`$PI_CODING_AGENT_SESSION_DIR`, else `$PI_CODING_AGENT_DIR/sessions`), both the default `--<cwd>--` and the flat `--session-dir` layout | `--pi-sessions` |
+
+`--harness` selects: `all` (the default) or a comma list of `claude`, `codex`,
+`opencode`, `pi`. `--since YYYY-MM-DD` keeps sessions whose start date (UTC) is
+on or after it, on every harness; a subagent session goes with its root.
+
+`--harness claude` alone prints the Claude-only report exactly as the script
+printed it before 0.7.1, byte for byte, so earlier audits stay comparable; use
+it to reproduce the numbers in `docs/rationale.md`. Any other selection prints
+one date-sorted table with an `h` column after the date, then one summary line
+per harness, an `all` line, and the legend:
+
+```
+cc sessions N  out main X sub Y (Z% sub)  edits main A shell B sub C  spend $S  spawns {model: count, …}
+…
+all sessions N  out main X sub Y (Z% sub)  edits main A shell B sub C  spend $S  spawns {…}
+```
+
+A harness with no logs on this machine prints `<h> note: no <harness> logs at
+<path>` instead of a summary, never an error. Other notes: Codex `.jsonl.zst`
+rollouts are skipped (zstd is not in the stdlib) and counted in a note.
 
 | Column | Meaning |
 |---|---|
+| `h` | harness (multi-harness layout only) |
+| `project` | the session's working directory, `<repo>/<worktree>` for a worktree. `(orphan) <project>` collects subagent sessions whose root session is missing from the logs. |
 | `usr` | user turns in the session |
-| `mainOut` / `subOut` / `sub%` | output tokens produced by the orchestrator vs by its subagents, and the subagents' share. **This is the headline number**: work that stays in the main loop shows up here as a low `sub%`. |
-| `mEdit` / `mBashW` / `sEdit` | who edited files — orchestrator Edit/Write calls, orchestrator writes smuggled through Bash heredocs and `sed -i`, and subagent Edit/Write calls |
-| `$main` / `$sub` | rough cost estimate from the usage records (see the pricing note in the script; it is a June 2026 snapshot) |
-| `apprv` | user turns between `design-spec` and the first implementation action. `-` means no design-spec. `0` is worth reading the transcript for. |
+| `mainOut` / `subOut` / `sub%` | output tokens produced by the orchestrator vs by its subagents (any depth), and the subagents' share. **This is the headline number**: work that stays in the main loop shows up here as a low `sub%`. On every harness the figure includes reasoning tokens (OpenCode records them separately and they are added). |
+| `mEdit` / `mBashW` / `sEdit` | who edited files — orchestrator edit tool calls, orchestrator writes smuggled through shell heredocs and `sed -i`, and subagent edit tool calls |
+| `$main` / `$sub` | cost. Claude Code: a rough estimate from the usage records and the price table in the script (a June 2026 snapshot; unknown models count 0). OpenCode and Pi: the cost the harness recorded. Codex records none: `-` in the row, and `spend n/a` in its summary line. The `all` spend sums only the costs that exist. |
+| `apprv` | user turns between `design-spec` and the first implementation action. `-` means no design-spec. `0` is worth reading the transcript for. On Pi an approval recorded by the gate counts as the approving turn, as `/fablepowers:approve` does elsewhere. |
 | `sub-models` | the model each subagent actually ran on |
-| `skills` | skills invoked, in order |
-| `spawns` | agent spawns by inferred role, annotated with the `model` param. **`(unset)` in the summary line means the subagent silently inherited the orchestrator's model** — that is the defect this plugin's pinned-model agents exist to fix. |
+| `skills` | skills loaded, in order, fablepowers or not |
+| `spawns` | agent spawns by inferred role, annotated with the requested model. `seat` means a fablepowers seat dispatch on a harness whose seats are pinned by config (OpenCode, Pi) — the model is whatever `models.toml` pins for that seat. **`(unset)` in the summary line means a non-seat subagent silently inherited the orchestrator's model** — that is the defect this plugin's pinned-model agents exist to fix. |
+
+Edits and spawns count attempts: every edit or spawn tool call the model made,
+including ones that failed or were denied, as the Claude reader always did.
 
 Useful before/after comparison: run it on a window from before you installed
-this, then on a window after.
+this, then on a window after; across harnesses, compare `sub%`, the
+`(unset)`/`seat` split and `apprv` per harness.
+
+The test fixtures under `tests/analysis/fixtures/` are built from real spike
+sessions by an allowlist sanitiser (`scripts/sanitize_fixture.py`): structure,
+model ids, tool names and token and cost numbers are kept; prompts, code,
+paths, account ids and other projects' sessions are not, and
+`tests/analysis/test-fixture-privacy.sh` fails if any of that appears.
 
 ## Migrating
 

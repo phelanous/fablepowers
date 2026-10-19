@@ -8,7 +8,10 @@
 #     (ANALYZE_REAL=1; the copy is about 1 GB, so not on every run);
 #   * the default (`all`) layout: harness column, date-sorted rows, per-harness
 #     summary lines, the `all` line and the legend, in their exact format;
-#   * --harness parsing: comma lists, canonical order, unknown names rejected.
+#   * --harness parsing: comma lists, canonical order, unknown names rejected;
+#   * the Codex reader: exact record dicts and printed rows for every Codex
+#     fixture, --since by UTC start date, and rollouts written by the test for
+#     the rules the real fixtures do not exercise.
 #
 # Expected values come from tests/analysis/fixtures/README.md (hand-derived).
 # Usage: tests/analysis/test-analyze.sh   (needs python3 and git)
@@ -163,6 +166,187 @@ check("cost None: spend n/a for cx, $ for pi, all sums only recorded costs",
       " spend n/a " in lines[4] and lines[4].startswith("cx sessions 1 ") and " spend $3.35 " in lines[5]
       and lines[6].startswith("all sessions 2 ") and " spend $3.35 " in lines[6], buf.getvalue())
 check("main model column drops the provider prefix", lines[1].split()[3] == "deepseek-v4-flash", buf.getvalue())
+
+# --- Codex reader ---------------------------------------------------------------------------
+# Expected values: tests/analysis/fixtures/README.md (Codex table), hand-derived, with the
+# orchestrator rulings applied (agent_type -> role; edits/spawns count attempts).
+import argparse, json, shutil
+codex_home = os.path.join(repo, "tests", "analysis", "fixtures", "codex")
+PH, IMP, REV = "placeholder text", "implement placeholder", "review placeholder"
+
+
+def sub(model, out, edits, n=1):
+    return dict(models={model: n}, out=out, cost=None, edits=edits)
+
+
+def cx(ts, proj, models, usr, out, skills, spawns, edits, bw, seq, subs):
+    return dict(harness="cx", ts=ts, proj=proj, models=models, user_turns=usr, out=out, cost=None, skills=skills,
+                spawns=[dict(role=r, model=m) for r, m in spawns], edits=edits, bash_writes=bw, seq=seq, subs=subs)
+
+
+L, T, S6 = "gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-luna"
+CX_EXPECTED = [
+    # 67db (v2): agent_type fp-implementer -> implementer, no model passed; depth-2 grandchild 85ec rolled up.
+    cx("2026-10-15", "codex-repo", {S6: 1}, 1, 264, [], [("implementer", None)], 0, 0, [("user", IMP)],
+       [sub(T, 344, 0), sub(T, 19, 0)]),
+    # 88c2: one FileChange (code file), request_user_input -> ask.
+    cx("2026-10-15", "codex-repo", {S6: 1}, 1, 157, [], [], 1, 0,
+       [("user", IMP), ("edit", "/fixture/codex-repo/f6.txt"), ("ask", "")], []),
+    # c958 (v1): skills from sed reads; spawns from CollabAgentToolCall, roles from the children's first
+    # UserMessage (heuristic: "implement…" / "placeholder text"); one apply_patch attempt with no
+    # FileChange counts as an edit (attempts), likewise in child eaed.
+    cx("2026-10-15", "codex2-repo", {L: 1}, 1, 960, ["fablepowers:workflow", "fablepowers:subagent-execution"],
+       [("implementer", L), ("other", L)], 1, 0,
+       [("user", REV), ("skill", "workflow"), ("skill", "subagent-execution"), ("edit", "")],
+       [sub(L, 218, 1), sub(L, 5, 0)]),
+    # 3129 (v1): the child's first UserMessage starts `fablepowers-seat: reviewer`.
+    cx("2026-10-15", "codex-port-t0-repo", {L: 1}, 1, 339, [], [("reviewer", L)], 1, 0,
+       [("user", REV), ("edit", "/fixture/codex-port-t0-repo/docs/specs/f6.md")], [sub(L, 6, 0)]),
+    # 0374 (compaction): out 103 from thread_token_usage (the last token_count total is 27);
+    # `$fablepowers:approve` selected twice; the second UserMessage has only a skill item.
+    cx("2026-10-15", "codex-port-t0-repo", {S6: 5}, 3, 103, ["fablepowers:approve", "fablepowers:approve"], [], 0, 0,
+       [("user", PH + " "), ("skill", "approve"), ("user", ""), ("skill", "approve"), ("user", PH)], []),
+    # 3524 (v2): 5 spawns from task names; implementer_t1 has no child rollout.
+    cx("2026-10-17", "codex-r1", {S6: 4}, 4, 4026,
+       ["fablepowers:approve", "fablepowers:implementation-plan", "fablepowers:subagent-execution",
+        "fablepowers:behavioral-testing", "fablepowers:integration-review"],
+       [("implementer", S6), ("reviewer", S6), ("reviewer", S6), ("implementer", S6), ("implementer", S6)], 3, 0,
+       [("user", REV), ("edit", "/fixture/codex-r1/docs/specs/f6.md"), ("user", REV),
+        ("user", "$fablepowers:approve\n" + PH), ("skill", "approve"), ("skill", "implementation-plan"),
+        ("skill", "subagent-execution"), ("skill", "behavioral-testing"), ("edit", "/fixture/codex-r1/docs/plans/f9.md"),
+        ("edit", "/fixture/codex-r1/docs/plans/f9.md"), ("skill", "integration-review"), ("user", IMP)],
+       [sub(S6, 6, 0), sub(S6, 1143, 0), sub(S6, 835, 1), sub(S6, 142, 0)]),
+    # synthetic root: gap 3; the catalogue stub is absent here and the truncated last line is skipped.
+    cx("2026-10-18", "cx-synth", {"gpt-6-sol": 1}, 5, 600, ["fablepowers:design-spec"], [("reviewer", S6)], 2, 1,
+       [("user", PH), ("skill", "design-spec"), ("user", PH), ("ask", ""), ("user", PH),
+        ("edit", "/fixture/cx-synth/docs/specs/f1.md"), ("user", PH), ("edit", "bash-write"),
+        ("edit", "/fixture/cx-synth/src/f2.py"), ("user", PH)],
+       [sub(S6, 450, 1)]),
+    # orphan: parent …ff is missing.
+    cx("2026-10-18", "(orphan) cx-synth", {}, 0, 0, [], [], 0, 0, [], [sub(S6, 70, 0)]),
+]
+
+
+def plain(r):
+    r = dict(r, models=dict(r["models"]), seq=[tuple(x) for x in r["seq"]],
+             subs=[dict(x, models=dict(x["models"])) for x in r["subs"]])
+    return r
+
+
+def read_cx(home, since=None):
+    return ad.read_codex(argparse.Namespace(codex_home=home, since=since))
+
+
+got, note = read_cx(codex_home)
+check("codex: 7 roots + 1 orphan record, in path order", len(got) == len(CX_EXPECTED), f"{len(got)} records")
+for i, (g, e) in enumerate(zip(got, CX_EXPECTED)):
+    g = plain(g)
+    check(f"codex record {i} ({e['proj']} {e['ts']}): exact dict", g == e,
+          "\n".join(f"  {k}: got {g.get(k)!r}\n  {' ' * len(k)}  exp {e[k]!r}" for k in e if g.get(k) != e[k]))
+check("codex: .zst rollout skipped with a note", note == "1 .jsonl.zst rollout(s) skipped (zstd is not in the stdlib)", note)
+check("codex: approval gap 3 on the synthetic root, '-' elsewhere",
+      [ad.approval_gap(r["seq"]) for r in got] == [None] * 6 + [3, None], [ad.approval_gap(r["seq"]) for r in got])
+
+CX_ROWS = [
+    "2026-10-15 cx codex-repo                         gpt-6-luna   1       264      363  58%     0      0     0      -     -     -  gpt-5.6-terra:2      |  | implementerx1",
+    "2026-10-15 cx codex-repo                         gpt-6-luna   1       157        0   0%     1      0     0      -     -     -                       |  | ",
+    "2026-10-15 cx codex2-repo                        gpt-5.6-luna   1       960      223  19%     1      0     1      -     -     -  gpt-5.6-luna:2       | fp:workflow,fp:subagent-execution | implementer@gpt-5.6-lunax1 other@gpt-5.6-lunax1",
+    "2026-10-15 cx codex-port-t0-repo                 gpt-5.6-luna   1       339        6   2%     1      0     0      -     -     -  gpt-5.6-luna:1       |  | reviewer@gpt-5.6-lunax1",
+    "2026-10-15 cx codex-port-t0-repo                 gpt-6-luna   3       103        0   0%     0      0     0      -     -     -                       | fp:approve | ",
+    "2026-10-17 cx codex-r1                           gpt-6-luna   4     4,026    2,126  35%     3      0     1      -     -     -  gpt-6-luna:4         | fp:approve,fp:implementation-plan,fp:subagent-execution,fp:behavioral-testing,fp:integration-review | implementer@gpt-6-lunax3 reviewer@gpt-6-lunax2",
+    "2026-10-18 cx cx-synth                           gpt-6-sol    5       600      450  43%     2      1     1      -     -     3  gpt-6-luna:1         | fp:design-spec | reviewer@gpt-6-lunax1",
+    "2026-10-18 cx (orphan) cx-synth                  ?            0         0       70 100%     0      0     0      -     -     -  gpt-6-luna:1         |  | ",
+]
+# main 264+157+960+339+103+4026+600 = 6,449; sub 363+223+6+2126+450+70 = 3,238 (33.4%);
+# edits 1+1+1+3+2 = 8, shell 1, sub 1+1+1 = 3; spawns (unset) 1, gpt-5.6-luna 3, gpt-6-luna 6.
+CX_SUM = ("sessions 8  out main 6,449 sub 3,238 (33.4% sub)  edits main 8 shell 1 sub 3  spend n/a  "
+          "spawns {'(unset)': 1, 'gpt-5.6-luna': 3, 'gpt-6-luna': 6}")
+r = run(new, "--harness", "codex", "--codex-home", codex_home)
+lines = r.stdout.decode().split("\n")
+check("codex printed: header and exact rows", r.returncode == 0 and r.stderr == b"" and lines[0] == f"date       h  {HEADER_TAIL}"
+      and lines[1:9] == CX_ROWS, "\n".join(f"got {a!r}\nexp {b!r}" for a, b in zip(lines[1:9], CX_ROWS) if a != b) + r.stderr.decode())
+check("codex printed: summary, note, all line", lines[9:13] == ["", "cx " + CX_SUM, "cx note: " + note, "all " + CX_SUM],
+      "\n".join(lines[9:13]))
+
+# --since uses the session's UTC start date: 67db/88c2 live in the local-date dir 2026/10/14 but start 10-15.
+got15, _ = read_cx(codex_home, "2026-10-15")
+check("codex --since 2026-10-15 keeps sessions from the 10/14 directory", [plain(g) for g in got15] == CX_EXPECTED,
+      [(g["ts"], g["proj"]) for g in got15])
+got16, _ = read_cx(codex_home, "2026-10-16")
+check("codex --since 2026-10-16: root 3524, synthetic root and the orphan", [plain(g) for g in got16] == CX_EXPECTED[5:],
+      [(g["ts"], g["proj"]) for g in got16])
+
+nocx = os.path.join(work, "no-codex")
+check("codex: missing home -> no records and a note",
+      read_cx(nocx) == ([], f"no codex logs at {os.path.join(nocx, 'sessions')}"), read_cx(nocx))
+
+# --- Codex rules the real fixtures do not exercise: rollouts written here -------------------
+def rollout(home, name, rid, records, parent=None, src=None, ts="2026-10-20T10:00:00.000Z"):
+    d = os.path.join(home, "sessions", "2026", "10", "20"); os.makedirs(d, exist_ok=True)
+    source = src if src is not None else (
+        {"subagent": {"thread_spawn": {"parent_thread_id": parent, "depth": 1}}} if parent else "exec")
+    with open(os.path.join(d, f"rollout-{name}-{rid}.jsonl"), "w") as fh:
+        fh.write(json.dumps({"type": "session_meta", "payload": {"id": rid, "timestamp": ts, "cwd": "/w/repo/.claude/worktrees/wt",
+                                                                 "source": source}}) + "\n")
+        for t, p in records:
+            fh.write(json.dumps({"type": t, "payload": p}) + "\n")
+
+
+def item(it):
+    return ("event_msg", {"type": "item_completed", "item": it})
+
+
+synth = os.path.join(work, "cx-synth-home")
+rollout(synth, "a", "r1", [
+    ("turn_context", {"model": "m-main"}),
+    # v1 exec: two JS spawns, one CollabAgentToolCall -> the second is an attempt with the JS literal's model
+    # and seat. The first takes its role from child k1's `fablepowers-seat:` line (the prompt heuristic would
+    # say reviewer for both).
+    ("response_item", {"type": "custom_tool_call", "name": "exec", "call_id": "c1",
+                       "input": 'tools.multi_agent_v1__spawn_agent({model: "m-a", message: "review it"});'
+                                ' tools.multi_agent_v1__spawn_agent({model: "m-b", message: "fablepowers-seat: strict-implementer\\nreview notes"})'}),
+    item({"type": "CollabAgentToolCall", "tool": "spawn_agent", "model": "m-a", "receiver_thread_ids": ["k1"]}),
+    ("response_item", {"type": "custom_tool_call_output", "call_id": "c1"}),
+    # a top-level apply_patch (older CLIs) that never ran: counted, with its file from the patch header.
+    ("response_item", {"type": "custom_tool_call", "name": "apply_patch", "call_id": "c2",
+                       "input": "*** Begin Patch\n*** Update File: docs/plans/p.md\n*** End Patch"}),
+    ("response_item", {"type": "custom_tool_call_output", "call_id": "c2"}),
+    # one FileChange with two files is two edits.
+    item({"type": "FileChange", "changes": {"docs/specs/s.md": {"type": "add"}, "src/x.py": {"type": "update"}}}),
+    # v2 spawn: the role comes from the child's agent_role when neither agent_type nor task_name names a seat.
+    ("response_item", {"type": "function_call", "name": "spawn_agent", "call_id": "c3",
+                       "arguments": json.dumps({"task_name": "probe", "message": "x"})}),
+    # v2 spawn whose child never started: agent_type alone names the role.
+    ("response_item", {"type": "function_call", "name": "spawn_agent", "call_id": "c4",
+                       "arguments": json.dumps({"agent_type": "fp-strict-implementer", "task_name": "gone", "model": "m-d",
+                                                "message": "review x"})}),
+    # a shell read of a non-fablepowers SKILL.md is listed bare; `rg` over a SKILL.md is not a read.
+    item({"type": "CommandExecution", "command": ["bash", "-lc", "rg foo /x/skills/other/SKILL.md; nl -ba /x/skills/mine/SKILL.md"]}),
+    # no token_usage_record: fall back to the last token_count total.
+    ("event_msg", {"type": "token_count", "info": {"total_token_usage": {"output_tokens": 5}}}),
+    ("event_msg", {"type": "token_count", "info": {"total_token_usage": {"output_tokens": 9}}}),
+])
+rollout(synth, "b", "k1", [("turn_context", {"model": "m-a"}),
+                           item({"type": "UserMessage", "content": [{"type": "text", "text": "fablepowers-seat: implementer\nreview it"}]})],
+        parent="r1")
+rollout(synth, "c", "k2", [("turn_context", {"model": "m-c"})], src={"subagent": {"thread_spawn": {
+    "parent_thread_id": "r1", "agent_path": "/root/probe", "agent_role": "fp-reviewer"}}})
+rollout(synth, "d", "k3", [], src={"subagent": "review"})
+got, note = read_cx(synth)
+g = plain(got[0]) if got else {}
+check("codex synthetic: one root", len(got) == 1, [x["proj"] for x in got])
+check("codex synthetic: spawns -- JS attempt without a CollabAgentToolCall (literal model + seat), child seat line, child agent_role, agent_type",
+      g.get("spawns") == [dict(role="implementer", model="m-a"), dict(role="implementer", model="m-b"),
+                          dict(role="reviewer", model=None), dict(role="implementer", model="m-d")], g.get("spawns"))
+check("codex synthetic: a top-level apply_patch attempt is an edit of the patched file; a FileChange counts its files",
+      g.get("edits") == 3 and [x for x in g.get("seq", []) if x[0] == "edit"]
+      == [("edit", "docs/plans/p.md"), ("edit", "docs/specs/s.md"), ("edit", "src/x.py")], g)
+check("codex synthetic: only read verbs load a skill; non-fablepowers skills listed bare", g.get("skills") == ["mine"], g.get("skills"))
+check("codex synthetic: out falls back to the last token_count total", g.get("out") == 9, g.get("out"))
+check("codex synthetic: worktree cwd -> repo/worktree", g.get("proj") == "repo/wt", g.get("proj"))
+check("codex synthetic: subs are k1 and k2", [s["models"] for s in g.get("subs", [])] == [{"m-a": 1}, {"m-c": 1}], g.get("subs"))
+check("codex synthetic: a non-spawn subagent rollout is skipped with a note",
+      note == "1 non-spawn subagent rollout(s) skipped", note)
 
 # --- --harness parsing ---------------------------------------------------------------------
 r = run(new, "--projects-dir", fixtures, *nowhere, "--harness", "pi,claude")

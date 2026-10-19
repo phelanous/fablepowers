@@ -202,8 +202,275 @@ def read_claude(a):
     return rows, None
 
 
+def path_project(cwd, width=34):
+    """A session's working directory -> project name: the basename, or
+    `<repo>/<worktree>` for a Claude worktree (as `short_project` renders it)."""
+    parts = (cwd or "").rstrip("/").split("/")
+    name = parts[-1] if parts and parts[-1] else "?"
+    if len(parts) >= 4 and parts[-3:-1] == [".claude", "worktrees"]:
+        name = parts[-4] + "/" + name
+    return name if len(name) <= width else ".." + name[-(width - 2):]
+
+
+SEAT_ROLES = (("reviewer", "reviewer"), ("implementer", "implementer"))  # strict_implementer contains implementer
+
+
+def seat_role(name):
+    """A fablepowers seat or task name (`fp-reviewer`, `Fablepowers.Reviewer-T0`,
+    `fablepowers_strict_implementer_t2`) -> its role, or None."""
+    n = re.sub(r"[.\-\s]", "_", (name or "").lower())
+    return next((r for k, r in SEAT_ROLES if k in n), None)
+
+
+FP_AGENT = re.compile(r"(fp|fablepowers)[-_:]")  # fablepowers agent types: fp-implementer, fablepowers-reviewer
+SEAT_LINE = re.compile(r"^\s*fablepowers-seat:\s*([A-Za-z0-9_.-]+)")
+ROLE_FILE = re.compile(r"(?:agents|roles)/(?:fp-|fablepowers-)?(strict-implementer|implementer|reviewer)\.(?:md|toml)")
+SKILL_READ = re.compile(r"\S*?skills/([A-Za-z0-9_-]+)/SKILL\.md")
+READ_VERBS = {"cat", "sed", "head", "tail", "nl", "less", "more", "bat"}
+CX_SELECTED = re.compile(r"<skill>\s*<name>([^<\s]+)</name>")
+PATCH_FILE = re.compile(r"\*\*\* (?:Add|Update|Delete) File: ([^\n\\\"']+)")
+JS_CALL = re.compile(r"tools\.([A-Za-z0-9_]+)\(")
+JS_MODEL = re.compile(r"model\s*:\s*[\"']([^\"']+)[\"']")
+
+
+def text_role(text):
+    """A dispatch prompt's role: its `fablepowers-seat:` first line, a role-file
+    reference, else the prompt-text heuristic."""
+    m = SEAT_LINE.match(text or "")
+    r = seat_role(m.group(1)) if m else None
+    if r is None:
+        m = ROLE_FILE.search(text or "")
+        r = seat_role(m.group(1)) if m else None
+    return r or role(text or "")
+
+
+def cx_skill_reads(cmd):
+    """SKILL.md files a shell command reads (cat/sed/head/... -- not ls/rg/find)."""
+    out = []
+    for seg in re.split(r"&&|\|\||;|\||\n", cmd or ""):
+        words = seg.split()
+        if not words or os.path.basename(words[0]) not in READ_VERBS:
+            continue
+        for m in SKILL_READ.finditer(seg):
+            out.append(("fablepowers:" if "fablepowers" in m.group(0) else "") + m.group(1))
+    return out
+
+
+def cx_meta(path):
+    """The rollout's first record (session_meta) -> its payload, or None."""
+    try:
+        with open(path, errors="replace") as fh:
+            o = json.loads(fh.readline())
+    except (OSError, ValueError):
+        return None
+    return o.get("payload") if isinstance(o, dict) and o.get("type") == "session_meta" else None
+
+
+def spawn_info(meta):
+    """session_meta.source.subagent.thread_spawn, or {}."""
+    src = meta.get("source")
+    sub_ = src.get("subagent") if isinstance(src, dict) else None
+    return (sub_.get("thread_spawn") if isinstance(sub_, dict) else None) or {}
+
+
+def cx_parent(meta):
+    """Parent thread id of a spawned child; None for a root; False for a subagent
+    rollout that was not spawned by a thread (review, compact)."""
+    src = meta.get("source")
+    if not isinstance(src, dict) or "subagent" not in src:
+        return None
+    return spawn_info(meta).get("parent_thread_id") or False
+
+
+def scan_codex(path):
+    """One rollout, streamed. Edits and spawns count attempts (calls made), with
+    FileChange / CollabAgentToolCall items supplying the files and models of the
+    calls that ran; output = the last thread_token_usage (survives compaction)."""
+    s = dict(models=collections.Counter(), out=0, user_turns=0, skills=[], edits=0, bash_writes=0, seq=[],
+             spawns=[], first_user=None)
+    thread_out = usage_sum = tc_total = None
+    win = None  # the open tool call: attempted patches/spawns not yet matched by an item
+
+    def close():
+        nonlocal win
+        if win:
+            for p in win["patches"]:
+                s["edits"] += 1; s["seq"].append(("edit", p))
+            for m in win["spawns"]:
+                s["spawns"].append(dict(m, child=None))
+        win = None
+
+    for o in recs(path):
+        t, p = o.get("type"), o.get("payload") or {}
+        if t == "turn_context":
+            if p.get("model"):
+                s["models"][p["model"]] += 1
+        elif t == "token_usage_record":
+            u = (p.get("usage") or {}).get("output_tokens") or 0
+            usage_sum = (usage_sum or 0) + u
+            if (p.get("thread_token_usage") or {}).get("output_tokens") is not None:
+                thread_out = p["thread_token_usage"]["output_tokens"]
+        elif t == "event_msg" and p.get("type") == "token_count" and p.get("info"):
+            tc_total = ((p["info"].get("total_token_usage") or {}).get("output_tokens"))
+        elif t == "response_item" and p.get("type") in ("custom_tool_call", "function_call"):
+            close()
+            name, win = p.get("name") or "", dict(id=p.get("call_id"), patches=[], spawns=[])
+            if p.get("type") == "custom_tool_call":
+                body = p.get("input") or ""
+                if name == "apply_patch":
+                    win["patches"] = [(PATCH_FILE.findall(body) or [""])[0]]
+                calls = list(JS_CALL.finditer(body))
+                for m, nxt in zip(calls, calls[1:] + [None]):
+                    js = body[m.end():nxt.start() if nxt else len(body)]  # this call's arguments, roughly
+                    if m.group(1) == "apply_patch":
+                        win["patches"].append((PATCH_FILE.findall(js) or [""])[0])
+                    elif m.group(1).endswith("spawn_agent"):
+                        mm = JS_MODEL.search(js)
+                        seat = re.search(r"fablepowers-seat:\s*([A-Za-z0-9_.-]+)", js)
+                        win["spawns"].append(dict(model=mm.group(1) if mm else None,
+                                                  role=seat_role(seat.group(1)) if seat else None, msg=js))
+                    elif m.group(1) == "request_user_input":
+                        s["seq"].append(("ask", ""))
+            else:
+                try:
+                    args = json.loads(p.get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                args = args if isinstance(args, dict) else {}
+                if name in ("spawn_agent", "collaborationspawn_agent", "multi_agent_v1__spawn_agent"):
+                    at, task = args.get("agent_type") or "", args.get("task_name") or ""
+                    r = (seat_role(at) if FP_AGENT.match(at) else None) or seat_role(task)
+                    win["spawns"].append(dict(model=args.get("model"), role=r, task=task,
+                                              msg=args.get("message") or args.get("prompt") or ""))
+                elif name == "apply_patch":
+                    win["patches"].append((PATCH_FILE.findall(args.get("input") or "") or [""])[0])
+            if name == "request_user_input":
+                s["seq"].append(("ask", ""))
+        elif t == "response_item" and p.get("type") in ("custom_tool_call_output", "function_call_output"):
+            if win and win["id"] == p.get("call_id"):
+                close()
+        elif t == "response_item" and p.get("type") == "message" and p.get("role") == "user":
+            kinds = (p.get("internal_chat_message_metadata_passthrough") or {}).get("content_item_kinds") or []
+            if "skills.selected_skill_instructions" in kinds:
+                for x in p.get("content") or []:
+                    for n in CX_SELECTED.findall(x.get("text") or "" if isinstance(x, dict) else ""):
+                        s["skills"].append(n); s["seq"].append(("skill", bare_skill(n)))
+        elif t == "event_msg" and p.get("type") == "item_completed":
+            it = p.get("item") or {}
+            k = it.get("type")
+            if k == "UserMessage":
+                tx = " ".join(x.get("text") or "" for x in it.get("content") or [] if isinstance(x, dict))
+                s["user_turns"] += 1; s["seq"].append(("user", tx[:60]))
+                if s["first_user"] is None:
+                    s["first_user"] = tx
+            elif k == "FileChange":
+                if win and win["patches"]:
+                    win["patches"].pop(0)
+                for f in it.get("changes") or {}:
+                    s["edits"] += 1; s["seq"].append(("edit", f))
+            elif k == "CommandExecution":
+                cmd = it.get("command")
+                cmd = cmd[-1] if isinstance(cmd, list) and cmd else cmd if isinstance(cmd, str) else ""
+                for n in cx_skill_reads(cmd):
+                    s["skills"].append(n); s["seq"].append(("skill", bare_skill(n)))
+                if WRITE_RE.search(cmd):
+                    s["bash_writes"] += 1; s["seq"].append(("edit", "bash-write"))
+            elif k == "CollabAgentToolCall" and it.get("tool") == "spawn_agent":
+                att = win["spawns"].pop(0) if win and win["spawns"] else {}
+                s["spawns"].append(dict(att, model=it.get("model") or att.get("model"), role=att.get("role"),
+                                        child=(it.get("receiver_thread_ids") or [None])[0],
+                                        prompt=it.get("prompt") or ""))
+    close()
+    s["out"] = thread_out if thread_out is not None else usage_sum if usage_sum is not None else (tc_total or 0)
+    return s
+
+
 def read_codex(a):
-    return [], "not implemented"
+    """Codex reader: one record per root rollout under <codex home>/sessions.
+
+    Children (spawned threads, any depth) are rolled up into their root's subs;
+    children whose root is missing go to one `(orphan)` record per missing
+    parent. Cost is None (Codex logs no price). `.jsonl.zst` rollouts are skipped
+    with a note."""
+    base = os.path.join(a.codex_home, "sessions")
+    if not os.path.isdir(base):
+        return [], f"no codex logs at {base}"
+    files, zst = [], 0
+    for d, _, names in os.walk(base):
+        for n in names:
+            if n.endswith(".jsonl"):
+                files.append(os.path.join(d, n))
+            elif n.endswith(".jsonl.zst"):
+                zst += 1
+    meta, other = {}, 0
+    for f in sorted(files):
+        m = cx_meta(f)
+        if not m or not m.get("id"):
+            continue
+        par = cx_parent(m)
+        if par is False:
+            other += 1
+            continue
+        meta[m["id"]] = (f, m, par)
+
+    def root_of(tid):
+        seen = set()
+        while meta[tid][2] is not None:
+            if meta[tid][2] not in meta or tid in seen:
+                return None, meta[tid][2]
+            seen.add(tid); tid = meta[tid][2]
+        return tid, None
+
+    groups = collections.defaultdict(list)  # root id or ("orphan", missing parent) -> child ids
+    for tid, (_, _, par) in meta.items():
+        if par is not None:
+            r, missing = root_of(tid)
+            groups[r if r else ("orphan", missing)].append(tid)
+    date = lambda m: (m.get("timestamp") or "")[:10]
+    rows = []
+
+    def subs_of(kids):
+        out, scans = [], {}
+        for c in sorted(kids, key=lambda c: meta[c][0]):
+            sc = scans[c] = scan_codex(meta[c][0])
+            out.append(dict(models=sc["models"], out=sc["out"], cost=None, edits=sc["edits"]))
+        return out, scans
+
+    for tid, (f, m, par) in sorted(meta.items(), key=lambda kv: kv[1][0]):
+        if par is not None or not date(m) or (a.since and date(m) < a.since):
+            continue
+        s = scan_codex(f)
+        subs, scans = subs_of(groups.get(tid, []))
+        # A v2 child names its spawn call's task in agent_path (`/root/<task_name>`).
+        by_task = {spawn_info(meta[c][1]).get("agent_path", "").rsplit("/", 1)[-1]: c
+                   for c in groups.get(tid, []) if meta[c][2] == tid and spawn_info(meta[c][1]).get("agent_path")}
+        for sp in s["spawns"]:
+            if sp.get("role") is None:  # no seat in agent_type / task_name / the JS literal
+                child = sp.get("child") or by_task.get(sp.get("task"))
+                agent_role = spawn_info(meta[child][1]).get("agent_role") or "" if child in meta else ""
+                text = (scans[child]["first_user"] if child in scans else None) or sp.get("prompt") or sp.get("msg") or ""
+                sp["role"] = (seat_role(agent_role) if FP_AGENT.match(agent_role) else None) or text_role(text)
+        rows.append(dict(harness="cx", ts=date(m), proj=path_project(m.get("cwd")), models=s["models"],
+                         user_turns=s["user_turns"], out=s["out"], cost=None, skills=s["skills"],
+                         spawns=[dict(role=x["role"], model=x["model"]) for x in s["spawns"]], edits=s["edits"],
+                         bash_writes=s["bash_writes"], seq=s["seq"], subs=subs))
+    for key in sorted((k for k in groups if isinstance(k, tuple)), key=lambda k: min(meta[c][0] for c in groups[k])):
+        kids = groups[key]
+        first = min(kids, key=lambda c: (meta[c][1].get("timestamp") or "", meta[c][0]))
+        ts = date(meta[first][1])
+        if not ts or (a.since and ts < a.since):
+            continue
+        subs, _ = subs_of(kids)
+        proj = "(orphan) " + path_project(meta[first][1].get("cwd"))
+        rows.append(dict(harness="cx", ts=ts, proj=proj if len(proj) <= 34 else proj[:32] + "..",
+                         models=collections.Counter(), user_turns=0, out=0, cost=None, skills=[], spawns=[], edits=0,
+                         bash_writes=0, seq=[], subs=subs))
+    notes = []
+    if zst:
+        notes.append(f"{zst} .jsonl.zst rollout(s) skipped (zstd is not in the stdlib)")
+    if other:
+        notes.append(f"{other} non-spawn subagent rollout(s) skipped")
+    return rows, "; ".join(notes) or None
 
 
 def read_opencode(a):

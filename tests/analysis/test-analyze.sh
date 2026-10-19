@@ -11,7 +11,11 @@
 #   * --harness parsing: comma lists, canonical order, unknown names rejected;
 #   * the Codex reader: exact record dicts and printed rows for every Codex
 #     fixture, --since by UTC start date, and rollouts written by the test for
-#     the rules the real fixtures do not exercise.
+#     the rules the real fixtures do not exercise;
+#   * the OpenCode reader: exact record dicts and printed rows for every OpenCode
+#     fixture session (both SQL files loaded into a temp db), --since, the
+#     read-only WAL-safe open (and its immutable fallback), seq order without the
+#     index, and the notes for a missing db, a db without session_v2 and a non-db.
 #
 # Expected values come from tests/analysis/fixtures/README.md (hand-derived).
 # Usage: tests/analysis/test-analyze.sh   (needs python3 and git)
@@ -347,6 +351,199 @@ check("codex synthetic: worktree cwd -> repo/worktree", g.get("proj") == "repo/w
 check("codex synthetic: subs are k1 and k2", [s["models"] for s in g.get("subs", [])] == [{"m-a": 1}, {"m-c": 1}], g.get("subs"))
 check("codex synthetic: a non-spawn subagent rollout is skipped with a note",
       note == "1 non-spawn subagent rollout(s) skipped", note)
+
+# --- OpenCode reader ------------------------------------------------------------------------
+# Expected values: tests/analysis/fixtures/README.md (OpenCode table), hand-derived from the
+# fixture rows, with the orchestrator rulings applied (attempts; every skill listed).
+import sqlite3
+oc_fx = os.path.join(repo, "tests", "analysis", "fixtures", "opencode")
+OC_SQL = "".join(open(os.path.join(oc_fx, f)).read() for f in ("sanitised.sql", "synthetic.sql"))
+
+
+def oc_db(path, wal=False):
+    """Load both fixture files into a new db; with wal=True the connection stays open
+    and nothing is checkpointed, so every row lives only in the -wal file."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    con = sqlite3.connect(path)
+    if wal:
+        con.execute("PRAGMA journal_mode=WAL"); con.execute("PRAGMA wal_autocheckpoint=0")
+    con.executescript(OC_SQL)
+    if wal:
+        return con
+    con.close()
+
+
+def read_oc(db, since=None):
+    return ad.read_opencode(argparse.Namespace(opencode_db=db, since=since))
+
+
+def osub(models, out, cost, edits):
+    return dict(models=models, out=out, cost=cost, edits=edits)
+
+
+def oc(ts, proj, models, usr, out, cost, skills, spawns, edits, bw, seq, subs):
+    return dict(harness="oc", ts=ts, proj=proj, models=models, user_turns=usr, out=out, cost=cost, skills=skills,
+                spawns=[dict(role=r, model=m) for r, m in spawns], edits=edits, bash_writes=bw, seq=seq, subs=subs)
+
+
+BP, CJ, DS, MM = "big-pickle", "cat-jam-free", "deepseek-v4.1-flash-free", "mimo-v2.6-flash-free"
+R1, R2 = "/fixture/opencode-t5-r1/", "/fixture/opencode-t5-r2/"
+OC_EXPECTED = [
+    # ec1f: out = 1,082 assistant + 481 compaction output + 360 reasoning; the compaction message is a model
+    # call too (6 big-pickle messages). Both spawns pass a model, kept as requested.
+    oc("2026-10-15", "opencode-scratch-repo", {BP: 6}, 3, 1923, 0.0, [],
+       [("reviewer", "opencode/mimo-v2.6-flash-free"), ("implementer", "opencode/nemotron-3.5-lightning-free")], 0, 0,
+       [("user", REV), ("user", "/compact\n" + PH), ("user", IMP)],
+       [osub({MM: 1}, 224, 0.0, 0), osub({MM: 1}, 25, 0.0, 0)]),
+    # ebd5: session_v2 says 795 + 383 = 1,178; messages say 1,160. `general` and the fp-seat-* test agents are
+    # not fablepowers seats: role heuristic on "placeholder text" -> other, no model -> None. The `explore`
+    # call at seq 71 carries input.sessionID: a resume, not a spawn. fp-probe:base is listed (ruling).
+    oc("2026-10-16", "opencode-t0-repo", {BP: 10}, 2, 1160, 0.0, ["fp-probe:base"],
+       [("other", None)] * 3, 2, 0,
+       [("user", PH), ("edit", "/fixture/opencode-t0-repo/docs/specs/f1.md"),
+        ("edit", "/fixture/opencode-t0-repo/docs/specs/f1.md"), ("skill", "base"), ("user", "explore placeholder")],
+       [osub({BP: 3}, 80, 0.0, 1), osub({CJ: 1}, 26, 0.0, 0), osub({CJ: 1}, 25, 0.0, 0)]),
+    # ebcf: 11 edit attempts (4 errored), 5 spawn attempts (1 errored), every one a seat -> `seat`.
+    oc("2026-10-16", "opencode-t5-r1", {BP: 36}, 3, 7750, 0.0,
+       ["fablepowers:implementation-plan", "fablepowers:subagent-execution", "fablepowers:integration-review",
+        "fablepowers:verify-done"],
+       [("implementer", "seat"), ("reviewer", "seat"), ("reviewer", "seat"), ("implementer", "seat"), ("reviewer", "seat")],
+       11, 0,
+       [("user", REV), ("edit", R1 + "docs/specs/f1.md"), ("user", PH), ("edit", R1 + "docs/plans/f3.md"),
+        ("edit", R1 + "f2.py"), ("edit", R1 + "f4"), ("edit", R1 + "f5.json"), ("edit", R1 + "f6.json"),
+        ("user", "/fablepowers:approve\n" + IMP), ("skill", "implementation-plan"), ("edit", R1 + "docs/plans/f8.md"),
+        ("edit", R1 + "docs/plans/f8.md"), ("edit", R1 + "docs/plans/f8.md"), ("skill", "subagent-execution"),
+        ("edit", R1 + "f10.md"), ("skill", "integration-review"), ("edit", R1 + "f10.md"), ("skill", "verify-done")],
+       [osub({CJ: 1}, 29, 0.0, 0), osub({CJ: 5}, 898, 0.0, 1), osub({DS: 10}, 3813, 0.0, 4), osub({CJ: 4}, 651, 0.0, 0)]),
+    # ebcec: the `synthetic` approval notice at seq 64 is not a user turn; `question` -> ask.
+    oc("2026-10-16", "opencode-t5-r2", {BP: 34}, 2, 10215, 0.0,
+       ["fablepowers:implementation-plan", "fablepowers:subagent-execution", "fablepowers:integration-review",
+        "fablepowers:verify-done", "fablepowers:finishing-a-development-branch"],
+       [("implementer", "seat"), ("reviewer", "seat"), ("implementer", "seat"), ("reviewer", "seat")], 7, 0,
+       [("user", PH), ("edit", R2 + "docs/specs/f1.md"), ("ask", ""), ("user", IMP), ("edit", R2 + "docs/specs/f2.md"),
+        ("skill", "implementation-plan"), ("edit", R2 + "docs/plans/f5.md"), ("edit", R2 + "docs/plans/f5.md"),
+        ("edit", R2 + "docs/plans/f5.md"), ("skill", "subagent-execution"), ("edit", R2 + "f7.md"),
+        ("skill", "integration-review"), ("edit", R2 + "f7.md"), ("skill", "verify-done"),
+        ("skill", "finishing-a-development-branch")],
+       [osub({CJ: 6}, 1812, 0.0, 1), osub({DS: 12}, 4121, 0.0, 5), osub({CJ: 5}, 1083, 0.0, 1)]),
+    # synthetic root (rows inserted out of seq order): out 240 + 85 (session_v2 999 + 111), cost 1.25 + 0.5 +
+    # 0.75 + 0 (session_v2 9.99). Spawns: seat, `general` with "review" in its description, a seat with a
+    # requested model; the second implementer call resumes Impl001. Grandchild01 (depth 2) is rolled up.
+    oc("2026-10-18", "oc-synth", {BP: 3, "gpt-oss-fixture": 1}, 4, 325, 2.5, ["fablepowers:design-spec"],
+       [("implementer", "seat"), ("reviewer", None), ("reviewer", "opencode/cat-jam-free")], 2, 1,
+       [("user", PH), ("skill", "design-spec"), ("user", PH), ("ask", ""), ("edit", "/fixture/oc-synth/docs/specs/f1.md"),
+        ("user", "/fablepowers:approve"), ("edit", "/fixture/oc-synth/src/f2.py"), ("edit", "bash-write"), ("user", PH)],
+       [osub({DS: 1}, 250, 1.5, 2), osub({BP: 1}, 30, 0.25, 1), osub({BP: 1}, 10, 0.0, 0), osub({CJ: 1}, 50, 1.0, 0)]),
+    # orphan: Orphan00001's parent …MissingPar01 is absent.
+    oc("2026-10-18", "(orphan) oc-synth", {}, 0, 0, 0.0, [], [], 0, 0, [], [osub({CJ: 1}, 60, 1.0, 0)]),
+]
+
+oc_path = os.path.join(work, "oc", "fixture.db")
+oc_db(oc_path)
+got, note = read_oc(oc_path)
+check("opencode: 5 roots + 1 orphan record, in start order", len(got) == len(OC_EXPECTED), f"{len(got)} records")
+for i, (g, e) in enumerate(zip(got, OC_EXPECTED)):
+    g = plain(g)
+    check(f"opencode record {i} ({e['proj']} {e['ts']}): exact dict", g == e,
+          "\n".join(f"  {k}: got {g.get(k)!r}\n  {' ' * len(k)}  exp {e[k]!r}" for k in e if g.get(k) != e[k]))
+check("opencode: no note on a readable db", note is None, note)
+check("opencode: approval gap 2 on the synthetic root, '-' elsewhere",
+      [ad.approval_gap(r["seq"]) for r in got] == [None] * 4 + [2, None], [ad.approval_gap(r["seq"]) for r in got])
+
+OC_ROWS = [
+    "2026-10-15 oc opencode-scratch-repo              big-pickle   3     1,923      249  11%     0      0     0   0.00  0.00     -  mimo-v2.6-flash-free:2 |  | reviewer@opencode/mimo-v2.6-flash-freex1 implementer@opencode/nemotron-3.5-lightning-freex1",
+    "2026-10-16 oc opencode-t0-repo                   big-pickle   2     1,160      131  10%     2      0     1   0.00  0.00     -  big-pickle:3 cat-jam-free:2 | fp-probe:base | otherx3",
+    "2026-10-16 oc opencode-t5-r1                     big-pickle   3     7,750    5,391  41%    11      0     5   0.00  0.00     -  cat-jam-free:10 deepseek-v4.1-flash-free:10 | fp:implementation-plan,fp:subagent-execution,fp:integration-review,fp:verify-done | implementer@seatx2 reviewer@seatx3",
+    "2026-10-16 oc opencode-t5-r2                     big-pickle   2    10,215    7,016  41%     7      0     7   0.00  0.00     -  deepseek-v4.1-flash-free:12 cat-jam-free:11 | fp:implementation-plan,fp:subagent-execution,fp:integration-review,fp:verify-done,fp:finishing-a-development-branch | implementer@seatx2 reviewer@seatx2",
+    "2026-10-18 oc oc-synth                           big-pickle   4       325      340  51%     2      1     3   2.50  2.75     2  big-pickle:2 deepseek-v4.1-flash-free:1 | fp:design-spec | implementer@seatx1 reviewerx1 reviewer@opencode/cat-jam-freex1",
+    "2026-10-18 oc (orphan) oc-synth                  ?            0         0       60 100%     0      0     0   0.00  1.00     -  cat-jam-free:1       |  | ",
+]
+# main 1923+1160+7750+10215+325 = 21,373; sub 249+131+5391+7016+340+60 = 13,187 (38.2%); edits 2+11+7+2 = 22,
+# shell 1, sub 1+5+7+3 = 16; spend 2.50 + 2.75 + 1.00 = 6.25; spawns in first-seen order.
+OC_SUM = ("sessions 6  out main 21,373 sub 13,187 (38.2% sub)  edits main 22 shell 1 sub 16  spend $6.25  "
+          "spawns {'opencode/mimo-v2.6-flash-free': 1, 'opencode/nemotron-3.5-lightning-free': 1, '(unset)': 4, "
+          "'seat': 10, 'opencode/cat-jam-free': 1}")
+r = run(new, "--harness", "opencode", "--opencode-db", oc_path)
+lines = r.stdout.decode().split("\n")
+check("opencode printed: header and exact rows", r.returncode == 0 and r.stderr == b"" and lines[0] == f"date       h  {HEADER_TAIL}"
+      and lines[1:7] == OC_ROWS, "\n".join(f"got {a!r}\nexp {b!r}" for a, b in zip(lines[1:7], OC_ROWS) if a != b) + r.stderr.decode())
+check("opencode printed: summary and all line", lines[7:10] == ["", "oc " + OC_SUM, "all " + OC_SUM], "\n".join(lines[7:10]))
+
+# --since compares each session's UTC start date; children go with their root, never become orphans.
+got16, _ = read_oc(oc_path, "2026-10-16")
+check("opencode --since 2026-10-16: ec1f and its two children dropped", [plain(g) for g in got16] == OC_EXPECTED[1:],
+      [(g["ts"], g["proj"]) for g in got16])
+got17, _ = read_oc(oc_path, "2026-10-17")
+check("opencode --since 2026-10-17: synthetic root and the orphan", [plain(g) for g in got17] == OC_EXPECTED[4:],
+      [(g["ts"], g["proj"]) for g in got17])
+got19, _ = read_oc(oc_path, "2026-10-19")
+check("opencode --since 2026-10-19: nothing, the orphan included", got19 == [], [(g["ts"], g["proj"]) for g in got19])
+
+# Without the (session_id, seq) index SQLite returns rows in insertion order, and the synthetic
+# root's messages were inserted out of seq order: only ORDER BY seq keeps the record (and its gap).
+noidx = os.path.join(work, "oc-noidx", "opencode.db")
+os.makedirs(os.path.dirname(noidx))
+c_ = sqlite3.connect(noidx)
+c_.executescript(re.sub(r"CREATE (UNIQUE )?INDEX[^;]*;", "", OC_SQL)); c_.close()
+got_ni, _ = read_oc(noidx)
+check("opencode: messages read in seq order, not storage order", [plain(g) for g in got_ni] == OC_EXPECTED,
+      [g["seq"] for g in got_ni[4:5]])
+
+# Read-only, WAL-safe open: every row of this db lives in the -wal of a connection that is still open
+# (OpenCode running). `immutable=1` would skip the WAL and see no tables at all.
+wal_path = os.path.join(work, "oc-wal", "opencode.db")
+writer = oc_db(wal_path, wal=True)
+got_wal, note_wal = read_oc(wal_path)
+check("opencode: rows still in the WAL of a live writer are read", [plain(g) for g in got_wal] == OC_EXPECTED and note_wal is None,
+      (len(got_wal), note_wal))
+writer.close()
+
+# The URI path is quoted: `#`, `?` and `%` in a directory name.
+odd = os.path.join(work, "a#b?c%d", "opencode.db")
+oc_db(odd)
+got_odd, note_odd = read_oc(odd)
+check("opencode: db path with # ? % is opened", len(got_odd) == 6 and note_odd is None, (len(got_odd), note_odd))
+
+real_connect, calls = sqlite3.connect, []
+
+
+def spy(fail_ro=False):
+    def connect(*args, **kw):
+        calls.append((args, kw))
+        if fail_ro and args[0].endswith("?mode=ro"):
+            raise sqlite3.OperationalError("unable to open database file")
+        return real_connect(*args, **kw)
+    return connect
+
+
+try:
+    ad.sqlite3.connect = spy()
+    read_oc(oc_path)
+    check("opencode: opened once, as a `mode=ro` URI without immutable",
+          len(calls) == 1 and calls[0][1].get("uri") is True and calls[0][0][0].endswith("?mode=ro")
+          and "immutable" not in calls[0][0][0], calls)
+    calls.clear()
+    ad.sqlite3.connect = spy(fail_ro=True)
+    got_imm, note_imm = read_oc(oc_path)
+    check("opencode: a failed read-only open falls back to immutable=1, with a note",
+          [plain(g) for g in got_imm] == OC_EXPECTED and calls[-1][0][0].endswith("?mode=ro&immutable=1")
+          and note_imm == f"opened {oc_path} immutable (read-only open failed), so rows still in its WAL are missing",
+          (calls, note_imm))
+finally:
+    ad.sqlite3.connect = real_connect
+
+noc = os.path.join(work, "no-oc.db")
+check("opencode: missing db -> no records and a note", read_oc(noc) == ([], f"no opencode logs at {noc}"), read_oc(noc))
+old_db = os.path.join(work, "oc-1x.db")
+c_ = sqlite3.connect(old_db); c_.execute("CREATE TABLE session (id text)"); c_.close()
+check("opencode: a db without session_v2 -> no records and a note",
+      read_oc(old_db) == ([], f"no session_v2 table in {old_db} (not an OpenCode 2.x db)"), read_oc(old_db))
+junk = os.path.join(work, "junk.db")
+with open(junk, "w") as fh:
+    fh.write("not a database " * 100)
+got_j, note_j = read_oc(junk)
+check("opencode: a file that is not a db -> a note, no crash",
+      got_j == [] and note_j.startswith(f"cannot read {junk} ("), note_j)
 
 # --- --harness parsing ---------------------------------------------------------------------
 r = run(new, "--projects-dir", fixtures, *nowhere, "--harness", "pi,claude")

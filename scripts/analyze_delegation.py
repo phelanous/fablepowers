@@ -32,7 +32,7 @@ Usage:
 
 Stdlib only.
 """
-import argparse, collections, glob, json, math, os, re
+import argparse, collections, datetime, glob, json, math, os, re, sqlite3, urllib.parse
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 # $/MTok: input, cache_write, cache_read, output.
@@ -473,8 +473,143 @@ def read_codex(a):
     return rows, "; ".join(notes) or None
 
 
+OC_EDIT_TOOLS = {"edit", "write"}
+
+
+def oc_open(path):
+    """Open the OpenCode db read-only -> (connection, note). `mode=ro` (not
+    `immutable`) so rows still in the WAL of a running OpenCode are read; if that
+    open fails (no -shm in a read-only dir), fall back to `immutable=1` and say so."""
+    uri = "file:" + urllib.parse.quote(os.path.abspath(path))
+    try:
+        con = sqlite3.connect(uri + "?mode=ro", uri=True)
+        con.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+        return con, None
+    except sqlite3.Error:
+        con = sqlite3.connect(uri + "?mode=ro&immutable=1", uri=True)
+        return con, f"opened {path} immutable (read-only open failed), so rows still in its WAL are missing"
+
+
+def oc_json(text):
+    try:
+        d = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def oc_model(d):
+    m = d.get("model")
+    return (m.get("id") if isinstance(m, dict) else m) or None
+
+
+def scan_opencode(con, sid):
+    """One session's messages in `seq` order. Out = output + reasoning and cost =
+    the recorded cost, both summed over assistant and compaction messages; edits
+    and spawns count attempts (every tool call, errored ones too). A `subagent`
+    call carrying `input.sessionID` resumes an existing child: not a new spawn."""
+    s = dict(models=collections.Counter(), out=0, cost=0.0, user_turns=0, skills=[], edits=0, bash_writes=0,
+             seq=[], spawns=[])
+    costs = []
+    for typ, data in con.execute("SELECT type, data FROM session_message WHERE session_id = ? ORDER BY seq", (sid,)):
+        d = oc_json(data)
+        if typ == "user":  # `synthetic` messages (gate notices, reminders) are not user turns
+            t = d.get("text") or ""
+            s["user_turns"] += 1; s["seq"].append(("user", t[:60]))
+            continue
+        if typ not in ("assistant", "compaction"):
+            continue
+        tk = d.get("tokens") or {}
+        s["out"] += (tk.get("output") or 0) + (tk.get("reasoning") or 0)
+        costs.append(d.get("cost") or 0.0)
+        if oc_model(d):
+            s["models"][oc_model(d)] += 1
+        for b in d.get("content") or []:
+            if not isinstance(b, dict) or b.get("type") != "tool":
+                continue
+            n, st = b.get("name"), b.get("state") or {}
+            i = st.get("input") if isinstance(st.get("input"), dict) else {}
+            if n == "skill":
+                s["skills"].append(i.get("id") or "?"); s["seq"].append(("skill", bare_skill(i.get("id"))))
+            elif n in OC_EDIT_TOOLS:
+                s["edits"] += 1; s["seq"].append(("edit", i.get("path") or ""))
+            elif n == "shell" and WRITE_RE.search(i.get("command") or ""):
+                s["bash_writes"] += 1; s["seq"].append(("edit", "bash-write"))
+            elif n == "question":
+                s["seq"].append(("ask", ""))
+            elif n == "subagent" and not i.get("sessionID"):
+                agent = i.get("agent") or ""
+                seat = agent.startswith("fablepowers-")
+                r = (seat_role(agent) if FP_AGENT.match(agent) else None) or role(i.get("prompt") or "", i.get("description") or "")
+                s["spawns"].append(dict(role=r, model=i.get("model") or ("seat" if seat else None)))
+    s["cost"] = math.fsum(costs)
+    return s
+
+
 def read_opencode(a):
-    return [], "not implemented"
+    """OpenCode reader: one record per root session (`session_v2.parent_id` NULL).
+
+    Descendants at any depth roll up into their root's subs; children whose root
+    is missing go to one `(orphan)` record per missing parent. Tokens and cost
+    come from `session_message`, not the `session_v2` totals (which also count
+    side calls such as title generation)."""
+    path = a.opencode_db
+    if not os.path.isfile(path):
+        return [], f"no opencode logs at {path}"
+    try:
+        con, note = oc_open(path)
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    except sqlite3.Error as e:
+        return [], f"cannot read {path} ({e})"
+    if "session_v2" not in tables or "session_message" not in tables:
+        con.close()
+        return [], f"no session_v2 table in {path} (not an OpenCode 2.x db)"
+    sess = {}
+    for sid, par, directory, created in con.execute(
+            "SELECT id, parent_id, directory, time_created FROM session_v2 ORDER BY time_created, id"):
+        ts = datetime.datetime.fromtimestamp((created or 0) / 1000, datetime.timezone.utc).strftime("%Y-%m-%d")
+        sess[sid] = dict(par=par or None, proj=path_project(directory), ts=ts)
+
+    def root_of(sid):
+        seen = set()
+        while sess[sid]["par"] is not None:
+            par = sess[sid]["par"]
+            if par not in sess or sid in seen:
+                return None, par
+            seen.add(sid); sid = par
+        return sid, None
+
+    groups = collections.defaultdict(list)  # root id or ("orphan", missing parent) -> descendant ids, in start order
+    for sid, x in sess.items():
+        if x["par"] is not None:
+            r, missing = root_of(sid)
+            groups[r if r else ("orphan", missing)].append(sid)
+
+    def subs_of(kids):
+        out = []
+        for c in kids:
+            sc = scan_opencode(con, c)
+            out.append(dict(models=sc["models"], out=sc["out"], cost=sc["cost"], edits=sc["edits"]))
+        return out
+
+    rows = []
+    for sid, x in sess.items():
+        if x["par"] is not None or (a.since and x["ts"] < a.since):
+            continue
+        s = scan_opencode(con, sid)
+        rows.append(dict(harness="oc", ts=x["ts"], proj=x["proj"], models=s["models"], user_turns=s["user_turns"],
+                         out=s["out"], cost=s["cost"], skills=s["skills"], spawns=s["spawns"], edits=s["edits"],
+                         bash_writes=s["bash_writes"], seq=s["seq"], subs=subs_of(groups.get(sid, []))))
+    for key in (k for k in groups if isinstance(k, tuple)):
+        first = sess[groups[key][0]]
+        if a.since and first["ts"] < a.since:
+            continue
+        proj = "(orphan) " + first["proj"]
+        rows.append(dict(harness="oc", ts=first["ts"], proj=proj if len(proj) <= 34 else proj[:32] + "..",
+                         models=collections.Counter(), user_turns=0, out=0, cost=0.0, skills=[], spawns=[], edits=0,
+                         bash_writes=0, seq=[], subs=subs_of(groups[key])))
+    con.close()
+    return rows, note
 
 
 def read_pi(a):

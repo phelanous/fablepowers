@@ -163,7 +163,9 @@ def scan_subs(session_dir):
 
 
 def approval_gap(seq):
-    """User turns between design-spec and the first implementation action (None if no design-spec)."""
+    """User turns between design-spec and the first implementation action (None if no design-spec).
+    An `approved` event (a Pi approval-command result) counts as a user turn: on Claude
+    and OpenCode the same `/fablepowers:approve` is a user message. Claude never emits it."""
     try:
         i0 = next(i for i, (k, v) in enumerate(seq) if k == "skill" and v == "design-spec")
     except StopIteration:
@@ -171,7 +173,7 @@ def approval_gap(seq):
     after = seq[i0:]
     stop = next((i for i, (k, v) in enumerate(after)
                  if (k == "skill" and v == "implementation-plan") or (k == "edit" and not re.search(r"specs?/|plans?/|\.md$", v))), len(after))
-    return sum(1 for k, _ in after[:stop] if k == "user")
+    return sum(1 for k, _ in after[:stop] if k in ("user", "approved"))
 
 
 # --harness names -> the short code in the record's `harness` field and the `h` column.
@@ -612,8 +614,185 @@ def read_opencode(a):
     return rows, note
 
 
+PI_EDIT_TOOLS = {"edit", "write"}
+PI_SKILL_TAG = re.compile(r"<skill\s+name=\"([^\"]+)\"")
+PI_APPROVED = re.compile(r"^\s*(?:fablepowers approval gate:\s*)?the user approved design")
+PI_KEY = re.compile(r"\(key `([^`]*)`\)")
+PI_DESIGN = re.compile(r"design `([^`]*)`")
+CHILDREN_DIR = "fablepowers-children"
+
+
+def pi_skill(name, path=""):
+    """A Pi skill name or SKILL.md path segment -> the listed name: the wrapper
+    `fablepowers-<x>` becomes `fablepowers:<x>`, a real skill under a fablepowers
+    plugin root `fablepowers:<x>`, anything else stays as it is."""
+    if name.startswith("fablepowers-"):
+        return "fablepowers:" + name[len("fablepowers-"):]
+    if ":" not in name and "fablepowers" in path:
+        return "fablepowers:" + name
+    return name
+
+
+def pi_header(path):
+    """The session file's header (`{"type": "session", "id", "timestamp", "cwd"}`), or None."""
+    try:
+        with open(path, errors="replace") as fh:
+            o = json.loads(fh.readline())
+    except (OSError, ValueError):
+        return None
+    return o if isinstance(o, dict) and o.get("type") == "session" and o.get("id") else None
+
+
+def pi_spawn(name, args):
+    """A dispatch tool call -> {role, model}. `fablepowers_dispatch` names a seat
+    (pinned by config: model `seat`); the `subagent` tool of the separate
+    pi-subagents extension names an agent and a task (or `tasks`/`chain` lists)."""
+    if name == "fablepowers_dispatch":
+        seat = args.get("seat") if isinstance(args.get("seat"), str) else ""
+        task = args.get("task") if isinstance(args.get("task"), str) else ""
+        return dict(role=seat_role(seat) or role(task), model=args.get("model") or "seat")
+    first = next((x for k in ("tasks", "chain") if isinstance(args.get(k), list)
+                  for x in args[k] if isinstance(x, dict)), args)
+    agent = first.get("agent") if isinstance(first.get("agent"), str) else ""
+    task = first.get("task") if isinstance(first.get("task"), str) else ""
+    return dict(role=seat_role(agent) or role(task), model=args.get("model") or None)
+
+
+def scan_pi(path):
+    """One Pi session file (every entry, abandoned branches included). Out = Σ
+    usage.output, cost = Σ usage.cost.total (fsum); edits and spawns count attempts.
+    Approval results become `approved` events; `fablepowers-child` entries map
+    child session ids to this session."""
+    s = dict(models=collections.Counter(), out=0, cost=0.0, user_turns=0, skills=[], edits=0, bash_writes=0,
+             seq=[], spawns=[], children=[])
+    costs = []
+
+    def skill(name):
+        if s["seq"][-1:] != [("skill", bare_skill(name))]:  # wrapper read, then the real SKILL.md: one load
+            s["skills"].append(name); s["seq"].append(("skill", bare_skill(name)))
+
+    for o in recs(path):
+        t = o.get("type")
+        if t == "custom" and o.get("customType") == "fablepowers-child":
+            d = o.get("data") if isinstance(o.get("data"), dict) else {}
+            if d.get("childSessionId"):
+                s["children"].append(d["childSessionId"])
+            continue
+        if t == "custom_message" and o.get("customType") == "fablepowers-result":
+            text = text_of(o.get("content"))
+            if PI_APPROVED.match(text):
+                k = PI_KEY.search(text) or PI_DESIGN.search(text)
+                s["seq"].append(("approved", k.group(1) if k else ""))
+            continue
+        if t != "message":
+            continue
+        m = o.get("message") or {}
+        if m.get("role") == "user":
+            text = text_of(m.get("content"))
+            s["user_turns"] += 1; s["seq"].append(("user", text[:60]))
+            for n in PI_SKILL_TAG.findall(text):  # `/skill:<name>`
+                skill(pi_skill(n))
+            continue
+        if m.get("role") != "assistant":
+            continue
+        u = m.get("usage") or {}
+        s["out"] += u.get("output") or 0
+        c = u.get("cost")
+        costs.append((c.get("total") or 0.0) if isinstance(c, dict) else 0.0)
+        if m.get("model"):
+            s["models"][m["model"]] += 1
+        for b in m.get("content") or []:
+            if not isinstance(b, dict) or b.get("type") != "toolCall":
+                continue
+            n, i = b.get("name"), b.get("arguments") if isinstance(b.get("arguments"), dict) else {}
+            if n == "read":
+                p = i.get("path") if isinstance(i.get("path"), str) else ""
+                for x in SKILL_READ.finditer(p):
+                    skill(pi_skill(x.group(1), x.group(0)))
+            elif n in PI_EDIT_TOOLS:
+                s["edits"] += 1; s["seq"].append(("edit", i.get("path") or ""))
+            elif n == "bash":
+                cmd = i.get("command") if isinstance(i.get("command"), str) else ""
+                for x in cx_skill_reads(cmd):
+                    skill(pi_skill(x.rsplit(":", 1)[-1], x))
+                if WRITE_RE.search(cmd):
+                    s["bash_writes"] += 1; s["seq"].append(("edit", "bash-write"))
+            elif n == "fablepowers_ask_approval":
+                s["seq"].append(("ask", ""))
+            elif n in ("fablepowers_dispatch", "subagent"):
+                s["spawns"].append(pi_spawn(n, i))
+    s["cost"] = math.fsum(costs)
+    return s
+
+
 def read_pi(a):
-    return [], "not implemented"
+    """Pi reader: one record per root session under the sessions dir.
+
+    Handles the flat `--session-dir` layout (`<dir>/*.jsonl`) and Pi's default one
+    (`<dir>/--<cwd>--/*.jsonl`); files without a session header are ignored. A
+    child is linked by its parent's `fablepowers-child` entry, else by its
+    directory (`fablepowers-children/<parent-id>/`, as `pi/fablepowers.ts`
+    places it, which also covers killed parents that wrote no entry).
+    Descendants at any depth roll up into the root's subs; children whose root
+    is missing go to one `(orphan)` record per missing parent."""
+    base = a.pi_sessions
+    if not os.path.isdir(base):
+        return [], f"no pi logs at {base}"
+    sess = {}  # id -> dict(path, ts, proj, par, scan)
+    for d, _, names in os.walk(base):
+        for n in names:
+            if not n.endswith(".jsonl"):
+                continue
+            f = os.path.join(d, n)
+            h = pi_header(f)
+            if h is None or h["id"] in sess:
+                continue
+            up = os.path.dirname(f)
+            par = os.path.basename(up) if os.path.basename(os.path.dirname(up)) == CHILDREN_DIR else None
+            sess[h["id"]] = dict(path=f, ts=(h.get("timestamp") or "")[:10], proj=path_project(h.get("cwd")), par=par)
+    for sid, x in sess.items():
+        x["scan"] = scan_pi(x["path"])
+    for sid, x in sess.items():  # the parent's entry wins over the directory
+        for c in x["scan"]["children"]:
+            if c in sess and c != sid:
+                sess[c]["par"] = sid
+
+    def root_of(sid):
+        seen = set()
+        while sess[sid]["par"] is not None:
+            par = sess[sid]["par"]
+            if par not in sess or sid in seen:
+                return None, par
+            seen.add(sid); sid = par
+        return sid, None
+
+    groups = collections.defaultdict(list)  # root id or ("orphan", missing parent) -> descendant ids
+    for sid, x in sess.items():
+        if x["par"] is not None:
+            r, missing = root_of(sid)
+            groups[r if r else ("orphan", missing)].append(sid)
+
+    def subs_of(kids):
+        return [dict(models=sess[c]["scan"]["models"], out=sess[c]["scan"]["out"], cost=sess[c]["scan"]["cost"],
+                     edits=sess[c]["scan"]["edits"]) for c in sorted(kids, key=lambda c: sess[c]["path"])]
+
+    rows = []
+    for sid, x in sorted(sess.items(), key=lambda kv: kv[1]["path"]):
+        if x["par"] is not None or not x["ts"] or (a.since and x["ts"] < a.since):
+            continue
+        s = x["scan"]
+        rows.append(dict(harness="pi", ts=x["ts"], proj=x["proj"], models=s["models"], user_turns=s["user_turns"],
+                         out=s["out"], cost=s["cost"], skills=s["skills"], spawns=s["spawns"], edits=s["edits"],
+                         bash_writes=s["bash_writes"], seq=s["seq"], subs=subs_of(groups.get(sid, []))))
+    for key in sorted((k for k in groups if isinstance(k, tuple)), key=lambda k: min(sess[c]["path"] for c in groups[k])):
+        first = sess[min(groups[key], key=lambda c: (sess[c]["ts"], sess[c]["path"]))]
+        if not first["ts"] or (a.since and first["ts"] < a.since):
+            continue
+        proj = "(orphan) " + first["proj"]
+        rows.append(dict(harness="pi", ts=first["ts"], proj=proj if len(proj) <= 34 else proj[:32] + "..",
+                         models=collections.Counter(), user_turns=0, out=0, cost=0.0, skills=[], spawns=[], edits=0,
+                         bash_writes=0, seq=[], subs=subs_of(groups[key])))
+    return rows, None
 
 
 READERS = {"claude": read_claude, "codex": read_codex, "opencode": read_opencode, "pi": read_pi}

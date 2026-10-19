@@ -27,6 +27,7 @@ These rules come from the spec's binding resolutions and the plan-review resolut
 - **spawn model:**
   - Codex: the requested id.
   - OpenCode and Pi seats (`fablepowers-<seat>` agents, `fablepowers_dispatch`): `seat`, unless the call passes a model.
+  - Pi `subagent` calls (the separate pi-subagents extension): the model the call passes, else `None`.
   - Anything else with no model: `None`, printed as `(unset)`.
 - **gap:** user turns from the first design-spec load to the first edit that is not a spec or plan, a shell write, or an implementation-plan load.
   - A Pi approval result counts as one turn (resolution M1).
@@ -156,16 +157,24 @@ Edits (`edit`/`write` calls) and spawns (`subagent` calls without `input.session
 
 Both layouts include `fablepowers-children/<parent-id>/` directories. A reader that globs for roots recursively without excluding those directories counts the children as roots. `pi/default/--fixture-pi-synth--/notes.txt` is a non-session file and must be ignored.
 
+Rules applied below (orchestrator rulings):
+
+- `usr` counts user messages only. An approval result (a `fablepowers-result` custom message starting `fablepowers approval gate: the user approved design`) is an `approved` gap event, not a user turn. Withdraw and not-recorded results are no event.
+- Edits (`write`/`edit` calls) and spawns count **attempts**: errored calls count too. A sub's edits count `write`/`edit` calls only, as on the other harnesses.
+- The 3 `subagent` calls in da07 come from the separate pi-subagents extension. They count as spawns: role from the call's `agent` (a seat name) or the task text heuristic, model from the call or `None`.
+- A `/skill:` message is a user turn followed by a skill event. A wrapper read followed directly by the real SKILL.md read is one load. Skill names are listed as `fablepowers:<x>` (printed `fp:<x>`).
+- A child is linked by its parent's `fablepowers-child` entry, else by its directory. Subs are listed in file-path order. The orphan record's project prints as `(orphan) <proj>`; its own cost is 0.00.
+
 | root (id prefix) | source | date | proj | main | usr | out | cost | mEdit | mShellW | skills | spawns | gap | subs (model, out, cost, edits) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 01a14830-e336 | real (pi2) | 2026-10-17 | pi2-work | deepseek/deepseek-v4-flash | 1 | 8 | 0.00005 | 0 | 0 | nsdemo (a `<skill name="fablepowers:nsdemo">` user message, so a skill event and a user turn) | — | - | — |
-| 01a1486c-da07 | real (pi-t0) | 2026-10-17 | pi-t0-work | deepseek/deepseek-v4-flash | 1 | 462 | 0.000902 | 1 | 0 | — | reviewer@seat, implementer@seat. The 3 `subagent` tool calls, from a non-fablepowers extension, are not spawns | - | — (no children directory) |
+| 01a14830-e336 | real (pi2) | 2026-10-17 | pi2-work | deepseek/deepseek-v4-flash | 1 | 8 | 0.00005 | 0 | 0 | fp:nsdemo (a `<skill name="fablepowers:nsdemo">` user message, so a user turn and then a skill event) | — | - | — |
+| 01a1486c-da07 | real (pi-t0) | 2026-10-17 | pi-t0-work | deepseek/deepseek-v4-flash | 1 | 462 | 0.000902 | 1 | 0 | — | reviewer@seat, implementer@seat, then the 3 `subagent` calls (ruling: they are spawns, all errored): reviewer@(unset) (task "review …"), other@(unset) ×2 (`tasks`/`chain`, no agent or task text in the fixture) | - | — (no children directory) |
 | 01a14919-850c | real (pi-t5) | 2026-10-17 | pi-t5-r1 | deepseek/deepseek-v4-flash | 3 | 925 | 0.00183 | 1 | 0 | — | implementer@seat (this call errored), reviewer@seat, implementer@seat | - (there is an approved result but no design-spec load) | 9b68 (`fablepowers-child` entry): gemini-3.1-flash-lite, 2, 0.001295, 0; b8fa (entry): qwen3.6-flash, 2,752, 0.01368, 2 → subOut 2,754, sEdit 2 |
 | 01a14919-d69c | real (pi-t5) | 2026-10-17 | pi-t5-r2 | deepseek/deepseek-v4-flash | 3 | 612 | 0.001366 | 1 | 0 | — | — (`fablepowers_ask_approval` gives one ask) | - | — |
 | 01a1491a-1892 | real (pi-t5) | 2026-10-17 | pi-t5-r1 | deepseek/deepseek-v4-flash | 2 | 295 | 0.000845 | 2 | 0 | — | — (one ask; a withdraw result) | - | — |
 | 01a1491b-ad38 | real, **killed parent** | 2026-10-17 | pi-t5-r4 | deepseek/deepseek-v4-flash | 1 | 129 | 0.000398 | 0 | 0 | — | implementer@seat | - | b9ba (**directory only, no entry**): qwen3.6-flash, 121, 0.001089, 0 |
 | 01a1fe10-…01 | synthetic, default layout | 2026-10-18 | pi-synth | deepseek/deepseek-v4-flash | 3 | 250 | **2.25** | 2 | 1 | fp:design-spec (wrapper read plus SKILL.md read, deduplicated), fp:verify-done (`/skill:` message) | implementer@seat, reviewer@seat | **3** | …02 (entry): qwen3.6-flash, 300, 2.20, 2 edits; …03 (directory only): gemini-3.1-flash-lite, 40, 1.05, 0 → subOut 340, sub $3.25, sEdit 2 |
-| `(orphan)` | synthetic …04 | 2026-10-18 | pi-synth | — | — | — | — | — | — | — | — | - | …04 under `fablepowers-children/…ff/`, whose parent is missing: qwen3.6-flash, 60, 1.00 |
+| `(orphan)` | synthetic …04 | 2026-10-18 | `(orphan) pi-synth` | — | — | — | — | — | — | — | — | - | …04 under `fablepowers-children/…ff/`, whose parent is missing: qwen3.6-flash, 60, 1.00 |
 
 **Gap in the synthetic root.** The first design-spec load (the `read` of the `fablepowers-design-spec` wrapper) is followed by:
 

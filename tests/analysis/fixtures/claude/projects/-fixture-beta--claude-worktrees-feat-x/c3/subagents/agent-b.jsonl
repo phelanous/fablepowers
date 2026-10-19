@@ -1,0 +1,1 @@
+{"type":"assistant","timestamp":"2026-10-07T09:30:02.000Z","message":{"role":"assistant","model":"claude-haiku-4-5-20251001","usage":{"output_tokens":2000},"content":[{"type":"tool_use","id":"toolu_multiedit","name":"MultiEdit","input":{"file_path":"/fixture/beta/src/f2.py"}}]}}

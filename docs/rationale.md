@@ -13,11 +13,14 @@ check-in (2026-09-24) covers the 40 sessions on the 0.1.0 plugin.
 ## Reproduce
 
 ```bash
-python3 scripts/analyze_delegation.py                      # all sessions
-python3 scripts/analyze_delegation.py --since 2026-08-01   # the fork-era window
+python3 scripts/analyze_delegation.py --harness claude                      # all sessions
+python3 scripts/analyze_delegation.py --harness claude --since 2026-08-01   # the fork-era window
 ```
 
-The script reads `~/.claude/projects`, pairs each session transcript with its
+The numbers below are Claude Code numbers; `--harness claude` prints the same
+report the script printed when they were taken (since 0.7.1 the default reads
+every harness, see the 2026-10-18 note at the end). The script reads
+`~/.claude/projects`, pairs each session transcript with its
 own subagent transcripts, and prints per-session main-loop vs subagent tokens,
 who edited files, which model each subagent actually ran on, and whether the
 design-approval checkpoint got a user turn. See "Measuring it" in the README
@@ -684,3 +687,28 @@ harnesses.
    or scripted Pi, which would mean the rule is catching people, not models.
 3. **Orphaned children**: `child watchdog` lines in `gate.log`, and commits
    by a child after its parent died.
+
+## Note (2026-10-18): the audit can span harnesses
+
+Until 0.7.1 every number here came from Claude Code transcripts, while the
+workflow had run on Codex, OpenCode and Pi since 0.5.0–0.7.0 with nothing
+measuring it there. `scripts/analyze_delegation.py` now reads all four
+harnesses' logs into the same columns: one date-sorted table with a harness
+column, and one summary line per harness. `--harness claude` still prints the
+old report byte for byte, so the rounds above stay comparable. Every output
+figure includes reasoning tokens; cost is estimated for Claude Code, recorded
+by OpenCode and Pi, and absent on Codex. The non-Claude sessions on this
+machine so far are spikes and port tests, too few to conclude anything.
+
+### What to compare at the next audit
+
+1. **Subagent share per harness**: `sub%` on each harness's summary line,
+   against Claude Code's. A harness where work stays in the main loop is
+   where the dispatch convention or its seats need attention.
+2. **`(unset)` vs `seat`** in each harness's spawns: `seat` dispatches run on
+   the pinned model, `(unset)` ones inherit the orchestrator's. A rising
+   `(unset)` count on OpenCode or Pi means the model is reaching for a
+   non-seat subagent instead of a seat.
+3. **Approval gap per harness**: the `apprv` column where design-spec was
+   loaded. A `0` means implementation started with no user turn after the
+   design; on a gated harness that transcript is the first one to read.

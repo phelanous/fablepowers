@@ -20,7 +20,8 @@ Grammar:
   heading (other headings don't end it).
 - Each body has exactly one `**Depends on:**` line, also in column 0:
   `nothing`/`none` (any case), or comma-separated ids, each with an optional parenthesised reason
-  that holds no parentheses.
+  that holds no parentheses. One trailing period is ignored (`nothing.`,
+  `T1 (reason).`).
 - ``` and ~~~ fenced blocks are skipped. A fence closes only on a line made of
   the opener's character, at least as many as the opener.
 - CRLF and LF files parse the same.
@@ -113,6 +114,9 @@ def parse_tasks(lines):
 def parse_depends(value):
     """Return (keys, bad_items) for a Depends on value."""
     value = value.strip()
+    # Plans often end the line as a sentence; one trailing period is ignored.
+    if value.endswith("."):
+        value = value[:-1].rstrip()
     if value.lower() in ("nothing", "none"):
         return [], []
     keys, bad = [], []

@@ -107,6 +107,10 @@ expect_waves "'None' (any case) is no dependency" "$WAVES3" \
   "$(plan none-case None NONE T1)"
 expect_waves "a lower-case 't1' and a bare '1' name T1" "$WAVES3" \
   "$(plan bare-id nothing none 't1, 1')"
+expect_waves "a single trailing period ('nothing.', 'T1 (reason).', 'T2, T3.') parses like the unpunctuated form" \
+  "$WAVES4" "$FIXTURES/trailing-period.md"
+expect_waves "'T2.' parses like 'T2'" $'wave 1: T1, T2\nwave 2: T3' \
+  "$(plan period-id nothing nothing 'T2.')"
 
 echo "Criterion 3: problems exit 2 and name the problem"
 expect_problem "no argument" usage "plan-waves <plan-file>"
@@ -127,6 +131,10 @@ expect_problem "two Depends on lines in one task" two-depends "T3" \
   "$(plan two-depends nothing nothing $'T1\n**Depends on:** T2')"
 expect_problem "an unparseable Depends on line" bad-depends "'T1 and T2'" \
   "$(plan bad-depends nothing nothing 'T1 and T2')"
+expect_problem "a value still malformed after its period is removed" bad-depends "'T1 and T2'" \
+  "$(plan bad-period nothing nothing 'T1 and T2.')"
+expect_problem "only one trailing period is removed ('T1..')" bad-depends "'T1.'" \
+  "$(plan two-periods nothing nothing 'T1..')"
 expect_problem "an empty Depends on line" bad-depends "T3" "$(plan empty-depends nothing nothing '')"
 expect_problem "an unknown id" unknown-id "unknown task 8" "$(plan unknown nothing nothing 'T1, T8')"
 expect_problem "a self-dependency" cycle "T3 depends on itself" "$(plan self nothing nothing T3)"
@@ -158,7 +166,7 @@ expect_waves "a \`\`\` fence holding ~~~ then '## T9:' does not create T9; a \`\
   "$WAVES3" "$FIXTURES/fence-nested.md"
 
 echo "Line endings and indentation"
-for f in waves-t fences fence-nested; do
+for f in waves-t fences fence-nested trailing-period; do
   sed 's/$/\r/' "$FIXTURES/$f.md" >"$TEST_ROOT/$f-crlf.md"
   run_pw "$FIXTURES/$f.md"
   lf="$PW_EXIT|$PW_OUT|$PW_ERR"

@@ -13,6 +13,9 @@ The fablepowers skills and agent bodies name actions ("dispatch the implementer 
 | Track tasks | TodoWrite |
 | Native worktree tool (create / exit) | EnterWorktree / ExitWorktree; its worktrees live under `<root>/.claude/worktrees/` and are host-owned |
 | Plugin root (where `skills/`, `agents/`, `hooks/` live) | `${CLAUDE_PLUGIN_ROOT}` in hook commands; a skill's base directory is shown when the skill is invoked |
+| Dispatch several seats at once (independent plan tasks) | Several Agent calls in one assistant message, each with the seat's `subagent_type` and a prompt naming its task worktree, without `isolation`. See [Parallel dispatch](#parallel-dispatch); unverified in a full plan run. |
+| Task worktree (create / remove) | `git worktree add -b fp/<plan-key>/t<id> <plan worktree>/.worktrees/<plan-key>-t<id> <plan-branch>`, later `git worktree remove` and `git branch -d`; not EnterWorktree. Verified under the session directory in T0 §3 and §8; see [Parallel dispatch](#parallel-dispatch). |
+| Wait on a run longer than one tool call | A background Bash run with an exit-status `.done` marker, waited on in bounded calls (the portable pattern; unverified as a whole in T0). See [Parallel dispatch](#parallel-dispatch). |
 
 ## Seats → agents and models
 
@@ -57,6 +60,54 @@ The design-approval checkpoint is enforced by a hook, `hooks/approval-gate` (a P
 
 **Accepted gap: shell writes.** The gate watches the edit tools and the dispatch, not shell commands. Through a shell command the model could forge or delete markers (including creating a directory named like one), write a spec without pending it, or write a hook into a settings file. Such a hook could auto-answer the approval question: Claude Code lets a PreToolUse hook fill in AskUserQuestion's answers, and the result is indistinguishable from a user's. While a design is pending, its edit tools are blocked from repo code and from the usual Claude Code settings files in any location; its shell is not. Nor are its edit tools blocked from the installed plugin's hook files (one Edit to `approval_gate.py` could disable the gate, taking effect on the next hooked call; an Edit to `hooks.json` could disable it or add an auto-answer hook, though hook configuration is loaded at session start, so that likely needs a new session), from a config directory not named `.claude`, or from managed settings; those paths are outside the project, so only Claude Code's own permission prompt stands in the way. All of these are adversarial, outside the user's threat model: the gate stops a session rolling past approval; it is not a sandbox.
 
+## Parallel dispatch
+
+`fablepowers:subagent-execution` runs a plan's independent tasks at the same time, each in its own task worktree. On Claude Code that resolves as below. Every fact carries a label:
+
+- **verified (T0 §n)**: established in the 0.8.0 spike, live `claude -p` runs on Claude Code 2.1.306 with transcript and hook-log evidence. The record is `.fablepowers/2026-10-31-parallel-execution/reports/task-0.md` in that plan's workspace, section n.
+- **unverified**: not checked in a run.
+
+**Status.** Parallel dispatch in a full plan run is **unverified**. It stays so until live eval 6 (`tests/evals/`: two independent tasks and one dependent) passes. The mechanisms underneath it were verified in T0, as listed here.
+
+**Dispatch.**
+
+- Several Agent calls in one assistant message, each with the seat's `subagent_type` and a prompt naming its task worktree by absolute path.
+- No `isolation` parameter. The task worktree is the one the orchestrator created, not the Agent tool's own `.claude/worktrees/agent-<id>`.
+- Two foreground Agent calls in one message ran with overlapping active intervals. The parent resumed only after both had returned, and both finished before `-p` exited (verified, T0 §1).
+- Their `.meta.json` recorded `requestShape: "foreground"` and `requestNonInteractive: true`. No `run_in_background` was passed (verified, T0 §7).
+
+**Where task worktrees live.** Under the plan worktree: `<plan worktree>/.worktrees/<plan-key>-t<id>`, not under the main checkout.
+
+- The desktop app's write guard refuses edits under the main checkout from a session in a `.claude/worktrees/` worktree. That was verified while executing the 0.8.0 plan itself, not in T0 (plan binding resolution 5).
+- A subagent's `cd` into a directory outside the session's working directories (its launch directory and any `--add-dir`) is blocked and listed in `permission_denials` (verified, T0 §3). A task worktree inside the plan worktree is under the launch directory when the session runs in the plan worktree.
+- `.worktrees/` is kept out of `git status` by an entry in `$(git rev-parse --git-common-dir)/info/exclude`, which applies to every worktree of the repository.
+
+**Working directory in a subagent.** `cd` does not persist between Bash calls: the next call starts in the session's launch directory again (verified, T0 §3). So the dispatch tells the implementer to:
+
+- prefix every Bash command with `cd <task worktree> &&`, or use `git -C <task worktree>`. A `cd` and its command in one call work (verified, T0 §3);
+- use absolute paths for Read, Edit and Write. Edit and Write with absolute paths in a task worktree worked (verified, T0 §3). In that run Write and Edit were allowed through `--allowedTools`. Whether acceptEdits alone admits them outside the session's directories is unverified.
+
+**Hook `cwd`.** In a subagent's hook payload, `cwd` is always the session's launch directory. That holds right after a `cd`, and for a Write or Edit inside a task worktree (verified, T0 §2).
+
+- A hook that needs the task worktree has to read it from the `tool_input` paths or `git -C` arguments.
+- The payload's `transcript_path` is the parent's transcript. `agent_id` and `agent_type` are present for subagents only (verified, T0 §2).
+- For the approval gate, a subagent's marker toplevel is therefore the plan worktree, where the workspace lives. That is inferred from the gate's toplevel rule above, unverified.
+
+**Waiting on long runs.** The marker pattern from `fablepowers:behavioral-testing` is the default here:
+
+- Start the run in the background with its output in a file and an exit-status `.done` marker.
+- Wait in bounded calls on that marker, each under the Bash tool's timeout, for example `timeout 540 bash -c 'until [ -e <out>.done ]; do sleep 5; done'`. The 600,000 ms maximum is the Bash tool's documented limit (unverified in T0).
+- Never `pgrep -f`.
+
+A Bash `run_in_background` completion notification does reach a running subagent: the one that started the job, not the parent (verified, T0 §4). But it arrives only at that subagent's next tool-result boundary. In T0 it was queued while a 40 s foreground call ran, and delivered when that call returned (verified, T0 §4). It carries the task summary and the output-file path, not the command's stdout (verified, T0 §4). So the notification does not replace the marker wait: it lands after whatever call the agent is already in, and the agent still reads the output file.
+
+**Headless runs.** Under `-p` with acceptEdits, these `--allowedTools` patterns admitted the commands without a prompt (verified, T0 §8):
+
+- `Bash(git worktree:*)`, `Bash(git merge:*)` and `Bash(git branch:*)` admitted the orchestrator's `git worktree add`, `git worktree remove`, `git merge --no-ff` and `git branch -d`.
+- `Bash(git -C:*)` admitted the subagents' `git -C <wt> add` and `commit`.
+- The session's patterns apply to subagents too. In `-p` a command no pattern admits is denied and listed in `permission_denials`, not prompted.
+- `git merge --abort` was not run in T0. That `Bash(git merge:*)` admits it is unverified.
+
 ## Report-name write guard
 
 Claude Code refuses a subagent's write to a file whose basename is a generic report name — `report.md`, `summary.md`, `findings.md`, `analysis.md` — in any directory and any case. That is why every dispatch names a workspace path such as `reports/task-<n>.md`, and why each agent body says to return the full report inline (and not to write it through a shell command instead) when its write is refused.
@@ -64,6 +115,13 @@ Claude Code refuses a subagent's write to a file whose basename is a generic rep
 ## Session logs
 
 Transcripts are JSONL files under `~/.claude/projects/<cwd>/`, where `<cwd>` is the session's working directory with every `/` and `.` replaced by `-`. The main session is `<session-id>.jsonl`; subagents dispatched from it are `<session-id>/subagents/agent-<id>.jsonl` (with a `.meta.json` beside each). Agents run with worktree isolation start with `cwd` under `<repo>/.claude/worktrees/agent-<id>`.
+
+For parallel dispatch, the links between parent and subagents are these (verified, T0 §5 and §6; see [Parallel dispatch](#parallel-dispatch)):
+
+- Agent calls from one assistant message share the parent's API message id.
+- Each subagent's `.meta.json` holds `agentType`, `description`, `toolUseId` (the parent's Agent `tool_use.id`) and `requestShape`.
+- The parent's tool_result carries `toolUseResult.agentId`, which matches `agent-<agentId>.jsonl` and the `agentId` on every subagent line.
+- Subagent lines carry `isSidechain: true`, and their `cwd` is the session's launch directory.
 
 ## Other harnesses
 

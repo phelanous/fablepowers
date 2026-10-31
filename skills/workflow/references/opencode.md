@@ -15,6 +15,7 @@ fablepowers runs on OpenCode as a plugin, `opencode/index.js`, loaded by OpenCod
 | Track tasks | The plan file and the ledger `.fablepowers/<plan>/progress.md`. OpenCode has no todo tool. |
 | Native worktree tool (create / exit) | None. Use `git worktree add` as `fablepowers:using-git-worktrees` describes. |
 | Plugin root (where `skills/`, `agents/`, `hooks/` live) | The absolute path the bootstrap preamble names. A git install lives in OpenCode's plugin cache (`~/.cache/opencode/npm/git-fablepowers-<hash>/…/node_modules/fablepowers/`) and is the live root. Editing your checkout changes nothing until it is reinstalled. A local-directory install is the directory itself. |
+| Dispatch several seats at once (independent plan tasks) | Several `subagent` calls in one message, each prompt naming its task worktree. See [Parallel dispatch](#parallel-dispatch); unverified. |
 
 Tool names are OpenCode 2.x's own: `shell` (not bash), `write` / `edit` (`patch` instead of both on `gpt-*` models), `subagent`, `question`, `skill`, `read`.
 
@@ -62,6 +63,15 @@ The seat's system prompt already carries its role prompt. The prompt carries the
 - **No sub-spawns.** Seats have `subagent` denied, and OpenCode's default subagent depth gives children no `subagent` or `question` tool.
 - **Continuing a child.** `subagent` with an existing child's `sessionID` continues that child as the `agent` you pass: OpenCode switches the child to that agent (and to its model, when the agent has one). Continue a child only as its own seat. Never hand an implementer's session to the reviewer, or the reverse.
 - **Reports.** Dispatches name a workspace path such as `.fablepowers/<plan>/reports/task-<n>.md`, as on Claude Code.
+
+## Parallel dispatch
+
+`fablepowers:subagent-execution` runs a plan's independent tasks at the same time, each in its own task worktree. Everything in this section is **unverified**: no live OpenCode run was done for 0.8.0.
+
+- **Dispatch.** Several `subagent` calls in one message, one per ready task, each with its seat's `agent` and a `prompt` naming the task worktree by absolute path. Whether OpenCode runs them concurrently is unverified.
+- **Working directory.** `subagent` takes no working directory, so the child starts in the session's directory. The dispatch tells it to run each `shell` command as `cd <task worktree> && …` or `git -C <task worktree> …`, and to give `write`, `edit` and `patch` absolute paths in the task worktree. Whether a `cd` persists between `shell` calls is unverified.
+- **Where task worktrees live.** `<plan worktree>/.worktrees/<plan-key>-t<id>`, inside the session's project directory, so your `external_directory` rules presumably do not apply to them (inferred, unverified).
+- **Waits.** The marker pattern from `fablepowers:behavioral-testing`: a background run with an exit-status `.done` marker, waited on in bounded calls under the `shell` tool's timeout, never `pgrep -f`. OpenCode's `shell` timeout is unverified.
 
 ## Bootstrap
 

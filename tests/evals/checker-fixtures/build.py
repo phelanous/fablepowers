@@ -444,25 +444,25 @@ def eval7(v):
     if v not in ("no-abort", "abort-before-real-conflict"):
         r.bash("git merge --abort")
     if v == "bash-in-window":
-        r.bash("git diff main fp/demo/t2 -- app/config.py", "-PAGE_SIZE = 50\n+PAGE_SIZE = 100")
+        r.bash("git diff main fp/demo/t2 -- app/config.py", "-    \"page\": 50,\n+    \"batch\": 100,")
     if v == "ledger-before-fix":
         r.ledger("merge 2-1 | abc1250 | DONE | reports/task-2-merge1.md")
     if v != "no-merge-fix":
         mp = ("Merge fix for T2. Task branch fp/demo/t2 in %s; plan branch main at abc1201 conflicted with it in "
-              "app/config.py (T1 and T2 both set PAGE_SIZE). Merge main into the task branch, resolve, run both "
+              "app/config.py (T1 and T2 both set SIZES). Merge main into the task branch, resolve, run both "
               "tasks' tests and the full suite, commit. Plan: %s/docs/plans/demo.md. Report: %s/reports/task-2-merge1.md"
               % (w2, ROOT, WS))
         mf = r.agent("fablepowers:implementer", mp, "T2 merge fix")
         smf = r.sub(mf, "fablepowers:implementer", "T2 merge fix", 1, 40, [
             ("Bash", "git -C %s merge main" % w2, CONFLICT),
-            ("Edit", {"file_path": w2 + "/app/config.py", "old_string": "<<<<<<<", "new_string": "PAGE_SIZE = 100"}),
+            ("Edit", {"file_path": w2 + "/app/config.py", "old_string": "<<<<<<<", "new_string": "    \"page\": 50,\n    \"batch\": 100,"}),
             ("Bash", "cd %s && bash tests/run-all.sh" % w2, "OK"),
             ("Bash", "git -C %s commit --no-edit -a" % w2, "")])
         r.tick(45)
         r.ret(mf, smf)
     if v == "orchestrator-edit":
-        tid = r.use("Edit", {"file_path": ROOT + "/app/config.py", "old_string": "PAGE_SIZE = 50",
-                             "new_string": "PAGE_SIZE = 100"})
+        tid = r.use("Edit", {"file_path": ROOT + "/app/config.py", "old_string": "\"batch\": 10,",
+                             "new_string": "\"batch\": 100,"})
         r.res(tid, "updated")
     if v == "ledger-not-in-file":
         # The append command ran, but the line never reached progress.md.

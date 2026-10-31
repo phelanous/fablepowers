@@ -133,7 +133,7 @@ bash "<this skill's base dir>/plan-waves" <plan-file>
 - A task worktree has only tracked files. Set up its environment as the plan's `worktree env` line in Parallel safety says: for `isolate: <setup step or shared path>`, run that step, or link that path, in the new worktree before dispatch; for `none needed`, do nothing. A plan without the line gets nothing. If a task's tests then fail on a missing ignored file (`.env`, `node_modules`, `.venv`), that is a plan gap; take it to the user rather than copying files on a guess.
 - Beyond what Dispatch hygiene requires, a task's dispatch names:
   - the task worktree as the working directory;
-  - the instruction to run each Bash command as `cd <task worktree> && …` or with `git -C <task worktree>`, since a subagent's `cd` doesn't persist between calls, and to use absolute paths for Edit and Write;
+  - the instruction to run git as `git -C <task worktree> …` and every other Bash command as `cd <task worktree> && …`, since a subagent's `cd` doesn't persist between calls, and to use absolute paths for Edit and Write. Unless the harness reference says otherwise, git goes through `git -C`, not `cd … && git`, which some permission layers refuse;
   - absolute paths for the plan, the spec and the report, with the report under the plan worktree's workspace, never inside the task worktree;
   - the resource instance assigned for each `isolate` resource the task touches, as the plan's line for that resource says to assign it.
 - Spot-check a task from a task worktree with `git diff <plan-branch>...fp/<plan-key>/t<id>`.

@@ -86,7 +86,7 @@ The design-approval checkpoint is enforced by a hook, `hooks/approval-gate` (a P
 
 **Working directory in a subagent.** `cd` does not persist between Bash calls: the next call starts in the session's launch directory again (verified, T0 §3). So the dispatch tells the implementer to:
 
-- prefix every Bash command with `cd <task worktree> &&`, or use `git -C <task worktree>`. A `cd` and its command in one call work (verified, T0 §3);
+- run git as `git -C <task worktree> …`, and prefix every other Bash command with `cd <task worktree> &&`. A `cd` and its command in one call work (verified, T0 §3). But `cd <task worktree> && git …` was refused in `-p` ("Permission to use Bash has been denied"), and the refusal did not appear in `result.permission_denials`. The same implementer's `git -C` calls ran (verified, T7-fix1 report, eval 6);
 - use absolute paths for Read, Edit and Write. Edit and Write with absolute paths in a task worktree worked (verified, T0 §3). In that run Write and Edit were allowed through `--allowedTools`. Whether acceptEdits alone admits them outside the session's directories is unverified.
 
 **Hook `cwd`.** In a subagent's hook payload, `cwd` is always the session's launch directory. That holds right after a `cd`, and for a Write or Edit inside a task worktree (verified, T0 §2).

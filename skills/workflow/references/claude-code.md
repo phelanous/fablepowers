@@ -64,11 +64,11 @@ The design-approval checkpoint is enforced by a hook, `hooks/approval-gate` (a P
 
 `fablepowers:subagent-execution` runs a plan's independent tasks at the same time, each in its own task worktree. On Claude Code that resolves as below. Every fact carries a label:
 
-- **verified (T0 §n)**: established in the 0.8.0 spike, live `claude -p` runs on Claude Code 2.1.306 with transcript and hook-log evidence. The record is `.fablepowers/2026-10-31-parallel-execution/reports/task-0.md` in that plan's workspace, section n.
-- **verified (T7 report Fn)**: found in the 0.8.0 live evals (`tests/evals/`), on the same CLI version. The record is `reports/task-7.md` in the same workspace, finding n.
+- **verified (T0 §n)**: established in the 0.8.0 spike, live `claude -p` runs on Claude Code 2.1.306 with transcript and hook-log evidence. The excerpt for section n is in `docs/rationale.md`, "Evidence for the Claude Code reference".
+- **verified (T7 report Fn)**, and **T7-fix1 report**: found in the 0.8.0 live evals (`tests/evals/`), on the same CLI version. The excerpts are in the same section of `docs/rationale.md`.
 - **unverified**: not checked in a run.
 
-**Status.** Parallel dispatch in a full plan run is **verified**: live eval 6 (`tests/evals/`: two independent tasks and one dependent) passed 9 of 9 assertions in `claude -p`, with the two independent tasks dispatched in one message to their own task worktrees, overlapping active intervals, `--no-ff` merges each followed by a check, and cleanup (T7-fix1 report, round 2). The mechanisms underneath it were verified in T0, as listed here.
+**Status.** Parallel dispatch in a full plan run is **verified**: live eval 6 (`tests/evals/`: two independent tasks and one dependent) passed 9 of 9 assertions in `claude -p`, with the two independent tasks dispatched in one message to their own task worktrees, overlapping active intervals, `--no-ff` merges each followed by a check, and cleanup (T7-fix1 report, round 2). The mechanisms underneath it were verified in T0, as listed here. Merge-conflict handoff (eval 7: `git merge --abort`, then a merge-fix implementer) passed 1 of its first 6 live runs, because orchestrators usually foresaw the clash at spot-check and fixed it first; with a fixture whose task diffs are each correct, it passed 2 of 2. After the integration-review fixes, eval 6 passed again (wave-1 concurrency 1.88), and eval 8 passed with its `Touches: none` control task overlapping a serialized task and running the pre-commit suite, not the e2e. Evals 9, 10 and the resume case last ran before those fixes.
 
 **Dispatch.**
 

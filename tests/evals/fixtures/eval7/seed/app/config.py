@@ -1,4 +1,7 @@
 """Settings shared by the list view and the exporter."""
 
-# How many items one page or one batch holds.
-PAGE_SIZE = 10
+# How many items one list-view page and one export batch hold.
+SIZES = {
+    "page": 10,
+    "batch": 10,
+}

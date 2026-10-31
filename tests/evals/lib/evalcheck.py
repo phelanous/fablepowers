@@ -227,15 +227,17 @@ def classify_dispatch(call):
     """('merge', id) for a merge fix, ('fix', id) for a fix round, ('task', id)
     for a task dispatch, ('other', '') otherwise. The report path decides
     first, since every dispatch names one; then the task worktree; then the
-    heading."""
+    heading. Report paths are read with or without a `T` before the id
+    (`task-1.md`, and `task-T1-fix1.md` from outputs before the spelling was
+    pinned)."""
     p = call.prompt
-    m = re.search(r"task-([0-9]+[a-z]*)-merge[0-9]+\.md", p, re.I)
+    m = re.search(r"task-T?([0-9]+[a-z]*)-merge[0-9]+\.md", p, re.I)
     if m:
         return "merge", norm_id(m.group(1))
-    m = re.search(r"task-([0-9]+[a-z]*)-fix[0-9]+\.md", p, re.I)
+    m = re.search(r"task-T?([0-9]+[a-z]*)-fix[0-9]+\.md", p, re.I)
     if m:
         return "fix", norm_id(m.group(1))
-    m = re.search(r"reports/task-([0-9]+[a-z]*)\.md", p, re.I)
+    m = re.search(r"reports/task-T?([0-9]+[a-z]*)\.md", p, re.I)
     if m:
         return "task", norm_id(m.group(1))
     if "reviewer" in call.subagent_type:
@@ -273,6 +275,18 @@ def ledger_re(kind, tid):
 
 def ledger_lines(session, kind, tid):
     rx = ledger_re(kind, tid)
+    return [l for l in session.progress().splitlines() if rx.match(l.strip())]
+
+
+def round_re(kind, tid):
+    """`fix 2-1 |` (a per-task fix round) or `merge 2-1 |` (a merge fix), with
+    or without a `T`; never `fix integration-1 |`."""
+    tid = re.escape(norm_id(tid))
+    return re.compile(r"(?:(?<![\w-])|(?<=\\n))%s\s+T?%s-\d+\s*\|" % (kind, tid), re.I)
+
+
+def round_lines(session, kind, tid):
+    rx = round_re(kind, tid)
     return [l for l in session.progress().splitlines() if rx.match(l.strip())]
 
 

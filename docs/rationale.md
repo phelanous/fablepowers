@@ -217,6 +217,68 @@ next audit checks them.
 
 Also deferred, out of this release's scope: the controller as a nested subagent, batching same-shape tasks, and resuming the original implementer for fix rounds.
 
+### Evidence for the Claude Code reference
+
+`skills/workflow/references/claude-code.md` labels its parallel-dispatch
+facts "verified (T0 §n)" and "verified (T7 report Fn)". The full records are
+the plan workspace's reports, which are local and gitignored; these excerpts
+are what the labels cite. All runs were `claude -p` on Claude Code 2.1.306
+with Opus orchestrators and implementers.
+
+**T0, the spike** (two implementers dispatched to two worktrees of a scratch
+repo, with hooks logging every payload; $1.26 in all):
+
+- **§1.** Two `tool_use` blocks shared one API message id. The two subagents
+  were active 08:45:26.984–08:46:41.584 and 08:45:31.215–08:46:41.748, with
+  their tool calls interleaved in the hook log and their 40 s sleeps running
+  at the same time. Both results returned before the parent's merges and its
+  `result` line.
+- **§2.** All 20 subagent PreToolUse payloads had `cwd` = the launch
+  directory, including calls right after a `cd` into a worktree and Write or
+  Edit calls on worktree paths. `transcript_path` was the parent's;
+  `agent_id` and `agent_type` were present for subagents only.
+- **§3.** After `cd <worktree>` in one call, the next call's `pwd` printed the
+  launch directory. A `cd` outside the launch directory and `--add-dir` was
+  blocked and listed in `permission_denials` ("may only change directories to
+  the allowed working directories"). Write and Edit with absolute worktree
+  paths worked, with Write and Edit allowed through `--allowedTools`.
+- **§4.** A subagent's `run_in_background` completion notification was
+  queued at 08:45:56 while it ran a 40 s foreground call, and delivered to
+  that subagent, not the parent, when the call returned at 08:46:24. It
+  carried the summary and the output-file path, not stdout.
+- **§5 and §6.** Transcripts were under `~/.claude/projects/<mangled cwd>/`,
+  subagents under `<session>/subagents/agent-<id>.jsonl` with a `.meta.json`
+  holding `toolUseId`; the parent's tool_result carried
+  `toolUseResult.agentId`.
+- **§7.** Every `.meta.json` recorded `requestShape: "foreground"` and
+  `requestNonInteractive: true`; no `run_in_background` was passed on the
+  Agent calls.
+- **§8.** `Bash(git worktree:*)`, `Bash(git merge:*)`, `Bash(git branch:*)`
+  and `Bash(git -C:*)` admitted `git worktree add`/`remove`,
+  `git merge --no-ff`, `git branch -d` and the subagents' `git -C <wt> add`
+  and `commit`, with `permission_denials: []`.
+
+**T7, the live evals:**
+
+- **F1.** Every Bash write to `.git/info/exclude` was refused as a sensitive
+  file, and so was an Edit with `--allowedTools "Edit(.git/info/exclude)"`
+  (a $0.17 probe). Eval 6 and eval 7's first run fell back to running tasks
+  one at a time.
+- **F2.** Under pattern allow rules, a command with a `( … )` group or a
+  variable was denied ("can't be checked before it runs"); under sandbox
+  auto-allow, a `&` job died when the call's shell exited. Agents that wrote
+  a script and started it with `run_in_background` had no such denials.
+- **F3.** Orchestrators chose background Agent calls in eval6-resume and an
+  eval 7 run; in eval6-resume T1 and T3 still ran with overlapping active
+  intervals. In one eval 7 run a conflict foreseen at spot-check was handled
+  by fix rounds before any merge.
+- **T7-fix1, eval 6 round 2** (after `bc413e1`): PASS, $1.94, with the two
+  independent dispatches sharing one message id, overlapping intervals and
+  `--no-ff` merges each followed by a check. Each background implementer's
+  first call, a `cd <wt> && … && git ls-files …` compound, was refused
+  ("Permission to use Bash has been denied") without appearing in
+  `result.permission_denials`; their `git -C` calls ran.
+
 ### What to watch next audit
 
 1. **Main-loop cache cost** (writes+reads vs output) per execution session — the reason for file handoff and short returns. It should fall relative to the $1,280 vs $574 split.
@@ -800,6 +862,14 @@ cost $1.26) changed four things before release:
   both branches unmerged sent them back before merging. The eval now starts
   from a crashed run's state (T1 merged, T2's branch finished), which is the
   only way it exercised the abort and merge-fix path.
+- **Eval 7's tasks set adjacent entries of one constant** (after the
+  integration review). With one `PAGE_SIZE` both tasks set, T2's own diff
+  broke T1's page size, which a spot-check rightly caught: the orchestrator
+  sent T2 to a fix round before merging, and the abort path ran in 1 of 6
+  runs. With `SIZES["page"]` and `SIZES["batch"]` on adjacent lines, neither
+  diff is wrong but the merge still conflicts; it passed 2 of 2 runs ($0.79,
+  $0.73), one orchestrator noting the conflict "as expected" and still
+  merging, aborting and handing it to a merge fix as the skill says.
 
 ### What to watch next audit
 

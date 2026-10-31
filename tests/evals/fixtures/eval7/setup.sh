@@ -3,13 +3,19 @@
 # T1 was merged (its check and task lines are in the ledger, its worktree and
 # branch cleaned up), and fp/demo/t2 holds T2's finished commit (report
 # written, worktree directory gone, no ledger line). Both tasks set the one
-# shared constant, app/config.py PAGE_SIZE, to their own value (T1 50, T2 100),
-# so merging T2 conflicts. T2's spot-check diff against its merge base shows
-# only its own change, so the conflict first appears at the merge.
+# shared constant, app/config.py SIZES, to their own value (T1 page 50, T2
+# batch 100), on adjacent lines, so merging T2 conflicts. T2's spot-check diff
+# against its merge base shows only its own, correct line, and nothing in it
+# is wrong, so the conflict first appears at the merge.
 #
 # Seeded rather than produced live: live implementers given this plan tend to
 # notice the shared constant and sidestep it, and an orchestrator that sees
 # both unmerged branches can spot the clash before merging.
+#
+# Changed after the integration review (S2): the fixture first had one
+# PAGE_SIZE that both tasks set. T2 then broke T1's page size, which a
+# spot-check rightly caught and sent to a fix round, so the merge-abort path
+# ran in only 1 of 6 live runs.
 # Runs in the fixture repo; env: PLUGIN_ROOT, OUT.
 set -euo pipefail
 bash "$PLUGIN_ROOT/skills/integration-review/review-package" --init docs/plans/demo.md >/dev/null
@@ -18,27 +24,28 @@ printf '*\n' > .worktrees/.gitignore
 WS=.fablepowers/demo
 mkdir -p "$WS/reports"
 
-task() {  # task <id> <size> <test file> <test body>
-  local id="$1" size="$2" file="$3" body="$4" wt="$PWD/.worktrees/demo-t$1"
+task() {  # task <id> <SIZES key> <size> <subject> <test file> <test body>
+  local id="$1" key="$2" size="$3" subject="$4" file="$5" body="$6" wt="$PWD/.worktrees/demo-t$1"
   git branch "fp/demo/t$id" main
   git worktree add -q "$wt" "fp/demo/t$id"
-  sed -i "s/^PAGE_SIZE = 10$/PAGE_SIZE = $size/" "$wt/app/config.py"
+  sed -i "s/^    \"$key\": 10,$/    \"$key\": $size,/" "$wt/app/config.py"
+  grep -q "\"$key\": $size," "$wt/app/config.py"
   printf '%s\n' "$body" > "$wt/$file"
   git -C "$wt" add -A
-  git -C "$wt" commit -qm "feat: T$id, PAGE_SIZE $size"
+  git -C "$wt" commit -qm "feat: $subject"
   cat > "$WS/reports/task-$id.md" <<MD
 # T$id report
 
 - **Status:** DONE
 - **Commit:** $(git rev-parse --short "fp/demo/t$id") on fp/demo/t$id
-- **Change:** \`app/config.py\` \`PAGE_SIZE = $size\`; tests in \`$file\`.
+- **Change:** \`app/config.py\` \`SIZES["$key"] = $size\`; tests in \`$file\`.
 - **Tests:** targeted \`python3 -m unittest\` on \`$file\`: OK. Full \`bash tests/run-all.sh\`: OK.
-- **Mutation check:** PAGE_SIZE back to 10: the new test fails; restored, green.
+- **Mutation check:** \`SIZES["$key"]\` back to 10: the new test fails; restored, green.
 - **Deviations:** none.
 MD
 }
 
-task 1 50 tests/test_list_view.py 'import unittest
+task 1 page 50 'list view pages of 50' tests/test_list_view.py 'import unittest
 
 from app.list_view import first_page
 
@@ -55,7 +62,7 @@ class ListViewTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()'
-task 2 100 tests/test_export.py 'import unittest
+task 2 batch 100 'export batches of 100' tests/test_export.py 'import unittest
 
 from app.export import batches
 

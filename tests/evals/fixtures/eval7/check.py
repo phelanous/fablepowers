@@ -1,5 +1,6 @@
-"""Eval 7: two tasks set the same constant, app/config.py PAGE_SIZE, to
-different values (T1 50, T2 100), so merging T2 conflicts. setup.sh seeds a
+"""Eval 7: two tasks set the same constant, app/config.py SIZES, to
+different values (T1 page 50, T2 batch 100, on adjacent lines), so merging T2
+conflicts while neither task's own diff is wrong. setup.sh seeds a
 crashed run's state, T1 merged and T2's branch finished (see its comment for
 why the conflict is seeded rather than produced live).
 

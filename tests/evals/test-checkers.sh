@@ -122,7 +122,7 @@ expect_waves() {
 }
 expect_waves eval6 $'wave 1: T1, T2\nwave 2: T3'
 expect_waves eval7 'wave 1: T1, T2'
-expect_waves eval8 'wave 1: T1, T2'
+expect_waves eval8 'wave 1: T1, T2, T3'
 expect_waves eval9 'wave 1: T1'
 rc=0
 got="$(bash "$WAVES" "$SCRIPT_DIR/fixtures/eval10/seed/docs/plans/demo.md" 2>&1)" || rc=$?
@@ -149,6 +149,49 @@ fi
 rc=0
 EVAL_RECHECK="$CASES/eval8/overlap" bash "$SCRIPT_DIR/run-eval.sh" eval8 >/dev/null 2>&1 || rc=$?
 if [[ $rc -eq 1 ]]; then pass "recheck of a failing output: exit 1"; else fail "recheck of a failing output: exit $rc, expected 1"; fi
+
+echo "Test 7: the shared helpers read both task-id spellings and per-task fix-round ledger lines"
+# EVAL_LIB overrides the helper library (mutation checks on a copy).
+rc=0
+out="$("$PY" -I - "${EVAL_LIB:-$SCRIPT_DIR/lib}" 2>&1 <<'PYEOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import evalcheck as ec
+
+def call(prompt):
+    return ec.Call(0, {"name": "Agent", "input": {"prompt": prompt, "subagent_type": "fablepowers:implementer"}}, "", "m")
+
+cases = [
+    ("Report: /w/reports/task-1.md", ("task", "1")),
+    ("Report: /w/reports/task-T1.md", ("task", "1")),
+    ("Report: /w/reports/task-2-fix1.md", ("fix", "2")),
+    ("Report: /w/reports/task-T2-fix1.md", ("fix", "2")),
+    ("Report: /w/reports/task-7b-merge2.md", ("merge", "7b")),
+    ("Report: /w/reports/task-T7b-merge2.md", ("merge", "7b")),
+]
+for prompt, want in cases:
+    got = ec.classify_dispatch(call(prompt))
+    print("%s %s classifies as %s" % ("ok" if got == want else "bad", prompt.split("/")[-1], got))
+lines = [("fix 2-1 | abc1234 | DONE | reports/task-2-fix1.md", True),
+         ("fix T2-1 | abc1234 | DONE | reports/task-T2-fix1.md", True),
+         ("fix integration-1 | abc1234 | DONE | reports/integration-fix1.md", False),
+         ("merge 2-1 | abc1234 | DONE | reports/task-2-merge1.md", False),
+         ("fix 22-1 | abc1234 | DONE | reports/task-22-fix1.md", False)]
+for line, want in lines:
+    got = bool(ec.round_re("fix", "2").match(line))
+    print("%s round_re('fix', '2') on %r: %s" % ("ok" if got == want else "bad", line.split(" |")[0], got))
+PYEOF
+)" || rc=$?
+if [[ $rc -ne 0 ]]; then
+  fail "the helper checks exited $rc:"$'\n'"$out"
+else
+  while IFS= read -r line; do
+    case "$line" in
+      ok\ *) pass "${line#ok }" ;;
+      *) fail "${line#bad }" ;;
+    esac
+  done <<<"$out"
+fi
 
 echo
 if [[ $FAILURES -eq 0 ]]; then

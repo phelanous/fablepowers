@@ -30,6 +30,9 @@ SCRATCH = "/tmp/claude-1000/evalfix/scratchpad"
 T0 = datetime.datetime(2026, 10, 31, 12, 0, 0, tzinfo=datetime.timezone.utc)
 
 
+IGNORED = ".worktrees/.gitignore:1:*\t.worktrees/x\nexit 0\n"
+
+
 def iso(t):
     return t.strftime("%Y-%m-%dT%H:%M:%S") + ".%03dZ" % (t.microsecond // 1000)
 
@@ -47,7 +50,8 @@ class Run:
             "worktrees.txt": "worktree %s\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/main\n\n" % ROOT,
             "branches.txt": "",
             "status.txt": "",
-            "exclude.txt": "# git ls-files --others --exclude-from=.git/info/exclude\n\n.worktrees/\n",
+            "ignore-check.txt": IGNORED,
+            "tracked-worktrees.txt": "",
             "gitignore-head.txt": "__pycache__/\n*.pyc\n",
             "log.txt": "",
             "first-parent.txt": "",
@@ -144,7 +148,9 @@ class Run:
                                    "agentType": self.subs[aid]["meta"]["agentType"]})
 
     def write_case(self, path, expect):
-        os.makedirs(os.path.join(path, "session", "subagents"), exist_ok=True)
+        # Only directories that will hold files: git can't store an empty one,
+        # so a generated empty directory would break --check on a fresh checkout.
+        os.makedirs(os.path.join(path, "session", "subagents") if self.subs else path, exist_ok=True)
         with open(os.path.join(path, "session.jsonl"), "w") as fh:
             for r in self.main:
                 fh.write(json.dumps(r, sort_keys=True) + "\n")
@@ -188,10 +194,12 @@ def start(r):
     r.bash("bash %s/skills/subagent-execution/plan-waves docs/plans/demo.md" % PLUG, "wave 1: T1, T2\nwave 2: T3")
 
 
-def exclude(r):
-    r.bash('EXCLUDE="$(git rev-parse --path-format=absolute --git-common-dir)/info/exclude"; '
-           "grep -qxF '.worktrees/' \"$EXCLUDE\" 2>/dev/null || printf '\\n.worktrees/\\n' >> \"$EXCLUDE\"; "
-           "git check-ignore -q .worktrees/ && echo ignored", "ignored")
+def ignore_worktrees(r, present=False):
+    r.bash("test -e .worktrees/.gitignore && echo present", "present" if present else "", err=not present)
+    if not present:
+        tid = r.use("Write", {"file_path": ROOT + "/.worktrees/.gitignore", "content": "*\n"})
+        r.res(tid, "File created successfully at: %s/.worktrees/.gitignore" % ROOT)
+    r.bash("git check-ignore -q .worktrees/x && echo ignored", "ignored")
 
 
 def check_run(r, t):
@@ -248,8 +256,10 @@ EVAL6 = {"pass": "pass",
          "ff-merge": "merges-no-ff",
          "no-check-line": "check-line-after-each-merge",
          "leftover-worktree": "worktrees-and-branches-gone",
-         "gitignore-commit": "worktrees-ignored-via-exclude",
-         "status-shows-worktrees": "worktrees-ignored-via-exclude",
+         "not-ignored": "worktrees-ignored-without-tracked-change",
+         "gitignore-commit": "worktrees-ignored-without-tracked-change",
+         "gitignore-uncommitted": "worktrees-ignored-without-tracked-change",
+         "worktrees-committed": "worktrees-ignored-without-tracked-change",
          "pass-combined-printf": "pass",
          "not-stopped": "stopped-before-review"}
 
@@ -258,15 +268,23 @@ def eval6(v):
     r = Run()
     r.combine = v == "pass-combined-printf"
     start(r)
-    if v == "gitignore-commit":
+    if v == "not-ignored":
+        # Nothing ignores .worktrees/; cleanup emptied it, so status is clean.
+        r.state["ignore-check.txt"] = "exit 1\n"
+    elif v == "gitignore-commit":
         r.bash("printf '.worktrees/\\n' >> .gitignore && git add .gitignore && git commit -m 'chore: ignore .worktrees'")
         r.state["gitignore-head.txt"] += ".worktrees/\n"
-        r.state["exclude.txt"] = "# git ls-files --others --exclude-from=.git/info/exclude\n"
-    elif v == "status-shows-worktrees":
-        r.state["exclude.txt"] = "# git ls-files --others --exclude-from=.git/info/exclude\n"
-        r.state["status.txt"] = "?? .worktrees/\n"
+        r.state["ignore-check.txt"] = ".gitignore:3:.worktrees/\t.worktrees/x\nexit 0\n"
+    elif v == "gitignore-uncommitted":
+        r.bash("printf '.worktrees/\\n' >> .gitignore")
+        r.state["status.txt"] = " M .gitignore\n"
+        r.state["ignore-check.txt"] = ".gitignore:3:.worktrees/\t.worktrees/x\nexit 0\n"
+    elif v == "worktrees-committed":
+        ignore_worktrees(r)
+        r.bash("git add -f .worktrees/.gitignore && git commit -m 'chore: ignore .worktrees'")
+        r.state["tracked-worktrees.txt"] = "\n.worktrees/.gitignore\n"
     else:
-        exclude(r)
+        ignore_worktrees(r)
     for t in ("1", "2"):
         r.bash("git rev-parse --verify --quiet refs/heads/fp/demo/t%s || git worktree add -b fp/demo/t%s %s/.worktrees/demo-t%s main"
                % (t, t, ROOT, t), "Preparing worktree (new branch 'fp/demo/t%s')" % t)
@@ -324,7 +342,7 @@ def eval6_resume(v):
     r.bash("git branch --list 'fp/demo/t*'", "  fp/demo/t2")
     r.bash("git worktree list", "%s 1111111 [main]\n%s/.worktrees/demo-t2 2222222 [fp/demo/t2] prunable" % (ROOT, ROOT))
     r.bash("bash %s/skills/subagent-execution/plan-waves docs/plans/demo.md" % PLUG, "wave 1: T1, T2\nwave 2: T3")
-    exclude(r)
+    ignore_worktrees(r, present=True)
     r.bash("git rev-parse --verify --quiet refs/heads/fp/demo/t2", "2222222222222222222222222222222222222222")
     if v == "t2-recreated":
         r.bash("git branch -D fp/demo/t2", "Deleted branch fp/demo/t2")
@@ -402,7 +420,7 @@ def history(r, on_branch):
 def eval7(v):
     r = Run()
     start(r)
-    exclude(r)
+    ignore_worktrees(r, present=True)
     for t in ("1", "2"):
         r.bash("git worktree add -b fp/demo/t%s %s/.worktrees/demo-t%s main" % (t, ROOT, t))
     w1, w2 = ROOT + "/.worktrees/demo-t1", ROOT + "/.worktrees/demo-t2"

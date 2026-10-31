@@ -14,7 +14,8 @@ copies), and <state-dir> holds what run-eval.sh captured after the run:
     worktrees.txt      `git worktree list --porcelain`
     branches.txt       `git branch --list 'fp/*'`
     status.txt         `git status --porcelain`
-    exclude.txt        the repo's info/exclude
+    ignore-check.txt   `git check-ignore -v .worktrees/x`, then `exit <status>`
+    tracked-worktrees.txt  paths under .worktrees/ in main's history ('' when none)
     gitignore-head.txt `git show HEAD:.gitignore` ('' when there is none)
     log.txt            `git log --format='%H %P|%s' main`
     first-parent.txt   `git rev-list --first-parent main`

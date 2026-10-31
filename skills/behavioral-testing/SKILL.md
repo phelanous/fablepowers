@@ -33,22 +33,26 @@ Do this for every behavior the spec calls out as a success criterion, and for ev
 
 These wait rules apply to every agent, the orchestrator included, whenever a run may take longer than a single tool call allows.
 
-1. Start the run in the background with output to a file and an exit-status marker:
+1. Write the run into a small script file in your scratch space. It runs the command with output to a log, then writes the exit status to a `.done` marker:
 
    ```bash
-   OUT="<scratch-dir>/suite.log"; rm -f "$OUT" "$OUT.done"
-   ( <test command>; echo "exit $?" > "$OUT.done" ) > "$OUT" 2>&1 &
+   # <scratch-dir>/suite.sh
+   cd <worktree>
+   <test command> > <scratch-dir>/suite.log 2>&1
+   echo "exit $?" > <scratch-dir>/suite.done
    ```
 
-2. Wait on that marker, or that PID, in separate calls, each kept under the harness's tool timeout:
+   Remove a marker left by an earlier run (`rm -f <scratch-dir>/suite.done`), or use a new name, before you start.
+2. Start `bash <scratch-dir>/suite.sh` as a background command, the way the harness reference says (on Claude Code, Bash with `run_in_background`). A one-line `( cmd; echo "exit $?" > … ) &` is not a substitute: permission layers refuse commands with groups or variables, and some harnesses kill a `&` job when the call's shell exits.
+3. Wait on that marker, or the harness's completion notification for that command, in separate calls, each kept under the harness's tool timeout:
 
    ```bash
-   timeout 540 bash -c "until [ -e '$OUT.done' ]; do sleep 5; done"
+   timeout 540 bash -c 'until [ -f <scratch-dir>/suite.done ]; do sleep 5; done'
    ```
 
-   Repeat the call until the marker exists, then read the marker and the output.
-3. Never wait with `pgrep -f <pattern>`, and never with a sleep loop that has no completion condition. A pattern match can latch onto someone else's process (another agent's `playwright test`, a stale run) and wait on work that isn't yours.
-4. The overall wait is capped at the plan's stated suite budget, or 30 minutes when the plan states none. At the cap, report the hang with the tail of the output, and stop waiting.
+   Repeat the call until the marker exists, then read the marker and the log.
+4. Never wait with `pgrep -f <pattern>`, and never with a sleep loop that has no completion condition. A pattern match can latch onto someone else's process (another agent's `playwright test`, a stale run) and wait on work that isn't yours.
+5. The overall wait is capped at the plan's stated suite budget, or 30 minutes when the plan states none. At the cap, report the hang with the tail of the output, and stop waiting.
 
 A harness reference may name a native mechanism in place of the marker once it is verified to reach a subagent. The marker pattern is the portable default.
 

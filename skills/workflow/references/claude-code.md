@@ -15,7 +15,7 @@ The fablepowers skills and agent bodies name actions ("dispatch the implementer 
 | Plugin root (where `skills/`, `agents/`, `hooks/` live) | `${CLAUDE_PLUGIN_ROOT}` in hook commands; a skill's base directory is shown when the skill is invoked |
 | Dispatch several seats at once (independent plan tasks) | Several Agent calls in one assistant message, each with the seat's `subagent_type` and a prompt naming its task worktree, without `isolation`. See [Parallel dispatch](#parallel-dispatch); unverified in a full plan run. |
 | Task worktree (create / remove) | `git worktree add -b fp/<plan-key>/t<id> <plan worktree>/.worktrees/<plan-key>-t<id> <plan-branch>`, later `git worktree remove` and `git branch -d`; not EnterWorktree. Verified under the session directory in T0 §3 and §8; see [Parallel dispatch](#parallel-dispatch). |
-| Wait on a run longer than one tool call | A background Bash run with an exit-status `.done` marker, waited on in bounded calls (the portable pattern; unverified as a whole in T0). See [Parallel dispatch](#parallel-dispatch). |
+| Wait on a run longer than one tool call | A script file that writes an exit-status `.done` marker, started with Bash `run_in_background`, waited on in bounded calls (verified in T7's eval 9, T7 report F2). See [Parallel dispatch](#parallel-dispatch). |
 
 ## Seats → agents and models
 
@@ -65,6 +65,7 @@ The design-approval checkpoint is enforced by a hook, `hooks/approval-gate` (a P
 `fablepowers:subagent-execution` runs a plan's independent tasks at the same time, each in its own task worktree. On Claude Code that resolves as below. Every fact carries a label:
 
 - **verified (T0 §n)**: established in the 0.8.0 spike, live `claude -p` runs on Claude Code 2.1.306 with transcript and hook-log evidence. The record is `.fablepowers/2026-10-31-parallel-execution/reports/task-0.md` in that plan's workspace, section n.
+- **verified (T7 report Fn)**: found in the 0.8.0 live evals (`tests/evals/`), on the same CLI version. The record is `reports/task-7.md` in the same workspace, finding n.
 - **unverified**: not checked in a run.
 
 **Status.** Parallel dispatch in a full plan run is **unverified**. It stays so until live eval 6 (`tests/evals/`: two independent tasks and one dependent) passes. The mechanisms underneath it were verified in T0, as listed here.
@@ -75,16 +76,17 @@ The design-approval checkpoint is enforced by a hook, `hooks/approval-gate` (a P
 - No `isolation` parameter. The task worktree is the one the orchestrator created, not the Agent tool's own `.claude/worktrees/agent-<id>`.
 - Two foreground Agent calls in one message ran with overlapping active intervals. The parent resumed only after both had returned, and both finished before `-p` exited (verified, T0 §1).
 - Their `.meta.json` recorded `requestShape: "foreground"` and `requestNonInteractive: true`. No `run_in_background` was passed (verified, T0 §7).
+- Background Agent calls (an async launch, then a completion notification) are also acceptable for a wave: an orchestrator chose them in T7's eval6-resume run, and its T1 and T3 ran with overlapping active intervals (verified, T7 report F3).
 
 **Where task worktrees live.** Under the plan worktree: `<plan worktree>/.worktrees/<plan-key>-t<id>`, not under the main checkout.
 
 - The desktop app's write guard refuses edits under the main checkout from a session in a `.claude/worktrees/` worktree. That was verified while executing the 0.8.0 plan itself, not in T0 (plan binding resolution 5).
 - A subagent's `cd` into a directory outside the session's working directories (its launch directory and any `--add-dir`) is blocked and listed in `permission_denials` (verified, T0 §3). A task worktree inside the plan worktree is under the launch directory when the session runs in the plan worktree.
-- `.worktrees/` is kept out of `git status` by an entry in `$(git rev-parse --git-common-dir)/info/exclude`, which applies to every worktree of the repository.
+- `.worktrees/` is kept out of `git status` by a self-ignoring `<plan worktree>/.worktrees/.gitignore` holding `*`, written with the Write tool. Not `info/exclude`: in `-p`, Claude Code 2.1.306 refuses every write under `.git/` as a sensitive file, by Bash or by Edit, and an `Edit(.git/info/exclude)` allow rule doesn't lift it (verified, T7 report F1). Whether an interactive session prompts instead is unverified.
 
 **Working directory in a subagent.** `cd` does not persist between Bash calls: the next call starts in the session's launch directory again (verified, T0 §3). So the dispatch tells the implementer to:
 
-- prefix every Bash command with `cd <task worktree> &&`, or use `git -C <task worktree>`. A `cd` and its command in one call work (verified, T0 §3);
+- run git as `git -C <task worktree> …`, and prefix every other Bash command with `cd <task worktree> &&`. A `cd` and its command in one call work (verified, T0 §3). But `cd <task worktree> && git …` was refused in `-p` ("Permission to use Bash has been denied"), and the refusal did not appear in `result.permission_denials`. The same implementer's `git -C` calls ran (verified, T7-fix1 report, eval 6);
 - use absolute paths for Read, Edit and Write. Edit and Write with absolute paths in a task worktree worked (verified, T0 §3). In that run Write and Edit were allowed through `--allowedTools`. Whether acceptEdits alone admits them outside the session's directories is unverified.
 
 **Hook `cwd`.** In a subagent's hook payload, `cwd` is always the session's launch directory. That holds right after a `cd`, and for a Write or Edit inside a task worktree (verified, T0 §2).
@@ -93,13 +95,16 @@ The design-approval checkpoint is enforced by a hook, `hooks/approval-gate` (a P
 - The payload's `transcript_path` is the parent's transcript. `agent_id` and `agent_type` are present for subagents only (verified, T0 §2).
 - For the approval gate, a subagent's marker toplevel is therefore the plan worktree, where the workspace lives. That is inferred from the gate's toplevel rule above, unverified.
 
-**Waiting on long runs.** The marker pattern from `fablepowers:behavioral-testing` is the default here:
+**Waiting on long runs.** The marker pattern from `fablepowers:behavioral-testing`, in the shape Claude Code admits:
 
-- Start the run in the background with its output in a file and an exit-status `.done` marker.
-- Wait in bounded calls on that marker, each under the Bash tool's timeout, for example `timeout 540 bash -c 'until [ -e <out>.done ]; do sleep 5; done'`. The 600,000 ms maximum is the Bash tool's documented limit (unverified in T0).
+- Write the run into a script file in scratch space that runs the command with output to a log, then writes `exit <status>` to the `.done` marker.
+- Start `bash <script>` with Bash `run_in_background`.
+- Wait on the marker, or on the completion notification, in bounded calls, each under the Bash tool's timeout, for example `timeout 540 bash -c 'until [ -f <out>.done ]; do sleep 5; done'`. The 600,000 ms maximum is the Bash tool's documented limit (unverified in T0).
 - Never `pgrep -f`.
 
-A Bash `run_in_background` completion notification does reach a running subagent: the one that started the job, not the parent (verified, T0 §4). But it arrives only at that subagent's next tool-result boundary. In T0 it was queued while a 40 s foreground call ran, and delivered when that call returned (verified, T0 §4). It carries the task summary and the output-file path, not the command's stdout (verified, T0 §4). So the notification does not replace the marker wait: it lands after whatever call the agent is already in, and the agent still reads the output file.
+Why the script file (verified in `-p` on Claude Code 2.1.306, T7 report F2): under pattern allow rules, a Bash command with a `( … )` group or a variable such as `$?` is denied ("can't be checked before it runs"), so the one-line `( cmd; echo "exit $?" > <out>.done ) > <out> &` never runs. With sandbox auto-allow it is admitted, but the `&` job is killed when the call's shell exits. The script-plus-`run_in_background` shape ran without a denial in eval 9, for an implementer and for the orchestrator's post-merge check.
+
+A Bash `run_in_background` completion notification does reach a running subagent: the one that started the job, not the parent (verified, T0 §4). But it arrives only at that subagent's next tool-result boundary. In T0 it was queued while a 40 s foreground call ran, and delivered when that call returned (verified, T0 §4). It carries the task summary and the output-file path, not the command's stdout (verified, T0 §4). So the notification is a completion signal, not the result: it lands after whatever call the agent is already in, and the agent still reads the marker and the log.
 
 **Headless runs.** Under `-p` with acceptEdits, these `--allowedTools` patterns admitted the commands without a prompt (verified, T0 §8):
 

@@ -62,20 +62,27 @@ def main():
     # Task worktrees and branches are gone at the end.
     ec.assert_cleanup(s, c, KEY)
 
-    # Review Focus 2: the fixture repo has no ignore entry; .worktrees/ never
-    # shows in git status, and the ignore comes from info/exclude, not a
-    # committed .gitignore.
-    status = [l for l in s.state("status.txt").splitlines() if ".worktrees" in l]
-    excl = any(l.strip().rstrip("/") in (".worktrees", "/.worktrees") for l in s.state("exclude.txt").splitlines())
+    # Review Focus 2: the fixture repo has no ignore entry. At the end of the
+    # run .worktrees/ is ignored (git check-ignore succeeds), with no tracked
+    # change: no .worktrees entry in .gitignore at HEAD or uncommitted, and
+    # nothing under .worktrees/ ever committed.
+    status = [l for l in s.state("status.txt").splitlines()
+              if l[3:].strip().strip('"').startswith((".worktrees", ".gitignore"))]
+    ign = s.state("ignore-check.txt").splitlines()
+    ignored = bool(ign) and ign[-1].strip() == "exit 0"
     gi = ".worktrees" in s.state("gitignore-head.txt")
+    committed = s.state("tracked-worktrees.txt").split()
     problems = []
     if status:
         problems.append("git status shows %s" % status[0].strip())
-    if not excl:
-        problems.append("info/exclude has no .worktrees/ entry")
+    if not ignored:
+        problems.append("git check-ignore .worktrees/x: %s" % (ign[-1].strip() if ign else "not captured"))
     if gi:
         problems.append(".gitignore at HEAD names .worktrees")
-    c.check("worktrees-ignored-via-exclude", not problems, "; ".join(problems) or "info/exclude entry, status clean")
+    if committed:
+        problems.append("committed under .worktrees/: %s" % committed[0])
+    c.check("worktrees-ignored-without-tracked-change", not problems,
+            "; ".join(problems) or "ignored by %s, status clean" % (ign[0].split("\t")[0] if len(ign) > 1 else "?"))
 
     ec.assert_stopped(s, c, ["1", "2", "3"])
     return c.finish()

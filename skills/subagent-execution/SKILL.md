@@ -115,16 +115,13 @@ bash "<this skill's base dir>/plan-waves" <plan-file>
 **Task worktrees:**
 
 - Task worktrees live inside the plan worktree, at `$PLAN_ROOT/.worktrees/<plan-key>-t<id>`, where `PLAN_ROOT` is `git rev-parse --show-toplevel` of the plan worktree. Every command below runs in the plan worktree. Not under `MAIN_ROOT`: some harnesses refuse a worktree session's writes under the main checkout, and a subagent can't `cd` outside its session directory.
-- Before creating the first one, make sure `.worktrees/` is ignored. Use the repository's shared exclude file, which applies to every worktree and needs no commit:
+- Before creating the first one, make sure `.worktrees/` is ignored. If `$PLAN_ROOT/.worktrees/.gitignore` doesn't exist, write it with your file-writing tool, holding the single line `*`. It ignores the directory and itself, the way `review-package --init` keeps `.fablepowers/` out of `git status`: nothing to commit, and nothing written under `.git/`, which some harnesses refuse as a sensitive file. Then check:
 
   ```bash
-  EXCLUDE="$(git rev-parse --path-format=absolute --git-common-dir)/info/exclude"
-  mkdir -p "$(dirname "$EXCLUDE")"
-  grep -qxF '.worktrees/' "$EXCLUDE" 2>/dev/null || printf '\n.worktrees/\n' >> "$EXCLUDE"
-  git check-ignore -q .worktrees/
+  git check-ignore -q .worktrees/x
   ```
 
-  The last command must exit 0; if it doesn't, stop and report. For task worktrees this replaces `fablepowers:using-git-worktrees`' `.gitignore` commit; that skill's own worktree creation is unchanged.
+  It must exit 0; if it doesn't, stop and report. Never add `.worktrees` to the tracked `.gitignore` or commit anything under `.worktrees/`. For task worktrees this replaces `fablepowers:using-git-worktrees`' `.gitignore` commit; that skill's own worktree creation is unchanged.
 - Create each task worktree from the plan branch's tip at dispatch time:
 
   ```bash
@@ -136,7 +133,7 @@ bash "<this skill's base dir>/plan-waves" <plan-file>
 - A task worktree has only tracked files. Set up its environment as the plan's `worktree env` line in Parallel safety says: for `isolate: <setup step or shared path>`, run that step, or link that path, in the new worktree before dispatch; for `none needed`, do nothing. A plan without the line gets nothing. If a task's tests then fail on a missing ignored file (`.env`, `node_modules`, `.venv`), that is a plan gap; take it to the user rather than copying files on a guess.
 - Beyond what Dispatch hygiene requires, a task's dispatch names:
   - the task worktree as the working directory;
-  - the instruction to run each Bash command as `cd <task worktree> && …` or with `git -C <task worktree>`, since a subagent's `cd` doesn't persist between calls, and to use absolute paths for Edit and Write;
+  - the instruction to run git as `git -C <task worktree> …` and every other Bash command as `cd <task worktree> && …`, since a subagent's `cd` doesn't persist between calls, and to use absolute paths for Edit and Write. Unless the harness reference says otherwise, git goes through `git -C`, not `cd … && git`, which some permission layers refuse;
   - absolute paths for the plan, the spec and the report, with the report under the plan worktree's workspace, never inside the task worktree;
   - the resource instance assigned for each `isolate` resource the task touches, as the plan's line for that resource says to assign it.
 - Spot-check a task from a task worktree with `git diff <plan-branch>...fp/<plan-key>/t<id>`.
@@ -151,15 +148,15 @@ bash "<this skill's base dir>/plan-waves" <plan-file>
 
 **After each merge,** and after a task run in place commits, run the full suite in the plan worktree. The suite is the plan's full-suite command, or the project's when the plan names none. The run holds every run resource (see Ready and in flight), and no file-contention resource: start it only when no in-flight agent holds a run resource, and dispatch nothing that touches one until it ends.
 
-- Wait on the run the same way implementers wait on a long run. Unless the harness reference names a verified native mechanism, start it in the background with output to a file and an exit-status marker, then wait on the marker in bounded calls:
+- Wait on the run the same way implementers wait on a long run (`fablepowers:behavioral-testing`, "Waiting on a long run"). Unless the harness reference names a verified native mechanism, write the run into a script file in your scratch space that runs the suite in the plan worktree with output to `<workspace>/reports/check-<id>.log`, then writes `exit <status>` to `<workspace>/reports/check-<id>.done` (removed beforehand if an earlier run left one):
 
   ```bash
-  OUT="<workspace>/reports/check-<id>.log"; rm -f "$OUT" "$OUT.done"
-  ( <full-suite command>; echo "exit $?" > "$OUT.done" ) > "$OUT" 2>&1 &
-  timeout 540 bash -c "until [ -e '$OUT.done' ]; do sleep 5; done"
+  cd <plan worktree>
+  <full-suite command> > <workspace>/reports/check-<id>.log 2>&1
+  echo "exit $?" > <workspace>/reports/check-<id>.done
   ```
 
-  Repeat the wait in separate calls, each under the harness's tool timeout, until the marker exists. Never wait with `pgrep -f <pattern>`, and never with a sleep loop that has no completion condition. The overall wait is capped at the plan's stated suite budget, or 30 minutes when it states none. At the cap, report the hang to the user with the output's tail, and stop waiting.
+  Start it as a background command (on Claude Code, Bash with `run_in_background`), then wait on the marker or the harness's completion notification, in separate bounded calls, each under the harness's tool timeout: `timeout 540 bash -c 'until [ -f <workspace>/reports/check-<id>.done ]; do sleep 5; done'`. Never wait with `pgrep -f <pattern>`, and never with a sleep loop that has no completion condition. The overall wait is capped at the plan's stated suite budget, or 30 minutes when it states none. At the cap, report the hang to the user with the output's tail, and stop waiting.
 - The check is PASS when the marker reads `exit 0`, and FAIL otherwise. Append `check <id> | <head7> | PASS|FAIL | —`.
 - **A FAIL holds new dispatches** until a check fix lands and a re-run passes. The check fix is a `fablepowers:implementer` in the plan worktree. Its dispatch names the log path, the failing tests as its test obligations (failing before the fix, passing after), and the report path `reports/check-<id>-fix<k>.md`. It commits on the plan branch. Add its `check <id>-fix<k>` line, re-run the check, and add the new `check <id>` line. In-flight tasks continue, and their merges, queued until then, pick up the fix.
 - After a PASS, append the task's `task` line.

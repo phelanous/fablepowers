@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # Leave the repo as a crashed run would: the plan workspace exists, .worktrees/
-# is in info/exclude, and task T2's branch fp/demo/t2 holds a finished commit
-# (its report written) but has no worktree and no ledger line. Runs in the
-# fixture repo; env: PLUGIN_ROOT, OUT.
+# is ignored by its own .worktrees/.gitignore, and task T2's branch fp/demo/t2
+# holds a finished commit (its report written) but has no worktree and no
+# ledger line. Runs in the fixture repo; env: PLUGIN_ROOT, OUT.
 set -euo pipefail
 bash "$PLUGIN_ROOT/skills/integration-review/review-package" --init docs/plans/demo.md >/dev/null
-# The crashed run had already made .worktrees/ ignored through info/exclude.
-printf '
-.worktrees/
-' >> "$(git rev-parse --path-format=absolute --git-common-dir)/info/exclude"
+# The crashed run had already made .worktrees/ ignored, as the skill says.
+mkdir -p .worktrees
+printf '*\n' > .worktrees/.gitignore
 WS=.fablepowers/demo
 mkdir -p "$WS/reports"
 git branch fp/demo/t2 main

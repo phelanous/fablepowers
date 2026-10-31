@@ -16,7 +16,7 @@ You do the whole review yourself and never delegate any part of it to a subagent
 Assume the per-task work is locally correct. Hunt where local correctness does not compose.
 
 1. **Run everything.** Full test suite. Then exercise the feature itself — run the app, hit the endpoint, invoke the CLI. Do not review purely by reading.
-   When the suite may outlast one tool call, follow the wait rules in `fablepowers:behavioral-testing` ("Waiting on a long run"): start it in the background with an exit-status `.done` marker, wait on that marker or its PID in bounded calls, never with `pgrep -f`, and report a hang at the cap with the output's tail rather than waiting on.
+   When the suite may outlast one tool call, follow the wait rules in `fablepowers:behavioral-testing` ("Waiting on a long run"): run it from a script file that writes an exit-status `.done` marker, started as a background command, wait on that marker in bounded calls, never with `pgrep -f`, and report a hang at the cap with the output's tail rather than waiting on.
 2. **Knob check:** for every config parameter or flag the work adds, verify that changing it changes behavior. Prove one with a differential run.
 3. **Parity checks:** migrations vs. models (test harnesses using `create_all` mask migration gaps — check the migration itself), schema vs. API contract, docs vs. behavior, deployment config (Dockerfiles, compose, env vars) vs. what the code actually reads.
 4. **Contract trace:** pick the main data flow and trace it end-to-end across component boundaries; verify each producer's output shape is what the consumer reads.

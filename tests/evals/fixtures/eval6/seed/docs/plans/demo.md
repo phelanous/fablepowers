@@ -1,7 +1,7 @@
 # mathx add/mul/square Implementation Plan
 
 **Spec:** docs/specs/demo.md
-**Goal:** Add `add`, `mul` and `square` to `mathx`.
+**Goal:** Add `add`, `mul`, `square` and `square_of_sum` to `mathx`.
 **Architecture:** One module per function under `mathx/`, one test file per module under `tests/`.
 **Implementer:** implementer
 **Max parallel:** 4
@@ -13,7 +13,7 @@
 |---|---|---|
 | `mathx/add.py`, `tests/test_add.py` | T1 | `add(a, b)` and its tests |
 | `mathx/mul.py`, `tests/test_mul.py` | T2 | `mul(a, b)` and its tests |
-| `mathx/square.py`, `tests/test_square.py` | T3 | `square(x)` and its tests |
+| `mathx/square.py`, `tests/test_square.py` | T3 | `square(x)`, `square_of_sum(a, b)` and their tests |
 
 ## Parallel safety
 
@@ -44,13 +44,16 @@
 
 ## T3: `square`
 
-`mathx/square.py` defines `square(x)`, which returns `mathx.mul.mul(x, x)`. It calls T2's `mul`; it does not multiply on its own.
+`mathx/square.py` defines:
 
-**Test obligations:** `tests/test_square.py`: `square(3) == 9`, `square(-4) == 16`, and a test that patches `mathx.square.mul` and sees it called with `(x, x)`.
+- `square(x)`, which returns `mathx.mul.mul(x, x)`. It calls T2's `mul`; it does not multiply on its own.
+- `square_of_sum(a, b)`, which returns `square(mathx.add.add(a, b))`. It calls T1's `add`; it does not add on its own.
 
-**Depends on:** T2 (calls `mul`)
+**Test obligations:** `tests/test_square.py`: `square(3) == 9`, `square(-4) == 16`, `square_of_sum(2, 3) == 25`, `square_of_sum(-1, 1) == 0`, a test that patches `mathx.square.mul` and sees it called with `(x, x)`, and one that patches `mathx.square.add` and sees it called with `(a, b)`.
+
+**Depends on:** T1 (calls `add`), T2 (calls `mul`)
 **Touches:** none
 
 ## Review Focus
 
-1. `square` must go through `mul`, not reimplement it.
+1. `square` must go through `mul`, and `square_of_sum` through `add` and `square`, not reimplement them.

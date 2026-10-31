@@ -6,9 +6,9 @@ part of the offline suites or CI**. Each run bills your Claude Code login.
 
 | Eval | What it runs | What the checker asserts |
 |---|---|---|
-| `eval6` | two independent tasks and one dependent task | the two dispatches in one message, each naming its own `.worktrees/` task worktree, with overlapping active intervals; the dependent task dispatched after both `task` lines; `--no-ff` merges, each followed by a `check` line; worktrees and branches gone; `.worktrees/` ignored through `info/exclude`, not a committed `.gitignore`. Wave-1 concurrency is printed as a signal. |
-| `eval6-resume` | `eval6` again, starting from a crashed run's state: `.worktrees/` already in `info/exclude`, and an `fp/demo/t2` branch with a finished commit whose worktree directory is gone | T2 is not re-dispatched; its branch is never recreated, deleted or reset, and its commit is merged; then the `eval6` merge, check, cleanup and stop assertions |
-| `eval7` | two tasks that set `app/config.py` `PAGE_SIZE` to different values (50 and 100), started from a crashed run's state: T1 merged with its ledger lines, T2's finished commit on `fp/demo/t2`, `.worktrees/` already in `info/exclude`. The conflict is seeded because live implementers sidestep a shared constant and an orchestrator seeing both branches unmerged can catch the clash before merging | `git merge --abort` and a merge-fix dispatch; a `merge` ledger line after the fix returns; no orchestrator Edit or Write to the conflicted file; no orchestrator Bash naming it, or using `--ours`/`--theirs`, between the abort and the fix's return; the resolving merge commit on the task branch |
+| `eval6` | two independent tasks and one dependent task | the two dispatches in one message, each naming its own `.worktrees/` task worktree, with overlapping active intervals; the dependent task dispatched after both `task` lines; `--no-ff` merges, each followed by a `check` line; worktrees and branches gone; `.worktrees/` ignored without a tracked change (`git check-ignore` succeeds, no `.worktrees` entry in `.gitignore` committed or uncommitted, nothing under `.worktrees/` committed). Wave-1 concurrency is printed as a signal. |
+| `eval6-resume` | `eval6` again, starting from a crashed run's state: `.worktrees/.gitignore` (`*`) already written, and an `fp/demo/t2` branch with a finished commit whose worktree directory is gone | T2 is not re-dispatched; its branch is never recreated, deleted or reset, and its commit is merged; then the `eval6` merge, check, cleanup and stop assertions |
+| `eval7` | two tasks that set `app/config.py` `PAGE_SIZE` to different values (50 and 100), started from a crashed run's state: T1 merged with its ledger lines, T2's finished commit on `fp/demo/t2`, `.worktrees/.gitignore` (`*`) already written. The conflict is seeded because live implementers sidestep a shared constant and an orchestrator seeing both branches unmerged can catch the clash before merging | `git merge --abort` and a merge-fix dispatch; a `merge` ledger line after the fix returns; no orchestrator Edit or Write to the conflicted file; no orchestrator Bash naming it, or using `--ours`/`--theirs`, between the abort and the fix's return; the resolving merge commit on the task branch |
 | `eval8` | two independent tasks sharing the `e2e — serialize` resource | both dispatched; their active intervals never overlap |
 | `eval9` | one task whose full suite has a 3-minute e2e step named `playwright test`, while the driver keeps a decoy process of the same name alive | the implementer's waits use its own `.done` marker or PID, never `pgrep -f`; it finishes while the decoy is alive; its report labels targeted and full runs and shows mutant runs; one or two full-suite runs |
 | `eval10` | plan review of a plan with an enum-only dependency (T2 on T1) and a task with no Depends on line (T3) | a `fablepowers:reviewer` dispatch; its report flags both; nothing executed |
@@ -31,9 +31,11 @@ runs the fixture's `setup.sh`, then runs `claude -p` there with this checkout as
 `--dangerously-skip-permissions`). Edit and Write stay under acceptEdits, inside
 the fixture repo. Known limit: in `-p`, Claude Code 2.1.306 denies a Bash
 command holding a variable or a `( … )` group under any pattern rule ("can't be
-checked before it runs"), and the skills' `.done` marker pattern is such a
-command. The driver prints every denial; an agent that hits one must find
-another way. It saves the transcript and the repo's state
+checked before it runs"), so the skills put a long run in a script file that
+writes its own `.done` marker and start it with `run_in_background`. Writes
+under `.git/` are refused as sensitive files, which is why task worktrees are
+ignored through `.worktrees/.gitignore`. The driver prints every denial; an
+agent that hits one must find another way. It saves the transcript and the repo's state
 to `<tmp>/out/`, runs `post.sh`, then `check.py`, and prints each assertion with
 the run's cost, turn count and any permission denials. Exit 0 is a pass, 1 a
 fail, 2 a usage or setup error.

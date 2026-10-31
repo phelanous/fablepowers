@@ -396,6 +396,8 @@ EVAL7 = {"pass": "pass",
          "ledger-before-fix": "merge-ledger-line",
          "ledger-not-in-file": "merge-ledger-line",
          "ledger-wrong-report": "merge-ledger-line",
+         "pass-absolute-report": "pass",
+         "ledger-report-in-task-worktree": "merge-ledger-line",
          "orchestrator-edit": "no-orchestrator-edit-conflicted-file",
          "bash-in-window": "no-orchestrator-bash-on-conflict",
          "resolved-on-plan-branch": "resolving-merge-on-task-branch",
@@ -471,6 +473,12 @@ def eval7(v):
     elif v == "ledger-wrong-report":
         # The fix-round report instead of the merge fix's (re-review 1, minor 1).
         r.ledger("merge 2-1 | abc1250 | DONE | reports/task-2-fix1.md")
+    elif v == "pass-absolute-report":
+        # The report by the absolute path the dispatch named (re-review 2, minor 4).
+        r.ledger("merge 2-1 | abc1250 | DONE | %s/reports/task-2-merge1.md" % WS)
+    elif v == "ledger-report-in-task-worktree":
+        # A report path relative to the task worktree, not the workspace.
+        r.ledger("merge 2-1 | abc1250 | DONE | .worktrees/demo-t2/reports/task-2-merge1.md")
     elif v not in ("no-ledger-line", "ledger-before-fix"):
         r.ledger("merge 2-1 | abc1250 | DONE | reports/task-2-merge1.md")
     merge_task(r, "2")
@@ -487,6 +495,7 @@ EVAL8 = {"pass": "pass",
          "one-dispatch": "both-dispatched",
          "overlap": "serialized-no-overlap",
          "intervals-overlap": "serialized-no-overlap",
+         "fix-round-overlap": "serialized-no-overlap",
          "control-serial": "control-overlaps",
          "control-full-suite": "control-pre-commit-suite",
          "control-full-suite-in-script": "control-pre-commit-suite",
@@ -545,9 +554,27 @@ def eval8(v):
         r.ret(a3, s3)
         if a2:
             r.ret(a2, s2)
+        if v == "fix-round-overlap":
+            # T2 is dispatched once T1 returns, which frees e2e; then a fix
+            # round for T1, which holds e2e too, goes out while T2 holds it
+            # (re-review 2, M1). Each task dispatch is serialized; the fix
+            # round is not.
+            r.bash("git worktree add -b fp/demo/t2 %s/.worktrees/demo-t2 main" % ROOT)
+            a2 = r.agent("fablepowers:implementer", task_prompt("2", w2), "T2 clamp", msg="msg_f")
+            fp = ("Fix round for T1 in %s: the spot-check found shout() drops punctuation. Plan: %s/docs/plans/demo.md. "
+                  "Report: %s/reports/task-1-fix1.md" % (w1, ROOT, WS))
+            af = r.agent("fablepowers:implementer", fp, "T1 fix round", msg="msg_f")
+            s2 = r.sub(a2, "fablepowers:implementer", "T2 clamp", 1, 45, impl_steps(w2, "nums"))
+            sf = r.sub(af, "fablepowers:implementer", "T1 fix round", 2, 30, [
+                ("Bash", "cd %s && %s && bash tests/e2e.sh" % (w1, PRE_COMMIT8), "OK\ne2e: ok"),
+                ("Bash", "git -C %s commit -am 'fix: keep punctuation'" % w1, "1 file changed")])
+            r.tick(50)
+            r.ret(a2, s2)
+            r.ret(af, sf)
+            r.ledger("fix 1-1 | abc1261 | DONE | reports/task-1-fix1.md")
         merge_task(r, "1")
         merge_task(r, "3")
-        if v == "overlap":
+        if v in ("overlap", "fix-round-overlap"):
             merge_task(r, "2")
         elif v == "one-dispatch":
             tid = r.use("Write", {"file_path": ROOT + "/util/nums.py", "content": "def clamp(x, lo, hi): ..."})

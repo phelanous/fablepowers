@@ -27,6 +27,7 @@ Do this for every behavior the spec calls out as a success criterion, and for ev
 - **While iterating,** run the tests covering the files the task touches, not the whole suite.
 - **Per mutant,** run only the tests covering the mutated behavior. Run mutants one at a time: they share one worktree's files, so two at once break each other's runs.
 - **The full suite,** browser e2e included, runs once before commit, plus once more after any fix made in response to that run. A green targeted run is not a substitute for it.
+- **In a parallel plan,** the full suite you run before commit is the one your dispatch names. When the plan has a `serialize` run resource (a fixed e2e port, a shared login) and your task doesn't touch it, that is the plan's `pre-commit suite` command, which leaves the serialized part out: another implementer may be holding it. The post-merge check runs the true full suite. Use the `isolate` instances your dispatch assigns (your own test DB, your own port offset).
 - **The report says which runs were targeted and which were full,** so a reader can tell a mutant's run from the run that gates the commit.
 
 ## Waiting on a long run

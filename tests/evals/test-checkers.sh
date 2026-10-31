@@ -122,7 +122,7 @@ expect_waves() {
 }
 expect_waves eval6 $'wave 1: T1, T2\nwave 2: T3'
 expect_waves eval7 'wave 1: T1, T2'
-expect_waves eval8 'wave 1: T1, T2'
+expect_waves eval8 'wave 1: T1, T2, T3'
 expect_waves eval9 'wave 1: T1'
 rc=0
 got="$(bash "$WAVES" "$SCRIPT_DIR/fixtures/eval10/seed/docs/plans/demo.md" 2>&1)" || rc=$?

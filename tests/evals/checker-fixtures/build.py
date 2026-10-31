@@ -483,25 +483,69 @@ EVAL8 = {"pass": "pass",
          "one-dispatch": "both-dispatched",
          "overlap": "serialized-no-overlap",
          "intervals-overlap": "serialized-no-overlap",
+         "control-serial": "control-overlaps",
+         "control-full-suite": "control-pre-commit-suite",
+         "control-full-suite-in-script": "control-pre-commit-suite",
+         "control-no-suite": "control-pre-commit-suite",
          "not-stopped": "stopped-before-review"}
+
+PRE_COMMIT8 = "python3 -m unittest discover -s tests -t . -q"
+
+
+def control_steps(workdir, v):
+    """T3 (Touches: none): unit tests, then the pre-commit suite, which leaves
+    the serialized e2e out."""
+    steps = [("Read", {"file_path": ROOT + "/docs/plans/demo.md"}),
+             ("Write", {"file_path": workdir + "/util/pad.py", "content": "..."}),
+             ("Bash", "cd %s && python3 -m unittest tests.test_pad" % workdir, "OK")]
+    if v != "control-no-suite":
+        steps.append(("Bash", "cd %s && %s" % (workdir, PRE_COMMIT8), "OK"))
+    # The doctored cases below also run the e2e, so only that is wrong.
+    if v == "control-full-suite":
+        steps.append(("Bash", "cd %s && bash tests/run-all.sh" % workdir, "OK\ne2e: ok"))
+    elif v == "control-full-suite-in-script":
+        steps.append(("Write", {"file_path": SCRATCH + "/suite.sh",
+                                "content": "cd %s\nbash tests/run-all.sh > %s/suite.log 2>&1\necho \"exit $?\" > %s/suite.done\n"
+                                % (workdir, SCRATCH, SCRATCH)}))
+        steps.append(("Bash", "bash %s/suite.sh" % SCRATCH, "Command running in background with ID: b1"))
+    steps.append(("Bash", "git -C %s add -A && git -C %s commit -m 'feat: pad'" % (workdir, workdir), "1 file changed"))
+    return steps
 
 
 def eval8(v):
     r = Run()
     start(r)
-    if v == "overlap":
-        a1 = r.agent("fablepowers:implementer", task_prompt("1", ROOT + "/.worktrees/demo-t1"), "T1 shout", msg="msg_w")
-        a2 = r.agent("fablepowers:implementer", task_prompt("2", ROOT + "/.worktrees/demo-t2"), "T2 clamp", msg="msg_w")
-        s1 = r.sub(a1, "fablepowers:implementer", "T1 shout", 1, 50, impl_steps(ROOT, "strings"))
-        s2 = r.sub(a2, "fablepowers:implementer", "T2 clamp", 2, 45, impl_steps(ROOT, "nums"))
+    ignore_worktrees(r)
+    w1, w2, w3 = (ROOT + "/.worktrees/demo-t%s" % t for t in ("1", "2", "3"))
+    if v == "control-serial":
+        # T1 and T2 one at a time in place, then T3 alone: nothing overlaps.
+        in_place(r, "1", "strings")
+        in_place(r, "2", "nums")
+        a3 = r.agent("fablepowers:implementer", task_prompt("3", ROOT), "T3 pad")
+        s3 = r.sub(a3, "fablepowers:implementer", "T3 pad", 1, 40, control_steps(ROOT, v))
+        r.tick(45)
+        r.ret(a3, s3)
+        check_run(r, "3")
+        r.ledger_pair("check 3 | abc1203 | PASS | —", "task 3 | abc1203 | DONE | reports/task-3.md")
+    else:
+        for t in ("1", "2", "3") if v == "overlap" else ("1", "3"):
+            r.bash("git worktree add -b fp/demo/t%s %s/.worktrees/demo-t%s main" % (t, ROOT, t))
+        a1 = r.agent("fablepowers:implementer", task_prompt("1", w1), "T1 shout", msg="msg_w")
+        a3 = r.agent("fablepowers:implementer", task_prompt("3", w3), "T3 pad", msg="msg_w")
+        a2 = r.agent("fablepowers:implementer", task_prompt("2", w2), "T2 clamp", msg="msg_w") if v == "overlap" else None
+        s1 = r.sub(a1, "fablepowers:implementer", "T1 shout", 1, 50, impl_steps(w1, "strings"))
+        s3 = r.sub(a3, "fablepowers:implementer", "T3 pad", 2, 40, control_steps(w3, v))
+        s2 = r.sub(a2, "fablepowers:implementer", "T2 clamp", 2, 45, impl_steps(w2, "nums")) if a2 else None
         r.tick(55)
         r.ret(a1, s1)
-        r.ret(a2, s2)
+        r.ret(a3, s3)
+        if a2:
+            r.ret(a2, s2)
         merge_task(r, "1")
-        merge_task(r, "2")
-    else:
-        in_place(r, "1", "strings")
-        if v == "one-dispatch":
+        merge_task(r, "3")
+        if v == "overlap":
+            merge_task(r, "2")
+        elif v == "one-dispatch":
             tid = r.use("Write", {"file_path": ROOT + "/util/nums.py", "content": "def clamp(x, lo, hi): ..."})
             r.res(tid, "written")
             r.bash("git add -A && git commit -m 'feat: clamp'")
@@ -512,7 +556,7 @@ def eval8(v):
             # Dispatched after T1 returned, yet active while T1 was (synthetic:
             # only the interval guard is violated).
             a = r.agent("fablepowers:implementer", task_prompt("2", ROOT), "T2 nums")
-            aid = r.sub(a, "fablepowers:implementer", "T2 nums", -60, -30, impl_steps(ROOT, "nums"))
+            aid = r.sub(a, "fablepowers:implementer", "T2 nums", -80, -60, impl_steps(ROOT, "nums"))
             r.tick(5)
             r.ret(a, aid)
             check_run(r, "2")

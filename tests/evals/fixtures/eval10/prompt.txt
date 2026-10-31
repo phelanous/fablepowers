@@ -1,0 +1,7 @@
+You are the orchestrator in this repository, with the fablepowers plugin.
+
+The design in docs/specs/demo.md is approved by me, the user. The plan for it, docs/plans/demo.md, is written but not yet reviewed. Run its plan review now, as fablepowers:implementation-plan says, and nothing else: don't fix the plan, and don't execute it.
+
+This is a non-interactive run: nobody can answer questions, so make each decision yourself and say what you decided.
+
+Stop once the reviewer has returned. End with the reviewer's verdict and its findings, one line each.

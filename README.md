@@ -302,7 +302,7 @@ On Codex they resolve as described in
 | `fablepowers:workflow` | The map. Start substantive dev work here; it routes to everything below. |
 | `fablepowers:design-spec` | Turn an idea into a written design through dialogue, scaled to the size of the work. Asks which platform, language and library choices the user wants to own. Substantial specs get a **builder check** — a fresh reviewer lists what a builder would still have to guess, and the build-changing questions go to the user in one round. Ends with a phone-readable design brief and a two-option approval ask — the user's explicit yes, never inferred from an answer to a design question, and enforced by the approval gate. |
 | `fablepowers:implementation-plan` | Turn the approved spec into an interface-level plan: contracts, invariants, test obligations per task. No code in the plan. A **Review Focus** section names up to five spec-implied inputs no task tests yet, each assigned to the task that owns the code; plan review checks it. |
-| `fablepowers:subagent-execution` | Dispatch one fresh implementer agent per plan task. The orchestrator coordinates and spot-checks; it does not implement. Dispatches name the plan path and task heading instead of pasting the task; agents write full reports to files and return at most 15 lines; a progress ledger lets a resumed session skip finished tasks. |
+| `fablepowers:subagent-execution` | Dispatch one fresh implementer agent per plan task. The orchestrator coordinates and spot-checks; it does not implement. Tasks the plan marks independent run in parallel by default (waves from the `plan-waves` script, up to the plan's Max parallel, default 4), each in its own task worktree under `.worktrees/` on an `fp/<plan-key>/t<id>` branch; the orchestrator merges each back with `--no-ff`, hands any conflict to an implementer, and runs the full suite after each merge. Dispatches name the plan path and task heading instead of pasting the task; agents write full reports to files and return at most 15 lines; a progress ledger lets a resumed session skip finished tasks. |
 | `fablepowers:behavioral-testing` | Every spec behavior gets a test, and you break the behavior to watch that test fail. Ordering is free; the mutation check is not. |
 | `fablepowers:integration-review` | **Rigid gate.** Before any merge, a fresh-context adversarial reviewer hunts the integration seams — inert knobs, migration/model parity, deployment config, contract drift. It gets a review package diffed from the merge-base, ends its report with what it declined to judge, and the orchestrator closes with the **Rulings I made** on the user's behalf. Capped at two re-reviews. |
 | `fablepowers:verify-done` | **Rigid gate.** No "done", "fixed", or "passing" without running the command now and reading the output. |
@@ -383,15 +383,24 @@ inherited model.
 Execution and review hand work off through files in a per-plan workspace,
 `.fablepowers/<plan-basename>/` at the top level of the worktree doing the work
 (the approval gate's markers share the directory, keyed on the spec name):
-`progress.md` (the orchestrator's ledger: one line per checked task and per
-integration review and fix round, so a resumed session knows what ran),
-`reports/` (implementer, reviewer and `integration-fix<k>` reports) and
+`progress.md` (the orchestrator's ledger: `merge` lines for merge fixes,
+`check` lines for the full-suite run after each merge, one `task` line per
+finished task, and one line per integration review and fix round, so a resumed
+session knows what ran), `reports/` (implementer, merge-fix, check-fix,
+reviewer and `integration-fix<k>` reports) and
 `review-*.diff` (integration-review packages). Work with no plan keys the
 workspace on its spec file, or on `@<branch-name>` when there is no spec either (each `/`
 becomes `-`, so `@feat/x` and `@feat-x` share a workspace). The directory
 ignores itself — `.fablepowers/.gitignore` containing `*` is written only if the
 repo doesn't already have one — so nothing shows up in `git status`. It is left
 in place after the feature and is safe to delete once the branch is merged.
+
+Tasks that run in parallel each get a task worktree at
+`<plan worktree>/.worktrees/<plan-key>-t<id>`, on branch `fp/<plan-key>/t<id>`
+off the plan branch. Their reports still go to the plan worktree's workspace.
+`.worktrees/` ignores itself the same way (a `.worktrees/.gitignore` holding
+`*`), and each task's worktree and branch are removed once its `task` line is
+in. A resumed session finds unfinished work from those branch names.
 
 ## What changed from superpowers
 
@@ -426,7 +435,14 @@ bash tests/hooks/test-session-start.sh                  # SessionStart hook, inc
 bash tests/hooks/test-approval-gate.sh                  # approval gate hook, launcher and hooks.json wiring
 bash tests/opencode/run.sh                              # OpenCode plugin (node --test; skips without node)
 bash tests/pi/run.sh                                    # Pi extension (node --test; skips without node)
+bash tests/scripts/test-session-timeline.sh             # session-timeline.py concurrency report
+bash tests/subagent-execution/test-plan-waves.sh        # plan-waves wave script
+bash tests/evals/test-checkers.sh                       # live-eval checkers against offline fixtures
 ```
+
+The live evals of the parallel-execution rules (headless `claude -p` on fixture
+repos) are manual runs, not part of these suites: each one bills your Claude
+Code login, up to $3 a run. See [`tests/evals/README.md`](tests/evals/README.md).
 
 ## Measuring it
 
@@ -455,6 +471,18 @@ one row per session plus a summary. Stdlib only, read-only.
 
 Useful before/after comparison: run it on a window from before you installed
 this, then on a window after.
+
+For parallel execution, `scripts/session-timeline.py` answers how many
+subagents ran at once:
+
+```
+python3 -I scripts/session-timeline.py [--json] <session.jsonl> ...
+```
+
+Per session it prints the agent count, active agent-hours, wall-hours with at
+least one agent active, average and peak concurrency, and one line per agent.
+Gaps over 10 minutes don't count as active. `--json` prints one object per
+session with each agent's intervals. Stdlib only, read-only.
 
 ## Migrating
 

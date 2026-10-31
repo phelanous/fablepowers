@@ -9,6 +9,7 @@ Three functions in the `mathx` package, each in its own module:
 1. `mathx.add.add(a, b)` returns `a + b`.
 2. `mathx.mul.mul(a, b)` returns `a * b`.
 3. `mathx.square.square(x)` returns `x * x`, computed by calling `mathx.mul.mul(x, x)`.
+4. `mathx.square.square_of_sum(a, b)` returns `(a + b) ** 2`, computed as `square(mathx.add.add(a, b))`.
 
 ## How we'll know it works
 

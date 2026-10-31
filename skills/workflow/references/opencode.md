@@ -71,7 +71,7 @@ The seat's system prompt already carries its role prompt. The prompt carries the
 - **Dispatch.** Several `subagent` calls in one message, one per ready task, each with its seat's `agent` and a `prompt` naming the task worktree by absolute path. Whether OpenCode runs them concurrently is unverified.
 - **Working directory.** `subagent` takes no working directory, so the child starts in the session's directory. The dispatch tells it to run each `shell` command as `cd <task worktree> && …` or `git -C <task worktree> …`, and to give `write`, `edit` and `patch` absolute paths in the task worktree. Whether a `cd` persists between `shell` calls is unverified.
 - **Where task worktrees live.** `<plan worktree>/.worktrees/<plan-key>-t<id>`, inside the session's project directory, so your `external_directory` rules presumably do not apply to them (inferred, unverified).
-- **Waits.** The marker pattern from `fablepowers:behavioral-testing`: a background run with an exit-status `.done` marker, waited on in bounded calls under the `shell` tool's timeout, never `pgrep -f`. OpenCode's `shell` timeout is unverified.
+- **Waits.** The marker pattern from `fablepowers:behavioral-testing`: a script file that runs the suite and writes an exit-status `.done` marker, started in the background as `bash <script> > /dev/null 2>&1 &` (whether the job outlives the `shell` tool's call is unverified), waited on in bounded calls under the `shell` tool's timeout, never `pgrep -f`. OpenCode's `shell` timeout is unverified.
 
 ## Bootstrap
 

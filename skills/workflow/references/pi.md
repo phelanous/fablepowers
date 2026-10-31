@@ -87,7 +87,7 @@ fablepowers_dispatch {
 - **One task at a time.** `fablepowers_dispatch` is sequential (verified: the tool registers with `executionMode: 'sequential'`, asserted in `tests/pi/extension.test.mjs`). Several calls in one message would run one after another, so there is nothing to gain from sending them together.
 - **No task worktrees.** A task alone in flight runs in the plan worktree, so on Pi every task does. Nothing is merged back and there is no worktree cleanup.
 - **Plan order follows the waves.** Run wave 1's tasks one by one in plan order, then wave 2's, and so on, as `plan-waves` prints them. Each task's line goes in before the next dispatch.
-- **Waits.** The marker pattern from `fablepowers:behavioral-testing` applies inside a child as anywhere else: a background run with an exit-status `.done` marker, waited on in bounded calls under the `bash` tool's timeout, never `pgrep -f`. Pi's `bash` timeout is unverified.
+- **Waits.** The marker pattern from `fablepowers:behavioral-testing` applies inside a child as anywhere else: a script file that runs the suite and writes an exit-status `.done` marker, started in the background as `bash <script> > /dev/null 2>&1 &` (whether the job outlives the `bash` tool's call is unverified), waited on in bounded calls under the `bash` tool's timeout, never `pgrep -f`. Pi's `bash` timeout is unverified.
 
 ## Bootstrap
 

@@ -13,7 +13,7 @@ The fablepowers skills and agent bodies name actions ("dispatch the implementer 
 | Track tasks | TodoWrite |
 | Native worktree tool (create / exit) | EnterWorktree / ExitWorktree; its worktrees live under `<root>/.claude/worktrees/` and are host-owned |
 | Plugin root (where `skills/`, `agents/`, `hooks/` live) | `${CLAUDE_PLUGIN_ROOT}` in hook commands; a skill's base directory is shown when the skill is invoked |
-| Dispatch several seats at once (independent plan tasks) | Several Agent calls in one assistant message, each with the seat's `subagent_type` and a prompt naming its task worktree, without `isolation`. See [Parallel dispatch](#parallel-dispatch); unverified in a full plan run. |
+| Dispatch several seats at once (independent plan tasks) | Several Agent calls in one assistant message, each with the seat's `subagent_type` and a prompt naming its task worktree, without `isolation`. See [Parallel dispatch](#parallel-dispatch); verified in a full plan run by live eval 6 (T7-fix1 report, round 2). |
 | Task worktree (create / remove) | `git worktree add -b fp/<plan-key>/t<id> <plan worktree>/.worktrees/<plan-key>-t<id> <plan-branch>`, later `git worktree remove` and `git branch -d`; not EnterWorktree. Verified under the session directory in T0 §3 and §8; see [Parallel dispatch](#parallel-dispatch). |
 | Wait on a run longer than one tool call | A script file that writes an exit-status `.done` marker, started with Bash `run_in_background`, waited on in bounded calls (verified in T7's eval 9, T7 report F2). See [Parallel dispatch](#parallel-dispatch). |
 
@@ -68,7 +68,7 @@ The design-approval checkpoint is enforced by a hook, `hooks/approval-gate` (a P
 - **verified (T7 report Fn)**: found in the 0.8.0 live evals (`tests/evals/`), on the same CLI version. The record is `reports/task-7.md` in the same workspace, finding n.
 - **unverified**: not checked in a run.
 
-**Status.** Parallel dispatch in a full plan run is **unverified**. It stays so until live eval 6 (`tests/evals/`: two independent tasks and one dependent) passes. The mechanisms underneath it were verified in T0, as listed here.
+**Status.** Parallel dispatch in a full plan run is **verified**: live eval 6 (`tests/evals/`: two independent tasks and one dependent) passed 9 of 9 assertions in `claude -p`, with the two independent tasks dispatched in one message to their own task worktrees, overlapping active intervals, `--no-ff` merges each followed by a check, and cleanup (T7-fix1 report, round 2). The mechanisms underneath it were verified in T0, as listed here.
 
 **Dispatch.**
 

@@ -53,6 +53,7 @@ class Run:
             "first-parent.txt": "",
         }
         self.files = {}
+        self.combine = False  # write each task's check and task lines in one printf
 
     def tick(self, sec=2):
         self.t += datetime.timedelta(seconds=sec)
@@ -97,6 +98,15 @@ class Run:
     def ledger(self, entry):
         self.bash("printf '%%s\\n' '%s' >> %s/progress.md" % (entry, WS))
         self.state["progress.md"] += entry + "\n"
+
+    def ledger_pair(self, check, task):
+        """The check and task lines, as one printf when `combine` is set."""
+        if not self.combine:
+            self.ledger(check)
+            self.ledger(task)
+            return
+        self.bash("printf '%s\\n%s\\n' >> %s/progress.md" % (check, task, WS))
+        self.state["progress.md"] += check + "\n" + task + "\n"
 
     # -- subagents --------------------------------------------------------------
 
@@ -197,8 +207,9 @@ def merge_task(r, t, noff=True, check=True, cleanup=True):
            "Merge made by the 'ort' strategy." if noff else "Fast-forward")
     if check:
         check_run(r, t)
-        r.ledger("check %s | %s | PASS | —" % (t, sha))
-    r.ledger("task %s | %s | DONE | reports/task-%s.md" % (t, sha, t))
+        r.ledger_pair("check %s | %s | PASS | —" % (t, sha), "task %s | %s | DONE | reports/task-%s.md" % (t, sha, t))
+    else:
+        r.ledger("task %s | %s | DONE | reports/task-%s.md" % (t, sha, t))
     if cleanup:
         r.bash("git worktree remove %s/.worktrees/demo-t%s" % (ROOT, t))
         r.bash("git branch -d fp/demo/t%s" % t, "Deleted branch fp/demo/t%s" % t)
@@ -210,8 +221,7 @@ def in_place(r, t, name):
     r.tick(55)
     r.ret(a, aid)
     check_run(r, t)
-    r.ledger("check %s | abc12%02d | PASS | —" % (t, int(t)))
-    r.ledger("task %s | abc12%02d | DONE | reports/task-%s.md" % (t, int(t), t))
+    r.ledger_pair("check %s | abc12%02d | PASS | —" % (t, int(t)), "task %s | abc12%02d | DONE | reports/task-%s.md" % (t, int(t), t))
 
 
 def not_stopped(r):
@@ -240,11 +250,13 @@ EVAL6 = {"pass": "pass",
          "leftover-worktree": "worktrees-and-branches-gone",
          "gitignore-commit": "worktrees-ignored-via-exclude",
          "status-shows-worktrees": "worktrees-ignored-via-exclude",
+         "pass-combined-printf": "pass",
          "not-stopped": "stopped-before-review"}
 
 
 def eval6(v):
     r = Run()
+    r.combine = v == "pass-combined-printf"
     start(r)
     if v == "gitignore-commit":
         r.bash("printf '.worktrees/\\n' >> .gitignore && git add .gitignore && git commit -m 'chore: ignore .worktrees'")

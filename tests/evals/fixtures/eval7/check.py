@@ -48,7 +48,7 @@ def main():
             "%d merge-fix dispatch(es), none an implementer after the conflict" % len(fixes))
 
     tid = ec.classify_dispatch(fix)[1] if fix else (conflicts[0][2] if conflicts else "2")
-    rx = re.compile(r"(?<![\w-])merge\s+T?%s-\d+\s*\|" % re.escape(tid), re.I)
+    rx = re.compile(r"(?:(?<![\w-])|(?<=\\n))merge\s+T?%s-\d+\s*\|" % re.escape(tid), re.I)
     lines = [l for l in s.progress().splitlines() if rx.match(l.strip())]
     writes = [x for x in s.calls if (x.name == "Bash" and "progress.md" in x.command and rx.search(x.command)) or
               (x.name in ec.EDIT_TOOLS and x.path.endswith("progress.md") and rx.search(x.written_text()))]

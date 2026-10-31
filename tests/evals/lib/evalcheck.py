@@ -264,9 +264,10 @@ def worktree_paths(text):
 # --- ledger -------------------------------------------------------------------
 
 def ledger_re(kind, tid):
-    """`task 1 |`, `task T1 |`, `check 2 |`, `merge 2-1 |`."""
+    """`task 1 |`, `task T1 |`, `check 2 |`. A line may also follow a literal
+    `\\n` inside a printf format, as in `printf 'check 1 | …\\ntask 1 | …'`."""
     tid = re.escape(norm_id(tid))
-    return re.compile(r"(?<![\w-])%s\s+T?%s\s*\|" % (kind, tid), re.I)
+    return re.compile(r"(?:(?<![\w-])|(?<=\\n))%s\s+T?%s\s*\|" % (kind, tid), re.I)
 
 
 def ledger_lines(session, kind, tid):

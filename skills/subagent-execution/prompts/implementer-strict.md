@@ -22,9 +22,10 @@ Report path: [WORKSPACE]/reports/task-[N].md   (fix rounds: [WORKSPACE]/reports/
 
 1. **TDD, strictly.** Write the failing test FIRST. Run it. Paste the failure output in your report. Only then write implementation. NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST. If you wrote code before its test: delete it and start over.
 2. **Minimal code to pass.** Implement only what the task specifies. No extra features, no refactoring outside the listed files, no "while I'm here" changes.
-3. **Full suite green.** Run the entire test suite before finishing. A pre-existing failure must be reported as pre-existing with evidence (run it on the base commit).
-4. **Commit** with the message format: [PROJECT CONVENTION]. Working tree must be clean when you finish.
-5. **Self-review** your diff line-by-line against the task text before reporting.
+3. **Targeted runs while you work.** While iterating, run ONLY the tests covering the files you touch. Run the full suite, browser e2e included, ONCE before you commit, and once more ONLY after a fix made in response to that run. It must be green. A pre-existing failure must be reported as pre-existing with evidence (run it on the base commit). Label every run in your report as targeted or full.
+4. **Wait on your own marker.** When a run may outlast one tool call: start it in the background with output to a file and an exit-status marker, `( cmd; echo "exit $?" > <out>.done ) > <out> 2>&1 &`. Wait in separate calls, each under the tool timeout, on that marker or that PID: `timeout 540 bash -c 'until [ -e <out>.done ]; do sleep 5; done'`. NEVER wait with `pgrep -f`. NEVER use a sleep loop without a completion condition. Stop at the plan's suite budget, or 30 minutes if it states none, and report the hang with the output tail. (Full rules: `fablepowers:behavioral-testing`, "Waiting on a long run".)
+5. **Commit** with the message format: [PROJECT CONVENTION]. Working tree must be clean when you finish.
+6. **Self-review** your diff line-by-line against the task text before reporting.
 
 ## Report format (exactly this)
 

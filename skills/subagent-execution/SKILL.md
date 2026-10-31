@@ -23,12 +23,12 @@ Skills are invoked by name as `fablepowers:<skill>`; each seat is dispatched as 
 **`implementer` flow (the default):**
 1. Plan was already reviewed (`fablepowers:implementation-plan`). Dispatch one `fablepowers:implementer` per task, by reference (see Dispatch hygiene).
 2. The implementer implements, satisfies the task's test obligations including the mutation check (`fablepowers:behavioral-testing`), runs the suite, commits, self-reviews, writes its report to the path you named and returns the short form.
-3. You spot-check the short return and the diff — no reviewer subagent per task. Open the full report when the short return is ambiguous, lists deviations you need to weigh, or a fix needs dispatching. Then append the ledger line.
+3. You spot-check the short return and the diff — no reviewer subagent per task. Open the full report when the short return is ambiguous, lists deviations you need to weigh, or a fix needs dispatching. Then merge the task back and run its check (see Wave dispatch), and append the ledger lines.
 4. After all tasks: **`fablepowers:integration-review`** (rigid gate).
 
 **`strict-implementer` flow (mechanical, fully specified tasks):**
 1. Dispatch `fablepowers:strict-implementer` with `prompts/implementer-strict.md` — imperative, code-level task detail, strict TDD ordering, the task text inline (that detail lives nowhere else). The rails exist because these models skip steps and rationalize; keep them.
-2. After each task: dispatch a `fablepowers:reviewer` with `prompts/spec-check.md` (fresh context, verifies the diff point-by-point against the task spec). Loop implementer fixes until compliant, then append the ledger line.
+2. After each task: dispatch a `fablepowers:reviewer` with `prompts/spec-check.md` (fresh context, verifies the diff point-by-point against the task spec). Loop implementer fixes until compliant, then merge the task back and run its check (see Wave dispatch), and append the ledger lines.
 3. After all tasks: **`fablepowers:integration-review`** as usual.
 
 ## Workspace and ledger
@@ -41,25 +41,135 @@ bash "<this skill's base dir>/../integration-review/review-package" --init <plan
 
 It prints the workspace path and writes `<toplevel>/.fablepowers/.gitignore` (containing `*`) only if absent, so the files stay out of `git status`. Two plans with the same basename in different directories share a workspace — a known limitation; rename one if both are in flight. A spec and its plan usually share a basename, and so a workspace (the ledger header names whichever ran `--init` first); that is harmless, since their report names differ.
 
-**Report paths** (inside the workspace), named in every dispatch: implementer `reports/task-<n>.md`, fix rounds `reports/task-<n>-fix<k>.md`; spec-check `reports/spec-check-task-<n>.md`; fixes for integration-review findings `reports/integration-fix<k>.md`. The review report paths are in the skills that dispatch them: plan review in `fablepowers:implementation-plan`, builder check in `fablepowers:design-spec`, integration review and re-reviews in `fablepowers:integration-review`.
+The worktree doing the work is the plan branch's worktree (the plan worktree), where you run. Task worktrees (see Wave dispatch) never get a workspace of their own: every report, including one written from a task worktree, goes to the plan worktree's workspace by absolute path.
 
-**Ledger** — `<workspace>/progress.md`, written only by you. `--init` writes line 1, `# Progress: <plan path>`, if the file is absent. Then one line per completed task, appended once its checks pass (your spot-check, or a COMPLIANT spec-check on the strict tier), and one line per integration-review round and fix round as each comes back (see `fablepowers:integration-review`):
+**Report paths** (inside the workspace), named in every dispatch: implementer `reports/task-<n>.md`, fix rounds `reports/task-<n>-fix<k>.md`; spec-check `reports/spec-check-task-<n>.md`; merge fixes `reports/task-<n>-merge<k>.md`; post-merge check fixes `reports/check-<n>-fix<k>.md`; fixes for integration-review findings `reports/integration-fix<k>.md`. `<n>` is the task id as the plan writes it (`3`, `7b`). The review report paths are in the skills that dispatch them: plan review in `fablepowers:implementation-plan`, builder check in `fablepowers:design-spec`, integration review and re-reviews in `fablepowers:integration-review`.
+
+**Ledger** — `<workspace>/progress.md`, written only by you. `--init` writes line 1, `# Progress: <plan path>`, if the file is absent. Then each task's merge and check lines as they happen, one `task` line per completed task, and one line per integration-review round and fix round as each comes back (see `fablepowers:integration-review`):
 
 ```
-task <n> | <sha7> | <status> | <report path>
+merge <n>-<k> | <sha7> | <status> | reports/task-<n>-merge<k>.md
+check <n> | <head7> | PASS|FAIL | —
+check <n>-fix<k> | <sha7> | <status> | reports/check-<n>-fix<k>.md
+task <n> | <merge sha7> | <status> | <report path>
 review integration | <head7> | <verdict> | reports/review-integration.md
 fix integration-<k> | <sha7> | <status> | reports/integration-fix<k>.md
 review rereview-<k> | <head7> | <verdict> | reports/review-rereview-<k>.md
 ```
 
-**On resume** — after compaction, in a new session, or whenever you're unsure what has run — read `progress.md` and `git log` before dispatching anything.
+A task's lines go in this order. First a `merge <n>-<k>` line as each merge fix returns; its SHA is the merge-fix commit on the task branch. Next a `check <n>` line when the post-merge check finishes; its SHA is the plan branch head it ran on. After a FAIL comes a `check <n>-fix<k>` line when the check fix returns, then a new `check <n>` line for the re-run. The `task <n>` line comes last. It goes in only once the task's merge has landed and its check has passed. Its SHA is the merge commit on the plan branch, or the task's own last commit for a task run in place; its status and report path are the implementer's. A FAIL `check` line is cleared by a later PASS `check` line for the same id. A plan from before 0.8.0 (see Wave dispatch) gets only `task` lines, as before.
 
-- A task with a ledger line is done: do not re-dispatch it.
-- A commit without a ledger line means the task's checks are pending, not that it is done. Don't re-dispatch the implementer; read its report, run the checks it is owed — your spot-check, or the spec-check on the strict tier, with any fix loop that follows — and add the line only when they pass.
+**On resume** — after compaction, in a new session, or whenever you're unsure what has run — read `progress.md`, `git log` of the plan branch and `git branch --list 'fp/<plan-key>/t*'` before dispatching anything.
+
+- A task with a `task` line is done: do not re-dispatch it.
+- A commit on the plan branch without a `task` line (a task run in place, or any task of a plan from before 0.8.0) means the task's checks are pending, not that it is done. Don't re-dispatch the implementer; read its report, run the checks it is owed — your spot-check, or the spec-check on the strict tier, with any fix loop that follows, then the post-task check on a 0.8.0 plan — and add the line only when they pass.
+- Classify each task branch `fp/<plan-key>/t<n>` from its tip, `TIP=$(git rev-parse fp/<plan-key>/t<n>)`:
+  - **merged** when `git rev-list --min-parents=2 --parents <plan-branch> | awk -v t="$TIP" '{for (i = 3; i <= NF; i++) if ($i == t) f = 1} END {exit !f}'` succeeds (the tip is a merged-in parent of a merge commit on the plan branch);
+  - otherwise, **no new commits** when `git merge-base --is-ancestor "$TIP" <plan-branch>` succeeds, and **unmerged commits** when it fails;
+  - **merge-fix commits** when `git rev-list --min-parents=2 <plan-branch>..fp/<plan-key>/t<n>` prints anything.
+
+| Situation | Owed |
+|---|---|
+| Task branch with unmerged commits and no merge-fix commits, no `task` line | its checks (your spot-check, or the spec-check on the strict tier), then its merge. Not re-dispatched. |
+| Task branch merged, no `task` line | the check run, then the `task` line (the merge came after its checks). A PASS `check <n>` line already in means only the `task` line is owed. |
+| Task branch with unmerged merge-fix commits, no `task` line | for each merge-fix commit with no `merge` line, read `reports/task-<n>-merge<k>.md` and add the `merge <n>-<k>` line; then retry the merge. |
+| Task branch with no new commits | re-dispatch to the same worktree, telling the implementer it may hold partial edits from an earlier attempt to review or discard. |
+| Check-fix commit on the plan branch with no `check <n>-fix<k>` line | read `reports/check-<n>-fix<k>.md`, add the line, then re-run the check. |
+| Last `check` line for a task is FAIL | its fix, or a re-run. |
+| `task` line in, task worktree or branch still present | the cleanup. |
+
+- A task branch whose worktree is gone is reattached, never recreated (see Task worktrees).
 - Review lines tell you where the review loop stands: the last `review` line is the latest round and the number of `review rereview-` lines is what the cap of two has used. A `fix` line with no `review` line after it is owed its re-review — unless two `review rereview-` lines precede it: then the cap is reached, that fix was the capped one, and what it is owed is `fablepowers:verify-done`, not a review.
 - A fix commit in `git log` with no `fix` line (compaction while the fixer was in flight) is treated like a task commit without a line: don't re-dispatch the fix; read `reports/integration-fix<k>.md`, add its `fix` line, then do what that line is owed under the rule above (re-review, or verify-done once capped).
 - A one-liner fix you made yourself (the only code you write) gets a ledger line like any fix, with `—` as the report and its commit SHA: `fix integration-<k> | <sha7> | DONE | —`.
 - If the ledger names a SHA that `git log` doesn't have, the ledger is wrong — trust the log and ask the user if the gap is unclear.
+
+## Wave dispatch
+
+From 0.8.0 on, a plan gives every task a `**Depends on:**` line and a `**Touches:**` line, and names its shared resources in a `## Parallel safety` section (`fablepowers:implementation-plan`). From those you dispatch every task that is ready, each in its own worktree when more than one implementer is in flight, and merge each back after its checks. You work in the plan branch's worktree, the plan worktree; the workspace stays `<plan worktree toplevel>/.fablepowers/<plan>/`.
+
+**Before the first dispatch,** run the wave script on the plan:
+
+```bash
+bash "<this skill's base dir>/plan-waves" <plan-file>
+```
+
+- Exit 0 prints one line per wave, `wave <k>: <id>, <id>, …`. The waves show the dependency order; what you dispatch follows the ready rule below, not the wave boundaries.
+- **A plan from before 0.8.0** has no line matching `**Depends on:**` at all: `grep -qF '**Depends on:**' <plan-file>` fails. Run its tasks one at a time in the plan worktree, as 0.7.0 did — dispatch, spot-check, `task` line, next task, with no task worktrees, merges or post-merge checks. Say so to the user in one line, and don't edit the approved plan to add the lines.
+- Any other non-zero exit goes back to plan review (`fablepowers:implementation-plan`), with the script's stderr lines as the findings. Don't dispatch from a plan the script rejects.
+
+**Ready and in flight:**
+
+- A task is **ready** when every task on its Depends on line has a `task` line in the ledger, and no in-flight agent holds a `serialize` resource on its Touches line.
+- A task implementer, or a merge fix for that task, holds the `serialize` resources on the task's Touches line while it runs. The post-merge check run and a check fix hold every `serialize` resource.
+- **In flight** means any implementer dispatch: tasks, merge fixes and check fixes. It never exceeds the plan header's `**Max parallel:** <n>`, or 4 when the header has none. Reviewers and spec-checks don't count.
+- Dispatch all ready tasks together, up to the cap. Dispatch newly ready ones as each task's line goes in or a slot frees up; there is no waiting for a whole wave. When ready tasks contend for one `serialize` resource or for the last slots, plan order decides.
+
+**Where a task runs:**
+
+- A task runs in place, in the plan worktree, only when no other implementer of any kind is in flight and none will be dispatched until it finishes — it is the only task you can dispatch now, and no merge or check is pending. Otherwise it gets a task worktree.
+- A task run in place commits directly on the plan branch. Its `task` line carries its own last commit SHA, and its post-task check runs as for a merge. Resume finds it from `git log`, as in 0.7.0.
+- No merge goes into the plan worktree while any agent is working in it: a check fix, or a task run in place. Pending merges queue until it is free. The plan worktree also takes one merge at a time: the next queued merge waits for the previous one's PASS `check` line.
+
+**Task worktrees:**
+
+- Before creating the first one, find `MAIN_ROOT` as `fablepowers:using-git-worktrees` Step 0 does. If it prints empty, there is no project root to anchor task worktrees to: run the tasks one at a time in the plan worktree, and say so in one line.
+- Then make sure `.worktrees/` is ignored. Use the repository's shared exclude file, which applies to every worktree and needs no commit:
+
+  ```bash
+  EXCLUDE="$(git rev-parse --path-format=absolute --git-common-dir)/info/exclude"
+  mkdir -p "$(dirname "$EXCLUDE")"
+  grep -qxF '.worktrees/' "$EXCLUDE" 2>/dev/null || printf '\n.worktrees/\n' >> "$EXCLUDE"
+  git -C "$MAIN_ROOT" check-ignore -q .worktrees/
+  ```
+
+  The last command must exit 0; if it doesn't, stop and report. For task worktrees this replaces `fablepowers:using-git-worktrees`' `.gitignore` commit; that skill's own worktree creation is unchanged.
+- Create each task worktree from the plan branch's tip at dispatch time:
+
+  ```bash
+  git worktree add -b fp/<plan-key>/t<id> "$MAIN_ROOT/.worktrees/<plan-key>-t<id>" <plan-branch>
+  ```
+
+  `<plan-key>` is the workspace name, and `<id>` is the task id in lower case. The branch name is how a resumed session finds a task's work.
+- **An existing `fp/<plan-key>/t<id>` branch is resumed, never recreated.** It may hold a crashed run's work, so never delete, reset or `-B` it. Check for it with `git rev-parse --verify --quiet refs/heads/fp/<plan-key>/t<id>` before creating. If `git worktree list` shows its worktree and the directory exists, use it as it is. Otherwise run `git worktree prune`, then reattach the branch without `-b`: `git worktree add "$MAIN_ROOT/.worktrees/<plan-key>-t<id>" fp/<plan-key>/t<id>`. Then do what the resume table owes it.
+- A task worktree has only tracked files. Set up its environment as the plan's `worktree env` line in Parallel safety says: for `isolate: <setup step or shared path>`, run that step, or link that path, in the new worktree before dispatch; for `none needed`, do nothing. A plan without the line gets nothing. If a task's tests then fail on a missing ignored file (`.env`, `node_modules`, `.venv`), that is a plan gap; take it to the user rather than copying files on a guess.
+- Beyond what Dispatch hygiene requires, a task's dispatch names:
+  - the task worktree as the working directory;
+  - absolute paths for the plan, the spec and the report, with the report under the plan worktree's workspace, never inside the task worktree;
+  - the resource instance assigned for each `isolate` resource the task touches, as the plan's line for that resource says to assign it.
+- Spot-check a task from a task worktree with `git diff <plan-branch>...fp/<plan-key>/t<id>`.
+
+**Before each merge,** the plan worktree must have no uncommitted changes: `git status --porcelain` prints nothing. If it prints anything, stop and report it to the user. Never stash: the stash stack is shared by every worktree of the repository and by other sessions working in them.
+
+**Merging back,** after the task's checks pass (your spot-check, or a COMPLIANT spec-check on the strict tier):
+
+1. In the plan worktree, run `git merge --no-ff --no-edit fp/<plan-key>/t<id>`. A clean merge is coordination, so you do it. A task may have several commits; its `task` line's SHA is the merge commit.
+2. **On a conflict,** run `git merge --abort` and dispatch a merge fix: a `fablepowers:implementer` in the task worktree that merges the plan branch's current tip into the task branch, resolves it, and runs both sides' tests and the full suite. Conflict resolution is implementation work, so the orchestrator never does it, however small the conflict. The dispatch names the two sides (the task branch, and the plan branch with its tip SHA), the conflicting files from the aborted merge, the headings of the merged tasks that touched those files, the plan and spec paths, and the report path `reports/task-<id>-merge<k>.md`, where k counts from 1 for each task.
+3. Meanwhile other tasks keep merging. When the merge fix returns, add its `merge <id>-<k>` line and retry the merge; a new conflict means merge fix k+1.
+
+**After each merge,** and after a task run in place commits, run the full suite in the plan worktree. The suite is the plan's full-suite command, or the project's when the plan names none. The run holds every `serialize` resource: start it only when no in-flight agent holds one, and dispatch nothing that touches one until it ends.
+
+- Wait on the run the same way implementers wait on a long run. Unless the harness reference names a verified native mechanism, start it in the background with output to a file and an exit-status marker, then wait on the marker in bounded calls:
+
+  ```bash
+  OUT="<workspace>/reports/check-<id>.log"; rm -f "$OUT" "$OUT.done"
+  ( <full-suite command>; echo "exit $?" > "$OUT.done" ) > "$OUT" 2>&1 &
+  timeout 540 bash -c "until [ -e '$OUT.done' ]; do sleep 5; done"
+  ```
+
+  Repeat the wait in separate calls, each under the harness's tool timeout, until the marker exists. Never wait with `pgrep -f <pattern>`, and never with a sleep loop that has no completion condition. The overall wait is capped at the plan's stated suite budget, or 30 minutes when it states none. At the cap, report the hang to the user with the output's tail, and stop waiting.
+- The check is PASS when the marker reads `exit 0`, and FAIL otherwise. Append `check <id> | <head7> | PASS|FAIL | —`.
+- **A FAIL holds new dispatches** until a check fix lands and a re-run passes. The check fix is a `fablepowers:implementer` in the plan worktree. Its dispatch names the log path, the failing tests as its test obligations (failing before the fix, passing after), and the report path `reports/check-<id>-fix<k>.md`. It commits on the plan branch. Add its `check <id>-fix<k>` line, re-run the check, and add the new `check <id>` line. In-flight tasks continue, and their merges, queued until then, pick up the fix.
+- After a PASS, append the task's `task` line.
+
+**Cleanup:** after a task's `task` line goes in, run these from the plan worktree to remove the task's worktree and delete its branch:
+
+```bash
+git worktree remove "$MAIN_ROOT/.worktrees/<plan-key>-t<id>"
+git branch -d fp/<plan-key>/t<id>
+```
+
+If either one refuses, because the worktree has uncommitted changes or git doesn't see the branch as merged, stop and report. Never pass `--force` or `-D` on your own initiative. These worktrees are fablepowers-created under `.worktrees/`, so `fablepowers:finishing-a-development-branch`'s ownership rule covers them. A task run in place has nothing to clean up.
 
 ## Dispatch hygiene (both flows)
 
@@ -69,8 +179,8 @@ review rereview-<k> | <head7> | <verdict> | reports/review-rereview-<k>.md
 - **No coaching reviewers** — spec-checks included. A reviewer dispatch carries the task or spec, the range, the paths and how to run things; never a pre-rated severity, an instruction to ignore or go easy on something, or the implementer's rationale for a choice. A defect the plan itself mandates is still reported, flagged plan-mandated; take it to the user.
 - **Fix-round dispatches carry test obligations.** When an implementer is sent to fix review findings, pass the review report's path and list each must-fix finding's failure scenario as a test obligation — fails on the current code, passes after the fix — and expect before/after evidence per finding in the report (`reports/task-<n>-fix<k>.md`; for integration-review findings, `reports/integration-fix<k>.md`). The full rule is in `fablepowers:integration-review`.
 - Implementers may ask questions before starting — answer, then re-dispatch.
-- One task in flight per dependency chain; independent tasks may run in parallel.
-- Track tasks in your harness's task list; mark complete only after the task's checks pass — the same moment the ledger line goes in.
+- How many tasks run at once, and where, is set by the plan's dependencies and resources: see Wave dispatch.
+- Track tasks in your harness's task list; mark complete only after the task's checks pass — the same moment its `task` line goes in.
 
 ## Failure handling
 

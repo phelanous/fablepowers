@@ -1,6 +1,7 @@
 """Eval 8: two independent tasks that share a `serialize` resource (e2e)
-never run at the same time (spec "How we'll know it works" 8), while a third
-independent task with `Touches: none` does run alongside one of them.
+never run at the same time (spec "How we'll know it works" 8), nor do their
+fix rounds or merge fixes, while a third independent task with `Touches: none`
+does run alongside one of them.
 
 The third task is the control. Without it, any one-at-a-time fallback passes
 `serialized-no-overlap` (integration review Minor 4). It also checks the run
@@ -33,17 +34,27 @@ def main():
     c.check("both-dispatched", bool(t1) and bool(t2), "T1 %d, T2 %d dispatch(es)" % (len(t1), len(t2)))
 
     if t1 and t2:
-        a, b = sorted([t1[0], t2[0]], key=lambda x: x.idx)
-        sa, sb = s.segments(a), s.segments(b)
+        # Every implementer that holds e2e: each T1 and T2 dispatch, and each
+        # fix round and merge fix for them, which hold the task's Touches
+        # resources too (re-review 2, M1). Any two of them run one at a time.
+        holders = [("T1", x) for x in t1] + [("T2", x) for x in t2]
+        for kind, name in (("fix", "fix round"), ("merge", "merge fix")):
+            rounds = ec.task_dispatches(s, kind)
+            holders += [("T%s %s" % (t, name), x) for t in ("1", "2") for x in rounds.get(t, [])
+                        if "reviewer" not in x.subagent_type]
+        holders.sort(key=lambda h: h[1].idx)
         problems = []
-        if a.result_idx is None or b.idx < a.result_idx:
-            problems.append("second dispatch issued before the first returned")
-        if not sa or not sb:
-            problems.append("missing interval (%s, %s)" % (bool(sa), bool(sb)))
-        elif ec.overlap(sa, sb):
-            problems.append("active intervals overlap: %s / %s" % (sa, sb))
-        c.check("serialized-no-overlap", not problems, "; ".join(problems) or "%s ends before %s starts" % (
-            sa[-1][1], sb[0][0]))
+        for i, (na, a) in enumerate(holders):
+            for nb, b in holders[i + 1:]:
+                sa, sb = s.segments(a), s.segments(b)
+                if a.result_idx is None or b.idx < a.result_idx:
+                    problems.append("%s dispatched before %s returned" % (nb, na))
+                if not sa or not sb:
+                    problems.append("missing interval for %s or %s (%s, %s)" % (na, nb, bool(sa), bool(sb)))
+                elif ec.overlap(sa, sb):
+                    problems.append("%s and %s active together: %s / %s" % (na, nb, sa, sb))
+        c.check("serialized-no-overlap", not problems, "; ".join(problems) or "%d e2e holder(s) one at a time: %s" % (
+            len(holders), ", ".join(n for n, _ in holders)))
     else:
         c.check("serialized-no-overlap", True, "not judged: fewer than two tasks dispatched")
 

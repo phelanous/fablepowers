@@ -50,8 +50,9 @@ def main():
 
     tid = ec.classify_dispatch(fix)[1] if fix else (conflicts[0][2] if conflicts else "2")
     rx = ec.round_re("merge", tid)
-    # A merge line cites the merge fix's report, never a fix round's.
-    report = re.compile(r"\|\s*reports/task-T?%s-merge\d+\.md\s*$" % re.escape(ec.norm_id(tid)), re.I)
+    # A merge line cites the merge fix's report, never a fix round's: relative
+    # to the workspace, or by an absolute path ending in the same.
+    report = re.compile(r"\|\s*(?:/\S*/)?reports/task-T?%s-merge\d+\.md\s*$" % re.escape(ec.norm_id(tid)), re.I)
     lines = [l for l in ec.round_lines(s, "merge", tid) if report.search(l.strip())]
     writes = [x for x in s.calls if (x.name == "Bash" and "progress.md" in x.command and rx.search(x.command)) or
               (x.name in ec.EDIT_TOOLS and x.path.endswith("progress.md") and rx.search(x.written_text()))]

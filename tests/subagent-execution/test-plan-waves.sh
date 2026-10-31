@@ -165,6 +165,42 @@ expect_waves "a heading and a Depends on line inside fences are ignored" "$WAVES
 expect_waves "a \`\`\` fence holding ~~~ then '## T9:' does not create T9; a \`\`\`\` fence is not closed by \`\`\`" \
   "$WAVES3" "$FIXTURES/fence-nested.md"
 
+echo "Unclosed fences (integration review S4)"
+expect_problem "an unclosed \`\`\`python fence before a task heading is reported" unclosed-fence \
+  "line 7 is never closed, hiding task heading(s) T2 (line 10)" "$FIXTURES/unclosed-fence.md"
+expect_problem "an unclosed 4-space-indented fence before a task heading is reported" unclosed-fence \
+  "line 9 is never closed, hiding task heading(s) T2 (line 12)" "$FIXTURES/unclosed-fence-indented.md"
+expect_waves "an unclosed fence with no task heading after it is not a problem" \
+  $'wave 1: T1\nwave 2: T2' "$FIXTURES/unclosed-fence-trailing.md"
+
+echo "Plan format (integration review M1)"
+# expect_format <description> <expected> <plan>
+expect_format() {
+  run_pw --format "$3"
+  assert_eq "$PW_EXIT|$PW_OUT|$PW_ERR" "0|$2|" "$1"
+}
+# The fixture has Depends on lines that plan-waves rejects and no Touches line
+# or Parallel safety section, like most real plans written before 0.8.0.
+run_pw "$FIXTURES/pre-080-depends.md"
+assert_eq "$PW_EXIT" "2" "the pre-0.8.0 fixture's Depends on lines fail plan-waves"
+if grep -qF '**Depends on:**' "$FIXTURES/pre-080-depends.md"; then
+  pass "... and the 0.8.0-era key (no **Depends on:** line at all) would not have called it pre-0.8.0"
+else
+  fail "the fixture has no **Depends on:** line, so it does not reproduce the misclassification"
+fi
+expect_format "a plan with Depends on lines but no Touches line or Parallel safety heading is pre-0.8.0" \
+  pre-0.8.0 "$FIXTURES/pre-080-depends.md"
+printf '# Plan\n\n## T1: a\n\nBody.\n' >"$TEST_ROOT/no-lines.md"
+expect_format "a plan with neither line is pre-0.8.0" pre-0.8.0 "$TEST_ROOT/no-lines.md"
+expect_format "a plan with both is 0.8.0" 0.8.0 "$FIXTURES/waves-t.md"
+printf '# Plan\n\n## T1: a\n\n**Depends on:** nothing\n- **Touches:** none\n' >"$TEST_ROOT/touches-only.md"
+expect_format "a (bulleted) Touches line alone makes it 0.8.0" 0.8.0 "$TEST_ROOT/touches-only.md"
+printf '# Plan\n\n### parallel Safety\n\nNone.\n\n## T1: a\n' >"$TEST_ROOT/safety-only.md"
+expect_format "a Parallel safety heading alone (any level, any case) makes it 0.8.0" 0.8.0 \
+  "$TEST_ROOT/safety-only.md"
+expect_problem "--format with no plan" usage "got 0 arguments" --format
+expect_problem "--format with a missing file" file "$TEST_ROOT/absent.md" --format "$TEST_ROOT/absent.md"
+
 echo "Line endings and indentation"
 for f in waves-t fences fence-nested trailing-period; do
   sed 's/$/\r/' "$FIXTURES/$f.md" >"$TEST_ROOT/$f-crlf.md"

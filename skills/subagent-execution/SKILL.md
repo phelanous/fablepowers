@@ -88,15 +88,16 @@ A task's lines go in this order. First a `merge <n>-<k>` line as each merge fix 
 
 From 0.8.0 on, a plan gives every task a `**Depends on:**` line and a `**Touches:**` line, and names its shared resources in a `## Parallel safety` section (`fablepowers:implementation-plan`). From those you dispatch every task that is ready, each in its own worktree when more than one implementer is in flight, and merge each back after its checks. You work in the plan branch's worktree, the plan worktree; the workspace stays `<plan worktree toplevel>/.fablepowers/<plan>/`.
 
-**Before the first dispatch,** run the wave script on the plan:
+**Before the first dispatch,** classify the plan, then run the wave script on it:
 
 ```bash
+bash "<this skill's base dir>/plan-waves" --format <plan-file>
 bash "<this skill's base dir>/plan-waves" <plan-file>
 ```
 
-- Exit 0 prints one line per wave, `wave <k>: <id>, <id>, …`. The waves show the dependency order; what you dispatch follows the ready rule below, not the wave boundaries.
-- **A plan from before 0.8.0** has no line matching `**Depends on:**` at all: `grep -qF '**Depends on:**' <plan-file>` fails. Run its tasks one at a time in the plan worktree, as 0.7.0 did — dispatch, spot-check, `task` line, next task, with no task worktrees, merges or post-merge checks. Say so to the user in one line, and don't edit the approved plan to add the lines.
-- Any other non-zero exit goes back to plan review (`fablepowers:implementation-plan`), with the script's stderr lines as the findings. Don't dispatch from a plan the script rejects.
+- **A plan from before 0.8.0:** `--format` prints `pre-0.8.0`, because the plan has neither a `**Touches:**` line nor a `Parallel safety` heading, the two things 0.8.0 introduced. Many older plans do have `**Depends on:**` lines, often in forms the wave script rejects (`nothing (parallel with Task 1)`, `Tasks 1, 2`), so those lines don't decide it. Don't run the wave script on such a plan. Run its tasks one at a time in the plan worktree, as 0.7.0 did — dispatch, spot-check, `task` line, next task, with no task worktrees, merges or post-merge checks. Say so to the user in one line, and don't edit the approved plan or send it back to plan review.
+- On a plan `--format` calls `0.8.0`, exit 0 from the wave script prints one line per wave, `wave <k>: <id>, <id>, …`. The waves show the dependency order; what you dispatch follows the ready rule below, not the wave boundaries.
+- Any non-zero exit on a 0.8.0 plan goes back to plan review (`fablepowers:implementation-plan`), with the script's stderr lines as the findings. Don't dispatch from a plan the script rejects.
 
 **Ready and in flight:**
 

@@ -2,13 +2,15 @@
 # Print a plan's dispatch waves (fablepowers:subagent-execution).
 #
 # Usage: bash <dir>/plan-waves <plan-file>
+#        bash <dir>/plan-waves --format <plan-file>
 #
 # Exit 0: one line per wave, `wave <k>: <id>, <id>, ...`, plan order within a
 # wave. Exit 2: one stderr line per problem, every problem in one run, nothing
 # on stdout. Each problem line starts `plan-waves: <kind>:` with kind one of
-# usage, file, no-tasks, duplicate, no-depends, two-depends, bad-depends,
-# unknown-id, cycle or python. The grammar is in plan_waves.py. Never writes
-# files.
+# usage, file, unclosed-fence, no-tasks, duplicate, no-depends, two-depends,
+# bad-depends, unknown-id, cycle or python. The grammar is in plan_waves.py.
+# --format prints `0.8.0` or `pre-0.8.0` (a plan with a **Touches:** line or a
+# Parallel safety heading is 0.8.0) and exits 0. Never writes files.
 #
 # Python: $FABLEPOWERS_PYTHON if set (a user override and the test seam; when
 # set it is the only candidate), else python3 on PATH, then /usr/bin/python3,
@@ -20,8 +22,14 @@ case "$0" in
     *) SCRIPT_DIR="." ;;
 esac
 
-if (( $# != 1 )); then
-    echo "plan-waves: usage: plan-waves <plan-file> (got $# arguments)" >&2
+args=("$@")
+if [[ "${1:-}" == "--format" ]]; then
+    plan_args=$(( $# - 1 ))
+else
+    plan_args=$#
+fi
+if (( plan_args != 1 )); then
+    echo "plan-waves: usage: plan-waves <plan-file>, or plan-waves --format <plan-file> (got $plan_args arguments)" >&2
     exit 2
 fi
 
@@ -40,7 +48,7 @@ fi
 
 for py in "${candidates[@]}"; do
     if usable "$py"; then
-        exec "$py" -I "$SCRIPT_DIR/plan_waves.py" "$1"
+        exec "$py" -I "$SCRIPT_DIR/plan_waves.py" "${args[@]}"
     fi
 done
 

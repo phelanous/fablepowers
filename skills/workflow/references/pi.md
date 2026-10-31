@@ -25,6 +25,7 @@ The extension loads once per Pi session. A second copy in the same process (a `-
 | Track tasks | The plan file and the ledger `.fablepowers/<plan>/progress.md`. Pi has no todo tool. |
 | Native worktree tool (create / exit) | None. Use `git worktree add` as `fablepowers:using-git-worktrees` describes. |
 | Plugin root (where `skills/`, `agents/`, `hooks/` live) | The absolute path the bootstrap preamble names. For a git install that is the clone under `~/.pi/agent/git/`, the live root: editing your own checkout changes nothing until you update the install. |
+| Dispatch several seats at once (independent plan tasks) | Not available: `fablepowers_dispatch` is sequential, so tasks run one at a time with no task worktrees. See [Parallel dispatch](#parallel-dispatch). |
 
 Pi's own tools are `read`, `bash`, `edit` and `write` (plus optional `grep`, `find`, `ls`).
 
@@ -78,6 +79,15 @@ fablepowers_dispatch {
 - **Child transcripts.** `<parent session directory>/fablepowers-children/<parent session id>/<timestamp>_<child id>.jsonl`. A parent running with `--no-session` puts them under `$TMPDIR/fablepowers-children/<parent session id>/`. The parent's session gets a `fablepowers-child` custom entry linking each child.
 - **Stopping children.** When the parent session shuts down (normal exit, `/quit`, SIGTERM, SIGHUP, a session switch) or the dispatch is aborted (Esc in the TUI, RPC `abort`), each live child gets SIGTERM, then SIGKILL 5 s later if it is still running. An aborted dispatch returns an error. As a backstop, each child checks every 2 s whether its parent process is still alive; if not, it aborts its run and exits.
 - **Reports.** Dispatches name a workspace path such as `.fablepowers/<plan>/reports/task-<n>.md`, as on Claude Code.
+
+## Parallel dispatch
+
+`fablepowers:subagent-execution` runs a plan's independent tasks at the same time on harnesses that can. Pi cannot, by design.
+
+- **One task at a time.** `fablepowers_dispatch` is sequential (verified: the tool registers with `executionMode: 'sequential'`, asserted in `tests/pi/extension.test.mjs`). Several calls in one message would run one after another, so there is nothing to gain from sending them together.
+- **No task worktrees.** A task alone in flight runs in the plan worktree, so on Pi every task does. Nothing is merged back and there is no worktree cleanup.
+- **Plan order follows the waves.** Run wave 1's tasks one by one in plan order, then wave 2's, and so on, as `plan-waves` prints them. Each task's line goes in before the next dispatch.
+- **Waits.** The marker pattern from `fablepowers:behavioral-testing` applies inside a child as anywhere else: a background run with an exit-status `.done` marker, waited on in bounded calls under the `bash` tool's timeout, never `pgrep -f`. Pi's `bash` timeout is unverified.
 
 ## Bootstrap
 

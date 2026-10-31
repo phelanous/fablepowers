@@ -15,6 +15,7 @@ The session-start hook injects the workflow map, the plugin root and the **seat 
 | Track tasks | The plan file and the ledger `.fablepowers/<plan>/progress.md`; Codex's own plan tool, where your session has one, is optional. |
 | Native worktree tool (create / exit) | None. Use `git worktree add` as `fablepowers:using-git-worktrees` describes; the rules file below lets it run in the sandbox. |
 | Plugin root (where `skills/`, `agents/`, `hooks/` live) | The absolute path the session-start preamble names. Hook commands get it as `PLUGIN_ROOT` (and `CLAUDE_PLUGIN_ROOT`). The installed copy lives under `~/.codex/plugins/cache/<marketplace>/fablepowers/<version>/` and is the live root: editing the repo needs a reinstall. |
+| Dispatch several seats at once (independent plan tasks) | Several spawns in one turn, each child told its task worktree in the message. See [Parallel dispatch](#parallel-dispatch); unverified. |
 
 ## Seats → models
 
@@ -68,6 +69,16 @@ The first line is how the approval gate recognises a v1 reviewer (v2 reviewers b
 **No sub-spawns.** Codex's default agent depth (`agents.max_depth = 1`) gives children no spawn tool, the equivalent of Claude Code's `disallowedTools: Agent`. Do not raise it.
 
 **Reports.** Codex has no report-name write guard, but dispatches still name a workspace path such as `.fablepowers/<plan>/reports/task-<n>.md`, as on Claude Code.
+
+## Parallel dispatch
+
+`fablepowers:subagent-execution` runs a plan's independent tasks at the same time, each in its own task worktree. Everything in this section is **unverified**: no live Codex run was done for 0.8.0.
+
+- **Dispatch.** Several spawns in one turn, one per ready task. Each has its seat's `model` and `reasoning_effort` and the message convention above, plus the task worktree's absolute path. On v2 every attempt keeps a unique task name, a merge fix included (for example `fablepowers_implementer_t3_merge1`). Whether the children run concurrently is unverified.
+- **Working directory.** Spawns take no working directory, so the child starts in the session's directory and changes into the worktree its message names. The dispatch tells it to run each shell command as `cd <task worktree> && …` or `git -C <task worktree> …` (not for commits; see the next item). Whether a `cd` persists between shell calls is unverified. `apply_patch` paths are relative to the session's working directory (see [Approval mechanism](#approval-mechanism)), so from the plan worktree they start `.worktrees/<plan-key>-t<id>/`.
+- **Where task worktrees live.** `<plan worktree>/.worktrees/<plan-key>-t<id>`, inside the session's workspace. That the `workspace-write` sandbox lets a child write there is unverified. The rules file's `git worktree add` rule lets the orchestrator create them. Its `git add` and `git commit` rule matches only plain invocations, so `git -C <task worktree> commit` keeps the normal approval (read from the rule's prefix pattern, unverified). A child therefore commits as `cd <task worktree> && git add … && git commit …`; whether the rule matches inside that compound command is unverified.
+- **Orchestrator git commands need approval.** Under `workspace-write`, the orchestrator's `git merge --no-ff`, `git merge --abort`, `git worktree remove` and `git branch -d` each need the user's approval. The rules file allows only `git add`, `git commit` and `git worktree add`, and 0.8.0 leaves it unchanged. In `codex exec` these commands presumably fail the way `git commit` does without the rules file (inferred, unverified).
+- **Waits.** The marker pattern from `fablepowers:behavioral-testing`: a background run with an exit-status `.done` marker, waited on in bounded calls under the shell tool's timeout, never `pgrep -f`. Codex's shell timeout, and whether a background job's completion reaches a child, are unverified.
 
 ## Bootstrap
 

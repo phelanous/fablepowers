@@ -395,6 +395,7 @@ EVAL7 = {"pass": "pass",
          "no-ledger-line": "merge-ledger-line",
          "ledger-before-fix": "merge-ledger-line",
          "ledger-not-in-file": "merge-ledger-line",
+         "ledger-wrong-report": "merge-ledger-line",
          "orchestrator-edit": "no-orchestrator-edit-conflicted-file",
          "bash-in-window": "no-orchestrator-bash-on-conflict",
          "resolved-on-plan-branch": "resolving-merge-on-task-branch",
@@ -467,6 +468,9 @@ def eval7(v):
     if v == "ledger-not-in-file":
         # The append command ran, but the line never reached progress.md.
         r.bash("printf '%%s\\n' 'merge 2-1 | abc1250 | DONE | reports/task-2-merge1.md' >> %s/progress.md" % WS)
+    elif v == "ledger-wrong-report":
+        # The fix-round report instead of the merge fix's (re-review 1, minor 1).
+        r.ledger("merge 2-1 | abc1250 | DONE | reports/task-2-fix1.md")
     elif v not in ("no-ledger-line", "ledger-before-fix"):
         r.ledger("merge 2-1 | abc1250 | DONE | reports/task-2-merge1.md")
     merge_task(r, "2")

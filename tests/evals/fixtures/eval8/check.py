@@ -16,7 +16,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib"))
 import evalcheck as ec  # noqa: E402
 
-E2E = re.compile(r"tests/(?:run-all|e2e)\.sh")
+# The plan's one serialize run resource, the command that runs its part, and
+# the full suite, which runs every part (see ec.unheld_parts).
+PARTS = {"e2e": re.compile(r"tests/e2e\.sh")}
+FULL = re.compile(r"tests/run-all\.sh")
 PRE_COMMIT = re.compile(r"\bpython3?\s+(?:-\w+\s+)*-m\s+unittest\s+discover\b")
 
 
@@ -58,10 +61,10 @@ def main():
         return "\n".join([x.command] + [body for path, body in scripts.items() if path in x.command])
 
     ran = [text(x) for x in calls if x.name == "Bash" and not ec.denied(x)]
-    e2e = [r for r in ran if E2E.search(r)]
+    e2e = [line for _, line in ec.unheld_parts(ran, PARTS, FULL, set())]  # T3: Touches none
     pre = [r for r in ran if PRE_COMMIT.search(r)]
     c.check("control-pre-commit-suite", impl is not None and not e2e and bool(pre),
-            "T3 ran the e2e: %s" % e2e[0].splitlines()[0] if e2e else
+            "T3 ran the e2e: %s" % e2e[0] if e2e else
             ("T3 ran the pre-commit suite %d time(s), never the e2e" % len(pre) if pre else
              ("T3 never ran the pre-commit suite" if impl else "no T3 implementer transcript")))
 

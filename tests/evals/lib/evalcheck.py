@@ -371,6 +371,30 @@ def concurrency(segment_lists):
     return active / wall if wall else 0.0
 
 
+# --- the pre-commit suite rule ------------------------------------------------------
+
+def unheld_parts(runs, parts, full, held):
+    """Serialized parts an implementer's runs used without holding them.
+
+    The rule (spec section 1, re-review 1 R1): every implementer runs the
+    plan's pre-commit suite, which skips every `serialize` run resource, plus
+    the part of each one its task's Touches line names, while holding it; so
+    no implementer runs a part it doesn't hold, however many there are.
+    `runs` are the command texts it ran; `parts` maps each serialize run
+    resource to a regex for the command that runs its part; `full` is a regex
+    for the full-suite command, which runs every part; `held` is the set of
+    resources on the task's Touches line. Returns (resource, the run's first
+    line) pairs, one per resource, in `parts` order."""
+    out = []
+    for res, rx in parts.items():
+        if res in held:
+            continue
+        hit = next((r for r in runs if rx.search(r) or full.search(r)), None)
+        if hit is not None:
+            out.append((res, hit.splitlines()[0]))
+    return out
+
+
 # --- reporting ------------------------------------------------------------------
 
 class Checker:

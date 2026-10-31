@@ -17,7 +17,7 @@
 
 ## Parallel safety
 
-- `e2e` — serialize (the e2e step binds the fixed port 4500, so two runs at once collide)
+- `e2e` — serialize; run: `bash tests/e2e.sh` (the e2e step binds the fixed port 4500, so two runs at once collide)
 - `worktree env` — none needed (the suite uses only python3 stdlib)
 - `pre-commit suite` — `python3 -m unittest discover -s tests -t . -q` (the full suite without the serialized e2e step)
 

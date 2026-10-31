@@ -193,6 +193,48 @@ else
   done <<<"$out"
 fi
 
+echo "Test 8: the pre-commit suite rule holds with two serialize run resources (re-review 1, R1)"
+# The reviewer's scenario: e2e (fixed port 4500) and test-db (one shared
+# schema), both serialize; T1 Touches e2e, T2 Touches test-db, T3 none, all
+# in flight together. Under af5f1ea's rule a task touching a serialize run
+# resource ran the full suite, so T1 used test-db and T2 used port 4500 while
+# the other held them. Under the rule now, each runs the pre-commit suite
+# plus only its own resources' parts.
+rc=0
+out="$("$PY" -I - "${EVAL_LIB:-$SCRIPT_DIR/lib}" 2>&1 <<'PYEOF'
+import re
+import sys
+sys.path.insert(0, sys.argv[1])
+import evalcheck as ec
+
+parts = {"e2e": re.compile(r"tests/e2e\.sh"), "test-db": re.compile(r"tests/db\.sh")}
+full = re.compile(r"tests/run-all\.sh")
+pre = "cd /w && python3 -m pytest -m 'not e2e and not db'"
+cases = [
+    ("af5f1ea's rule: T1 (Touches e2e) runs the full suite", ["cd /w && bash tests/run-all.sh"], {"e2e"}, ["test-db"]),
+    ("af5f1ea's rule: T2 (Touches test-db) runs the full suite", ["cd /w && bash tests/run-all.sh"], {"test-db"}, ["e2e"]),
+    ("new rule: T1 runs the pre-commit suite and the e2e part", [pre, "cd /w && bash tests/e2e.sh"], {"e2e"}, []),
+    ("new rule: T2 runs the pre-commit suite and the test-db part", [pre, "cd /w && bash tests/db.sh"], {"test-db"}, []),
+    ("new rule: T3 (Touches none) runs the pre-commit suite only", [pre], set(), []),
+    ("T1 running the test-db part it doesn't hold", [pre, "cd /w && bash tests/e2e.sh", "cd /w && bash tests/db.sh"], {"e2e"}, ["test-db"]),
+    ("a task holding both may run the full suite", ["cd /w && bash tests/run-all.sh"], {"e2e", "test-db"}, []),
+]
+for name, runs, held, want in cases:
+    got = [res for res, _ in ec.unheld_parts(runs, parts, full, held)]
+    print("%s %s: unheld %s" % ("ok" if got == want else "bad", name, got or "none"))
+PYEOF
+)" || rc=$?
+if [[ $rc -ne 0 ]]; then
+  fail "the rule checks exited $rc:"$'\n'"$out"
+else
+  while IFS= read -r line; do
+    case "$line" in
+      ok\ *) pass "${line#ok }" ;;
+      *) fail "${line#bad }" ;;
+    esac
+  done <<<"$out"
+fi
+
 echo
 if [[ $FAILURES -eq 0 ]]; then
   echo "All eval checker tests passed."

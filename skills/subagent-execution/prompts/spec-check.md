@@ -16,11 +16,13 @@ Diff range: [BASE_SHA]..[HEAD_SHA] in [REPO PATH]. Implementer's report: [WORKSP
 
 Write your report to: [WORKSPACE]/reports/spec-check-task-[N].md
 
+Running the tests: [IN A PARALLEL PLAN: the task worktree, the plan's `pre-commit suite` command (its full suite when the plan names none), and the worktree's `isolate` instances. OTHERWISE: the project's test command.]
+
 ## Your job
 
 1. Read the diff AND the full current state of every touched file.
 2. Check every requirement in the task spec point-by-point: present, correct, nothing extra.
-3. Run the tests yourself; confirm counts match the report.
+3. Run the tests yourself; confirm counts match the report. In a parallel plan, rerun only the pre-commit suite named above, in the task worktree with its `isolate` instances: you hold no resource, so never rerun a serialized part (an e2e, a shared test database), even one the implementer ran. Other implementers may be holding it. Judge the implementer's serialized-part counts from its report.
 4. Check for scope creep: files touched that the spec doesn't cover, features added that weren't asked for.
 5. Check the tests actually pin behavior: for at least one core behavior, would the test fail if the behavior were broken? If a test only asserts structure/shape, flag it.
 

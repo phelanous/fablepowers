@@ -26,8 +26,3 @@ Compute the basis.
 ## Task 3 — Wire it up
 
 **Depends on:** Tasks 1, 2
-
-```markdown
-**Touches:** none
-## Parallel safety
-```

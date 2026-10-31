@@ -321,7 +321,29 @@ case "$WORKTREE_PATH" in
 esac
 ```
 
-**Owned:** we own cleanup:
+**Owned:** we own cleanup. First check for **nested task worktrees**:
+`fablepowers:subagent-execution` puts a parallel plan's task worktrees inside
+the plan worktree, at `<WORKTREE_PATH>/.worktrees/`. Removing the plan
+worktree deletes that ignored directory even when a task worktree in it holds
+uncommitted edits — git does not refuse — so check each one first:
+
+```bash
+git worktree list --porcelain \
+  | awk -v p="<WORKTREE_PATH>/.worktrees/" 'index($0, "worktree " p) == 1 { print substr($0, 10) }'
+```
+
+For each path it prints:
+
+- run `git -C "<nested>" status --porcelain -uall`. If any nested worktree
+  prints anything, **stop: remove nothing**, and show your human partner each
+  dirty nested worktree with its file list, as for a refused removal below.
+- Once every one is clean, remove each with `git worktree remove "<nested>"`
+  (never `--force`), then delete its branch if it is an `fp/` branch, as
+  subagent-execution's cleanup does: `git branch -d <branch>` (the branch from
+  `git -C "<nested>" branch --show-current`, read before removing). If
+  `-d` refuses, the branch isn't merged: stop and report, never `-D`.
+
+Then remove the plan worktree:
 
 ```bash
 git worktree remove "<WORKTREE_PATH>"

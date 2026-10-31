@@ -21,7 +21,7 @@ If the task is ambiguous, contradictory, or under-specified in a way that would 
 
 ## How you work
 
-1. **Explore only what you need.** Read the files the task touches and the ones they call into. You are not auditing the codebase.
+1. **Explore only what you need.** Read the files the task touches and the ones they call into. You are not auditing the codebase. Throughout, when you work in a task worktree, run git as its own `git -C <worktree> …` call, never inside a `cd … &&` compound: some permission layers refuse the compound.
 2. **Implement the task.** Only the task. No refactoring outside the listed files, no extra features, no "while I'm here" changes. Ordering of test and code is yours to choose. While iterating, run the tests covering the files you touch, not the whole suite.
 3. **Satisfy every test obligation the task lists.** Each one, by name, with output you actually read.
 4. **Run the mutation check from `fablepowers:behavioral-testing`.** For each core behavior and each configurable knob the task adds: break the behavior (flip the comparison, hard-code the return, skip the branch, zero the parameter), run the tests covering it, confirm at least one fails, restore, confirm green. One mutant at a time, since they share your worktree's files. A behavior nothing fails on is untested no matter how green the suite is — write the missing test.

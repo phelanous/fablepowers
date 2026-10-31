@@ -98,7 +98,16 @@ expect_waves "'## Task <n> —' headings (all four separators) print Task spelli
 expect_waves "'### Task <n>' headings print Task spellings" \
   $'wave 1: Task 1, Task 2\nwave 2: Task 3\nwave 3: Task 4' "$FIXTURES/waves-task-h3.md"
 
+expect_waves "'## T<n> —' headings (em dash, en dash, hyphen, spaced colon) print T spellings; '## T9 without' is no task" \
+  "$WAVES4" "$FIXTURES/waves-t-dash.md"
+
 echo "Criterion 2: Depends on spellings"
+expect_waves "'nothing (spike)' and 'none (reason).' are no dependency" "$WAVES3" \
+  "$(plan nothing-reason 'nothing (spike)' 'none (parallel with Task 1).' T1)"
+expect_problem "'nothing (a (b))' is still malformed" bad-depends "'nothing (a (b))'" \
+  "$(plan nothing-nested 'nothing (a (b))' nothing T1)"
+expect_problem "'nothing yet' is still malformed" bad-depends "'nothing yet'" \
+  "$(plan nothing-words 'nothing yet' nothing T1)"
 expect_waves "'T1 (enum types)' — a parenthesised reason" "$WAVES3" \
   "$(plan reason nothing nothing 'T1 (enum types)')"
 expect_waves "'Task 1' in a T-style plan" "$WAVES3" \

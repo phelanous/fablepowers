@@ -22,14 +22,15 @@ Anything else is pre-0.8.0, whatever its Depends on lines say: older plans
 often have Depends on lines that the wave grammar rejects.
 
 Grammar:
-- Task headings start in column 0: `## T<id>: ...`, `## Task <id> <sep> ...`
-  (sep one of em dash, en dash, hyphen, colon) and `### Task <id> ...`, where
+- Task headings start in column 0: `## T<id> <sep> ...`, `## Task <id> <sep> ...`
+  (sep one of em dash, en dash, hyphen, colon, with optional spaces before
+  it) and `### Task <id> ...`, where
   <id> is digits then optional letters. `T3`, `Task 3` and `3` are the same
   task; ids compare case-insensitively. A task's body runs to the next task
   heading (other headings don't end it).
 - Each body has exactly one `**Depends on:**` line, also in column 0:
-  `nothing`/`none` (any case), or comma-separated ids, each with an optional parenthesised reason
-  that holds no parentheses. One trailing period is ignored (`nothing.`,
+  `nothing`/`none` (any case), or comma-separated ids; `nothing`, `none` and
+  each id may take a parenthesised reason that holds no parentheses. One trailing period is ignored (`nothing.`,
   `T1 (reason).`).
 - ``` and ~~~ fenced blocks are skipped. A fence closes only on a line made of
   the opener's character, at least as many as the opener. A fence still open
@@ -47,10 +48,11 @@ import sys
 ID = r"[0-9]+[A-Za-z]*"
 HEADINGS = [
     # (regex, spelling prefix)
-    (re.compile(r"^## T(" + ID + r"):"), "T"),
+    (re.compile(r"^## T(" + ID + r")[ \t]*(?:—|–|-|:)"), "T"),
     (re.compile(r"^## Task (" + ID + r")[ \t]*(?:—|–|-|:)"), "Task "),
     (re.compile(r"^### Task (" + ID + r")(?=[\s:.—–-]|$)"), "Task "),
 ]
+NOTHING = re.compile(r"^(?:nothing|none)\s*(?:\([^()]*\))?$", re.IGNORECASE)
 DEPENDS = re.compile(r"^\*\*Depends on:\*\*(.*)$")
 DEP_ITEM = re.compile(
     r"^\s*(?:Task\s+|T)?(" + ID + r")\s*(?:\([^()]*\))?\s*$", re.IGNORECASE
@@ -157,7 +159,7 @@ def parse_depends(value):
     # Plans often end the line as a sentence; one trailing period is ignored.
     if value.endswith("."):
         value = value[:-1].rstrip()
-    if value.lower() in ("nothing", "none"):
+    if NOTHING.match(value):
         return [], []
     keys, bad = [], []
     for item in value.split(","):
@@ -208,7 +210,7 @@ def main(argv):
     tasks = parse_tasks(lines, problems)
     if not tasks:
         problem(problems, "no-tasks",
-                "no task headings (## T<id>:, ## Task <id> -, ### Task <id>) in %s" % path)
+                "no task headings (## T<id> -, ## Task <id> -, ### Task <id>) in %s" % path)
         return problems, None
 
     # Duplicates: one line per id, naming every heading line.
@@ -241,7 +243,7 @@ def main(argv):
             keys, bad = parse_depends(value)
             if bad:
                 problem(problems, "bad-depends",
-                        "%s line %d: cannot parse %s (want nothing, none, or ids like T1 (reason), T3)"
+                        "%s line %d: cannot parse %s (want nothing, none, or ids like T1 (reason), T3; any may take a (reason))"
                         % (t["name"], n, ", ".join(repr(b) for b in bad)))
             for k in keys:
                 if k in edges:

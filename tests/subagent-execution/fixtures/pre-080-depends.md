@@ -1,7 +1,7 @@
 # Live sizing basis Implementation Plan
 
 A plan written before 0.8.0, shaped like the real ones the integration review
-found: it has Depends on lines, but in forms the wave grammar rejects, and no
+found: it has Depends on lines, one in a form the wave grammar rejects, and no
 Touches lines or Parallel safety section.
 
 **Spec:** docs/specs/live-sizing-basis.md

@@ -10,16 +10,18 @@ k+1 is every task whose dependencies are all in waves <= k.
 
 Exit 2: one stderr line per problem, every problem found in one run, nothing
 on stdout. Each line starts `plan-waves: <kind>:`, kind one of usage, file,
-unclosed-fence, no-tasks, duplicate, no-depends, two-depends, bad-depends,
+unclosed-fence, heading-in-fence, no-tasks, duplicate, no-depends, two-depends, bad-depends,
 unknown-id, cycle (and python, from the launcher). The orchestrator relies on
 these kinds.
 
 --format: print the plan's format, `0.8.0` or `pre-0.8.0`, and exit 0 (usage
-and file problems exit 2 as above). A plan is 0.8.0 when, outside fenced
-blocks, it has a `**Touches:**` line (any indentation, bulleted or not) or a
-`Parallel safety` heading (any level, any case); both arrived in 0.8.0.
-Anything else is pre-0.8.0, whatever its Depends on lines say: older plans
-often have Depends on lines that the wave grammar rejects.
+and file problems exit 2 as above). A plan is 0.8.0 when it has a
+`**Touches:**` line (any indentation, bulleted or not) or a `Parallel safety`
+heading (any level, any case) anywhere, fenced or not; both arrived in 0.8.0.
+Fences are not consulted, so a 0.8.0 plan whose markers a broken fence
+swallowed still reaches the wave script and its fence problems (re-review 1,
+R3). Anything else is pre-0.8.0, whatever its Depends on lines say: older
+plans often have Depends on lines that the wave grammar rejects.
 
 Grammar:
 - Task headings start in column 0: `## T<id> <sep> ...`, `## Task <id> <sep> ...`
@@ -36,6 +38,12 @@ Grammar:
   the opener's character, at least as many as the opener. A fence still open
   at the end of the file, with a task heading after its opener, is an
   unclosed-fence problem: those headings would otherwise vanish silently.
+- Any other fence holding a column-0 task heading or a column-0
+  `**Depends on:**` line is a heading-in-fence problem. A fence left open
+  usually pairs with a later code block's closer and swallows the tasks in
+  between; this catches that. The trade-off: a plan can't quote a task heading
+  or a Depends on line in column 0 inside a fence. That is rare (none of 65
+  real plans do it); indent the quoted lines instead.
 - Ids compare as written apart from case: `T01` and `T1` are different tasks.
 - CRLF and LF files parse the same.
 
@@ -85,19 +93,23 @@ def read_lines(path, problems):
     return [line[:-1] if line.endswith("\r") else line for line in text.split("\n")]
 
 
-def unfenced(lines, unclosed=None):
+def unfenced(lines, fences=None):
     """Yield (line_number, line) for lines outside fenced code blocks.
 
-    When `unclosed` is a list, a fence still open at the end is appended to it
-    as its opener's line number.
+    When `fences` is a list, each fence is appended to it as
+    (opener line, closer line or None when never closed, inside line numbers).
     """
-    fence = None  # (char, length, opener line) while inside a fence
+    fence = None  # (char, length, opener line, inside lines) while inside a fence
     for n, line in enumerate(lines, 1):
         if fence is not None:
-            char, length, _ = fence
+            char, length, opener, inside = fence
             stripped = line.strip()
             if len(stripped) >= length and stripped == char * len(stripped):
+                if fences is not None:
+                    fences.append((opener, n, inside))
                 fence = None
+            else:
+                inside.append(n)
             continue
         m = FENCE_OPEN.match(line)
         if m:
@@ -107,11 +119,11 @@ def unfenced(lines, unclosed=None):
             if run[0] == "`" and "`" in line[m.end():]:
                 yield n, line
                 continue
-            fence = (run[0], len(run), n)
+            fence = (run[0], len(run), n, [])
             continue
         yield n, line
-    if fence is not None and unclosed is not None:
-        unclosed.append(fence[2])
+    if fence is not None and fences is not None:
+        fences.append((fence[2], None, fence[3]))
 
 
 def heading_id(line):
@@ -125,8 +137,8 @@ def heading_id(line):
 
 def parse_tasks(lines, problems):
     """Return tasks in plan order: dicts with name, key, line, depends."""
-    tasks, unclosed = [], []
-    for n, line in unfenced(lines, unclosed):
+    tasks, fences = [], []
+    for n, line in unfenced(lines, fences):
         found = heading_id(line)
         if found:
             spelling, ident = found
@@ -135,19 +147,27 @@ def parse_tasks(lines, problems):
         m = DEPENDS.match(line)
         if m and tasks:
             tasks[-1]["depends"].append((n, m.group(1)))
-    for opener in unclosed:
-        hidden = [(n, heading_id(line)[0]) for n, line in enumerate(lines, 1)
-                  if n > opener and heading_id(line)]
-        if hidden:
+    for opener, closer, inside in fences:
+        hidden = [(n, heading_id(lines[n - 1])[0]) for n in inside if heading_id(lines[n - 1])]
+        if closer is None and hidden:
             problem(problems, "unclosed-fence",
                     "the fence opened at line %d is never closed, hiding task heading(s) %s"
                     % (opener, ", ".join("%s (line %d)" % (name, n) for n, name in hidden)))
+            continue
+        held = sorted(hidden + [(n, "**Depends on:**") for n in inside if DEPENDS.match(lines[n - 1])])
+        if held:
+            problem(problems, "heading-in-fence",
+                    "the fence opened at line %d and %s holds %s; a fence left open pairs with a later "
+                    "closer and hides the tasks in between (indent a quoted line to keep it)"
+                    % (opener, "closed at line %d" % closer if closer else "never closed",
+                       ", ".join("%s (line %d)" % (name, n) for n, name in held)))
     return tasks
 
 
 def plan_format(lines):
-    """`0.8.0` when the plan has a Touches line or a Parallel safety heading."""
-    for _, line in unfenced(lines):
+    """`0.8.0` when the plan has a Touches line or a Parallel safety heading,
+    fenced or not."""
+    for line in lines:
         if TOUCHES.match(line) or PARALLEL_SAFETY.match(line):
             return "0.8.0"
     return "pre-0.8.0"

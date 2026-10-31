@@ -170,9 +170,18 @@ expect_problem "a cycle and a self-dependency are both reported" cycle "T1 depen
 assert_eq "$(printf '%s\n' "$PW_ERR" | grep -c '^plan-waves: cycle:')" "2" "... as two cycle lines"
 
 echo "Criterion 4: fenced code blocks"
-expect_waves "a heading and a Depends on line inside fences are ignored" "$WAVES3" "$FIXTURES/fences.md"
-expect_waves "a \`\`\` fence holding ~~~ then '## T9:' does not create T9; a \`\`\`\` fence is not closed by \`\`\`" \
-  "$WAVES3" "$FIXTURES/fence-nested.md"
+# Changed after re-review 1 (R2): a column-0 task heading or Depends on line
+# inside a fence is reported, not ignored; other fenced lines are still skipped.
+expect_waves "fenced lines that are no column-0 heading or Depends on line are skipped" \
+  $'wave 1: T1\nwave 2: T2' "$FIXTURES/fence-quoted.md"
+expect_problem "a heading and a Depends on line inside a closed fence are heading-in-fence" heading-in-fence \
+  "opened at line 7 and closed at line 10 holds T9 (line 8), **Depends on:** (line 9)" "$FIXTURES/fences.md"
+expect_problem "... and a fenced Depends on line alone is too" heading-in-fence \
+  "opened at line 20 and closed at line 22 holds **Depends on:** (line 21)" "$FIXTURES/fences.md"
+expect_problem "a \`\`\`\` fence is not closed by \`\`\`, so its '## T9:' is fenced" heading-in-fence \
+  "opened at line 9 and closed at line 13 holds T9 (line 11)" "$FIXTURES/fence-nested.md"
+expect_problem "a \`\`\` fence is not closed by ~~~, so its '## T9:' is fenced" heading-in-fence \
+  "opened at line 19 and closed at line 23 holds T9 (line 21)" "$FIXTURES/fence-nested.md"
 
 echo "Unclosed fences (integration review S4)"
 expect_problem "an unclosed \`\`\`python fence before a task heading is reported" unclosed-fence \
@@ -181,6 +190,12 @@ expect_problem "an unclosed 4-space-indented fence before a task heading is repo
   "line 9 is never closed, hiding task heading(s) T2 (line 12)" "$FIXTURES/unclosed-fence-indented.md"
 expect_waves "an unclosed fence with no task heading after it is not a problem" \
   $'wave 1: T1\nwave 2: T2' "$FIXTURES/unclosed-fence-trailing.md"
+
+echo "A fence left open that pairs with a later closer (re-review 1, R2)"
+expect_problem "an open \`\`\`python closed by a later block's \`\`\` reports the tasks it swallowed" heading-in-fence \
+  "opened at line 16 and closed at line 31 holds **Depends on:** (line 19), T2 (line 22), **Depends on:** (line 24), T3 (line 27)" \
+  "$FIXTURES/fence-paired.md"
+assert_eq "$(printf '%s\n' "$PW_ERR" | grep -c '^plan-waves: ')" "1" "... as one problem line"
 
 echo "Plan format (integration review M1)"
 # expect_format <description> <expected> <plan>
@@ -207,6 +222,14 @@ expect_format "a (bulleted) Touches line alone makes it 0.8.0" 0.8.0 "$TEST_ROOT
 printf '# Plan\n\n### parallel Safety\n\nNone.\n\n## T1: a\n' >"$TEST_ROOT/safety-only.md"
 expect_format "a Parallel safety heading alone (any level, any case) makes it 0.8.0" 0.8.0 \
   "$TEST_ROOT/safety-only.md"
+# Changed after re-review 1 (R3): fences are not consulted, so a 0.8.0 plan
+# whose markers a broken fence swallowed still reaches the wave script.
+expect_format "Touches and Parallel safety swallowed by a fence left open still make it 0.8.0" 0.8.0 \
+  "$FIXTURES/fence-open-markers.md"
+expect_problem "... and the wave script then reports the fence" unclosed-fence \
+  "line 5 is never closed, hiding task heading(s) T1 (line 12), T2 (line 17)" "$FIXTURES/fence-open-markers.md"
+printf '# Plan\n\n## T1: a\n\n**Depends on:** nothing\n\n```markdown\n  **Touches:** none\n```\n' >"$TEST_ROOT/fenced-touches.md"
+expect_format "a Touches line inside a closed fence also counts (the trade-off)" 0.8.0 "$TEST_ROOT/fenced-touches.md"
 expect_problem "--format with no plan" usage "got 0 arguments" --format
 expect_problem "--format with a missing file" file "$TEST_ROOT/absent.md" --format "$TEST_ROOT/absent.md"
 

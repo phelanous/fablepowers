@@ -1,0 +1,4 @@
+{"agentId": "a0000000000044aad", "isSidechain": true, "message": {"content": "(dispatch prompt)", "role": "user"}, "timestamp": "2026-10-31T12:07:16.000Z", "type": "user"}
+{"agentId": "a0000000000044aad", "isSidechain": true, "message": {"content": [{"id": "toolu_fix0036", "input": {"command": "bash tests/run-all.sh", "description": "run"}, "name": "Bash", "type": "tool_use"}], "id": "msg_fix0037", "role": "assistant"}, "timestamp": "2026-10-31T12:07:30.500Z", "type": "assistant"}
+{"agentId": "a0000000000044aad", "isSidechain": true, "message": {"content": [{"content": "OK", "is_error": false, "tool_use_id": "toolu_fix0036", "type": "tool_result"}], "role": "user"}, "timestamp": "2026-10-31T12:07:31.000Z", "type": "user"}
+{"agentId": "a0000000000044aad", "isSidechain": true, "message": {"content": [{"text": "Status: DONE", "type": "text"}], "id": "msg_fix0038", "role": "assistant"}, "timestamp": "2026-10-31T12:07:45.000Z", "type": "assistant"}

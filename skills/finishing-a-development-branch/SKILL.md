@@ -325,23 +325,31 @@ esac
 `fablepowers:subagent-execution` puts a parallel plan's task worktrees inside
 the plan worktree, at `<WORKTREE_PATH>/.worktrees/`. Removing the plan
 worktree deletes that ignored directory even when a task worktree in it holds
-uncommitted edits — git does not refuse — so check each one first:
+uncommitted edits — git does not refuse — so check each one first. List each
+with its branch, from git's registrations rather than from the directory:
 
 ```bash
-git worktree list --porcelain \
-  | awk -v p="<WORKTREE_PATH>/.worktrees/" 'index($0, "worktree " p) == 1 { print substr($0, 10) }'
+git worktree list --porcelain | awk -v p="<WORKTREE_PATH>/.worktrees/" '
+  index($0, "worktree " p) == 1 { w = substr($0, 10); b = "" }
+  w != "" && /^branch refs\/heads\// { b = substr($0, 19) }
+  w != "" && $0 == "" { print w "\t" b; w = "" }
+  END { if (w != "") print w "\t" b }'
 ```
 
-For each path it prints:
+Each line is `<nested>`, a tab, and its branch (empty when detached).
 
-- run `git -C "<nested>" status --porcelain -uall`. If any nested worktree
-  prints anything, **stop: remove nothing**, and show your human partner each
-  dirty nested worktree with its file list, as for a refused removal below.
-- Once every one is clean, remove each with `git worktree remove "<nested>"`
-  (never `--force`), then delete its branch if it is an `fp/` branch, as
-  subagent-execution's cleanup does: `git branch -d <branch>` (the branch from
-  `git -C "<nested>" branch --show-current`, read before removing). If
-  `-d` refuses, the branch isn't merged: stop and report, never `-D`.
+- A `<nested>` whose directory no longer exists is a stale registration: it
+  holds no files, so it counts as clean.
+- For every other one, run `git -C "<nested>" status --porcelain -uall`. If
+  any prints anything, **stop: remove nothing**, and show your human partner
+  each dirty nested worktree with its file list, as for a refused removal
+  below.
+- Once every one is clean, run `git worktree prune` (it drops the stale
+  registrations), remove each one whose directory exists with
+  `git worktree remove "<nested>"` (never `--force`), then delete each listed
+  branch that is an `fp/` branch, as subagent-execution's cleanup does:
+  `git branch -d <branch>`. If `-d` refuses, the branch isn't merged: stop
+  and report, never `-D`.
 
 Then remove the plan worktree:
 
@@ -380,7 +388,10 @@ If the harness's workspace-exit tool created this worktree in this session
 (Claude Code `ExitWorktree`), you may offer it: action **keep** by default;
 **remove** (deletes the worktree *and* its branch) only when your human
 partner explicitly asks — a confirmed discard counts — and never after
-Option 2 or 3, since the PR or kept work needs the branch. If the tool is not
+Option 2 or 3, since the PR or kept work needs the branch. Before a
+**remove**, run the nested task worktree check from **Owned** above on this
+worktree: a dirty one stops the removal, and clean ones are removed, with
+their `fp/` branches, first. If the tool is not
 usable for this worktree, leave everything and say so.
 
 ## Quick Reference

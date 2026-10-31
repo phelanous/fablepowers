@@ -15,6 +15,8 @@ The dispatch names the plan path, your task's heading and the spec path. Read yo
 
 When the task is a fix round, each listed failure scenario is a test obligation: show the test failing on the code before the fix and passing after it, per finding, in your report.
 
+When the dispatch is a merge fix, it names two sides instead of one task heading: the task branch, checked out in your working directory, and the plan branch's tip, which conflicted with it. Merge the plan tip into the task branch and resolve the conflict so that both sides' behavior survives; dropping one side's change to make the merge go through is not a resolution. Run both sides' tasks' tests and then the full suite, commit the merge, and write the merge report to the path the dispatch names, listing each conflicted file and how you resolved it. There is no mutation check, since a merge fix adds no behavior of its own. The BLOCKED rule for a heading missing from the plan does not apply to a merge fix; the tasks the dispatch names are what you read.
+
 If the task is ambiguous, contradictory, or under-specified in a way that would make you guess at an interface, ask before writing code. A question costs one round-trip; a wrong guess costs a review cycle.
 
 ## How you work

@@ -49,15 +49,18 @@ def main():
             "%d merge-fix dispatch(es), none an implementer after the conflict" % len(fixes))
 
     tid = ec.classify_dispatch(fix)[1] if fix else (conflicts[0][2] if conflicts else "2")
-    rx = re.compile(r"(?:(?<![\w-])|(?<=\\n))merge\s+T?%s-\d+\s*\|" % re.escape(tid), re.I)
-    lines = [l for l in s.progress().splitlines() if rx.match(l.strip())]
+    rx = ec.round_re("merge", tid)
+    # A merge line cites the merge fix's report, never a fix round's.
+    report = re.compile(r"\|\s*reports/task-T?%s-merge\d+\.md\s*$" % re.escape(ec.norm_id(tid)), re.I)
+    lines = [l for l in ec.round_lines(s, "merge", tid) if report.search(l.strip())]
     writes = [x for x in s.calls if (x.name == "Bash" and "progress.md" in x.command and rx.search(x.command)) or
               (x.name in ec.EDIT_TOOLS and x.path.endswith("progress.md") and rx.search(x.written_text()))]
     # The line follows the merge fix's return; with no merge fix (judged
     # above) only its presence is judged here.
     after = fix is None or (fix.result_idx is not None and any(w.idx > fix.result_idx for w in writes))
     c.check("merge-ledger-line", bool(lines) and after,
-            "%s, written after the merge fix returned: %s" % (lines[0].strip() if lines else "no merge line", after))
+            "%s, written after the merge fix returned: %s" % (
+                lines[0].strip() if lines else "no merge line citing reports/task-%s-merge<k>.md" % tid, after))
 
     edits = [x for x in s.calls if x.name in ec.EDIT_TOOLS and any(x.path.endswith(f) for f in files)]
     c.check("no-orchestrator-edit-conflicted-file", not edits,

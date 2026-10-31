@@ -14,7 +14,9 @@
 # 3. Saves into the output directory: stream.jsonl, the transcript
 #    (session.jsonl plus session/subagents/), result.json, progress.md, the
 #    repo's .fablepowers/ tree, git worktree list, git branch --list 'fp/*',
-#    git status, info/exclude, .gitignore at HEAD, and main's history. Then
+#    git status, `git check-ignore -v .worktrees/x` with its exit status, what
+#    main's history ever committed under .worktrees/, .gitignore at HEAD, and
+#    main's history. Then
 #    runs the fixture's post.sh, if any.
 # 4. Runs the fixture's check.py (stdlib, -I) on the transcript and the
 #    output directory; it uses scripts/session-timeline.py --json.
@@ -123,11 +125,11 @@ fi
 # A pattern allowlist, as in the T0 spike. Edit tools are not listed: they
 # stay under acceptEdits, so they write only inside the fixture repo. Known
 # limit (Claude Code 2.1.306, -p): a command with a variable or a `( … )` group
-# is denied under any pattern rule ("can't be checked before it runs"), and
-# that includes the skills' marker pattern,
-# `( cmd; echo "exit $?" > "$OUT.done" ) > "$OUT" 2>&1 &`. Denials are printed
-# after the assertions; an agent that hits one has to find another way, and
-# that is part of what eval 9 observes.
+# is denied under any pattern rule ("can't be checked before it runs"); so
+# the skills put a long run in a script file that writes its own .done marker,
+# started with run_in_background. Writes under .git/ are refused as sensitive.
+# Denials are printed after the assertions; an agent that hits one has to find
+# another way, and that is part of what eval 9 observes.
 ALLOWED=(
   "Agent" "Read" "Glob" "Grep" "Skill"
   "TodoWrite" "TaskCreate" "TaskUpdate" "TaskList" "TaskGet" "TaskOutput" "BashOutput" "KillShell" "TaskStop"
@@ -183,7 +185,9 @@ if [[ -n "$progress" ]]; then cp "$progress" "$OUT/progress.md"; else : > "$OUT/
 G worktree list --porcelain > "$OUT/worktrees.txt"
 G branch --list 'fp/*' > "$OUT/branches.txt"
 G status --porcelain > "$OUT/status.txt"
-cat "$(git -C "$R" rev-parse --path-format=absolute --git-common-dir)/info/exclude" > "$OUT/exclude.txt" 2>/dev/null || : > "$OUT/exclude.txt"
+rc_ign=0; git -C "$R" check-ignore -v .worktrees/x > "$OUT/ignore-check.txt" 2>&1 || rc_ign=$?
+echo "exit $rc_ign" >> "$OUT/ignore-check.txt"
+G log --format= --name-only main -- .worktrees > "$OUT/tracked-worktrees.txt"
 G show HEAD:.gitignore > "$OUT/gitignore-head.txt"
 G log --format='%H %P|%s' main > "$OUT/log.txt"
 G rev-list --first-parent main > "$OUT/first-parent.txt"

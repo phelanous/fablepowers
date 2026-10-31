@@ -13,7 +13,8 @@
 # Runs in the fixture repo; env: PLUGIN_ROOT, OUT.
 set -euo pipefail
 bash "$PLUGIN_ROOT/skills/integration-review/review-package" --init docs/plans/demo.md >/dev/null
-printf '\n.worktrees/\n' >> "$(git rev-parse --path-format=absolute --git-common-dir)/info/exclude"
+mkdir -p .worktrees
+printf '*\n' > .worktrees/.gitignore
 WS=.fablepowers/demo
 mkdir -p "$WS/reports"
 

@@ -101,7 +101,8 @@ bash "<this skill's base dir>/plan-waves" <plan-file>
 **Ready and in flight:**
 
 - A task is **ready** when every task on its Depends on line has a `task` line in the ledger, and no in-flight agent holds a `serialize` resource on its Touches line.
-- A task implementer, or a merge fix for that task, holds the `serialize` resources on the task's Touches line while it runs. The post-merge check run and a check fix hold every `serialize` resource.
+- A task implementer, or a merge fix for that task, holds the `serialize` resources on the task's Touches line while it runs.
+- `serialize` resources come in two kinds, and the Parallel safety line tells them apart. A **file-contention** resource is only a file that two tasks edit: its line names the file's repository path (`agents/implementer.md — serialize (T4 and T5 both edit it)`). Every other `serialize` resource — a test database, a port, a browser e2e run, a CLI login — is a **run** resource, one that running the tests uses. The post-merge check run and a check fix hold every run resource, and no file-contention resource.
 - **In flight** means any implementer dispatch: tasks, merge fixes and check fixes. It never exceeds the plan header's `**Max parallel:** <n>`, or 4 when the header has none. Reviewers and spec-checks don't count.
 - Dispatch all ready tasks together, up to the cap. Dispatch newly ready ones as each task's line goes in or a slot frees up; there is no waiting for a whole wave. When ready tasks contend for one `serialize` resource or for the last slots, plan order decides.
 
@@ -113,28 +114,29 @@ bash "<this skill's base dir>/plan-waves" <plan-file>
 
 **Task worktrees:**
 
-- Before creating the first one, find `MAIN_ROOT` as `fablepowers:using-git-worktrees` Step 0 does. If it prints empty, there is no project root to anchor task worktrees to: run the tasks one at a time in the plan worktree, and say so in one line.
-- Then make sure `.worktrees/` is ignored. Use the repository's shared exclude file, which applies to every worktree and needs no commit:
+- Task worktrees live inside the plan worktree, at `$PLAN_ROOT/.worktrees/<plan-key>-t<id>`, where `PLAN_ROOT` is `git rev-parse --show-toplevel` of the plan worktree. Every command below runs in the plan worktree. Not under `MAIN_ROOT`: some harnesses refuse a worktree session's writes under the main checkout, and a subagent can't `cd` outside its session directory.
+- Before creating the first one, make sure `.worktrees/` is ignored. Use the repository's shared exclude file, which applies to every worktree and needs no commit:
 
   ```bash
   EXCLUDE="$(git rev-parse --path-format=absolute --git-common-dir)/info/exclude"
   mkdir -p "$(dirname "$EXCLUDE")"
   grep -qxF '.worktrees/' "$EXCLUDE" 2>/dev/null || printf '\n.worktrees/\n' >> "$EXCLUDE"
-  git -C "$MAIN_ROOT" check-ignore -q .worktrees/
+  git check-ignore -q .worktrees/
   ```
 
   The last command must exit 0; if it doesn't, stop and report. For task worktrees this replaces `fablepowers:using-git-worktrees`' `.gitignore` commit; that skill's own worktree creation is unchanged.
 - Create each task worktree from the plan branch's tip at dispatch time:
 
   ```bash
-  git worktree add -b fp/<plan-key>/t<id> "$MAIN_ROOT/.worktrees/<plan-key>-t<id>" <plan-branch>
+  git worktree add -b fp/<plan-key>/t<id> "$PLAN_ROOT/.worktrees/<plan-key>-t<id>" <plan-branch>
   ```
 
   `<plan-key>` is the workspace name, and `<id>` is the task id in lower case. The branch name is how a resumed session finds a task's work.
-- **An existing `fp/<plan-key>/t<id>` branch is resumed, never recreated.** It may hold a crashed run's work, so never delete, reset or `-B` it. Check for it with `git rev-parse --verify --quiet refs/heads/fp/<plan-key>/t<id>` before creating. If `git worktree list` shows its worktree and the directory exists, use it as it is. Otherwise run `git worktree prune`, then reattach the branch without `-b`: `git worktree add "$MAIN_ROOT/.worktrees/<plan-key>-t<id>" fp/<plan-key>/t<id>`. Then do what the resume table owes it.
+- **An existing `fp/<plan-key>/t<id>` branch is resumed, never recreated.** It may hold a crashed run's work, so never delete, reset or `-B` it. Check for it with `git rev-parse --verify --quiet refs/heads/fp/<plan-key>/t<id>` before creating. If `git worktree list` shows its worktree and the directory exists, use it as it is. Otherwise run `git worktree prune`, then reattach the branch without `-b`: `git worktree add "$PLAN_ROOT/.worktrees/<plan-key>-t<id>" fp/<plan-key>/t<id>`. Then do what the resume table owes it.
 - A task worktree has only tracked files. Set up its environment as the plan's `worktree env` line in Parallel safety says: for `isolate: <setup step or shared path>`, run that step, or link that path, in the new worktree before dispatch; for `none needed`, do nothing. A plan without the line gets nothing. If a task's tests then fail on a missing ignored file (`.env`, `node_modules`, `.venv`), that is a plan gap; take it to the user rather than copying files on a guess.
 - Beyond what Dispatch hygiene requires, a task's dispatch names:
   - the task worktree as the working directory;
+  - the instruction to run each Bash command as `cd <task worktree> && …` or with `git -C <task worktree>`, since a subagent's `cd` doesn't persist between calls, and to use absolute paths for Edit and Write;
   - absolute paths for the plan, the spec and the report, with the report under the plan worktree's workspace, never inside the task worktree;
   - the resource instance assigned for each `isolate` resource the task touches, as the plan's line for that resource says to assign it.
 - Spot-check a task from a task worktree with `git diff <plan-branch>...fp/<plan-key>/t<id>`.
@@ -147,7 +149,7 @@ bash "<this skill's base dir>/plan-waves" <plan-file>
 2. **On a conflict,** run `git merge --abort` and dispatch a merge fix: a `fablepowers:implementer` in the task worktree that merges the plan branch's current tip into the task branch, resolves it, and runs both sides' tests and the full suite. Conflict resolution is implementation work, so the orchestrator never does it, however small the conflict. The dispatch names the two sides (the task branch, and the plan branch with its tip SHA), the conflicting files from the aborted merge, the headings of the merged tasks that touched those files, the plan and spec paths, and the report path `reports/task-<id>-merge<k>.md`, where k counts from 1 for each task.
 3. Meanwhile other tasks keep merging. When the merge fix returns, add its `merge <id>-<k>` line and retry the merge; a new conflict means merge fix k+1.
 
-**After each merge,** and after a task run in place commits, run the full suite in the plan worktree. The suite is the plan's full-suite command, or the project's when the plan names none. The run holds every `serialize` resource: start it only when no in-flight agent holds one, and dispatch nothing that touches one until it ends.
+**After each merge,** and after a task run in place commits, run the full suite in the plan worktree. The suite is the plan's full-suite command, or the project's when the plan names none. The run holds every run resource (see Ready and in flight), and no file-contention resource: start it only when no in-flight agent holds a run resource, and dispatch nothing that touches one until it ends.
 
 - Wait on the run the same way implementers wait on a long run. Unless the harness reference names a verified native mechanism, start it in the background with output to a file and an exit-status marker, then wait on the marker in bounded calls:
 
@@ -165,11 +167,11 @@ bash "<this skill's base dir>/plan-waves" <plan-file>
 **Cleanup:** after a task's `task` line goes in, run these from the plan worktree to remove the task's worktree and delete its branch:
 
 ```bash
-git worktree remove "$MAIN_ROOT/.worktrees/<plan-key>-t<id>"
+git worktree remove "$PLAN_ROOT/.worktrees/<plan-key>-t<id>"
 git branch -d fp/<plan-key>/t<id>
 ```
 
-If either one refuses, because the worktree has uncommitted changes or git doesn't see the branch as merged, stop and report. Never pass `--force` or `-D` on your own initiative. These worktrees are fablepowers-created under `.worktrees/`, so `fablepowers:finishing-a-development-branch`'s ownership rule covers them. A task run in place has nothing to clean up.
+If either one refuses, because the worktree has uncommitted changes or git doesn't see the branch as merged, stop and report. Never pass `--force` or `-D` on your own initiative. These worktrees are fablepowers-created, so this skill removes them itself. They sit under the plan worktree, not `$MAIN_ROOT/.worktrees/`, so `fablepowers:finishing-a-development-branch`'s ownership rule doesn't apply to them: remove every one before finishing. While any exist, never run `git clean -x` in the plan worktree; `.worktrees/` is ignored, so it would delete them. A task run in place has nothing to clean up.
 
 ## Dispatch hygiene (both flows)
 

@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-10-03T08:00:00.000Z","message":{"role":"user","content":"placeholder text"}}
+{"type":"assistant","timestamp":"2026-10-03T08:01:00.000Z","message":{"role":"assistant","model":"gpt-unknown","usage":{"output_tokens":700},"content":[{"type":"tool_use","id":"toolu_skill","name":"Skill","input":{"skill":"design-spec"}},{"type":"tool_use","id":"toolu_skill","name":"Skill","input":{"skill":"fablepowers:implementation-plan"}}]}}

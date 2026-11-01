@@ -1,0 +1,5 @@
+{"type":"user","sessionId":"sess-overlap","timestamp":"2026-10-31T10:00:00.000Z","message":{"role":"user","content":"synthetic"}}
+{"type":"assistant","sessionId":"sess-overlap","timestamp":"2026-10-31T10:05:00.000Z","message":{"role":"assistant","content":"synthetic"}}
+{"type":"user","sessionId":"sess-overlap","timestamp":"2026-10-31T10:15:00.000Z","message":{"role":"user","content":"synthetic"}}
+{"type":"assistant","sessionId":"sess-overlap","timestamp":"2026-10-31T10:40:00.000Z","message":{"role":"assistant","content":"synthetic"}}
+{"type":"assistant","sessionId":"sess-overlap","timestamp":"2026-10-31T10:50:00.000Z","message":{"role":"assistant","content":"synthetic"}}

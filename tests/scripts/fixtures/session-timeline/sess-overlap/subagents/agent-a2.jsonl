@@ -1,0 +1,4 @@
+{"type":"assistant","sessionId":"sess-overlap","timestamp":"2026-10-31T10:30:00.000Z","message":{"role":"assistant","content":"synthetic"}}
+{"type":"user","sessionId":"sess-overlap","timestamp":"2026-10-31T10:10:00.000Z","message":{"role":"user","content":"synthetic"}}
+not json
+{"type":"user","sessionId":"sess-overlap","timestamp":"2026-10-31T10:20:00.000Z","message":{"role":"user","content":"synthetic"}}

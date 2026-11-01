@@ -220,6 +220,68 @@ next audit checks them.
 
 Also deferred, out of this release's scope: the controller as a nested subagent, batching same-shape tasks, and resuming the original implementer for fix rounds.
 
+### Evidence for the Claude Code reference
+
+`skills/workflow/references/claude-code.md` labels its parallel-dispatch
+facts "verified (T0 §n)" and "verified (T7 report Fn)". The full records are
+the plan workspace's reports, which are local and gitignored; these excerpts
+are what the labels cite. All runs were `claude -p` on Claude Code 2.1.306
+with Opus orchestrators and implementers.
+
+**T0, the spike** (two implementers dispatched to two worktrees of a scratch
+repo, with hooks logging every payload; $1.26 in all):
+
+- **§1.** Two `tool_use` blocks shared one API message id. The two subagents
+  were active 08:45:26.984–08:46:41.584 and 08:45:31.215–08:46:41.748, with
+  their tool calls interleaved in the hook log and their 40 s sleeps running
+  at the same time. Both results returned before the parent's merges and its
+  `result` line.
+- **§2.** All 20 subagent PreToolUse payloads had `cwd` = the launch
+  directory, including calls right after a `cd` into a worktree and Write or
+  Edit calls on worktree paths. `transcript_path` was the parent's;
+  `agent_id` and `agent_type` were present for subagents only.
+- **§3.** After `cd <worktree>` in one call, the next call's `pwd` printed the
+  launch directory. A `cd` outside the launch directory and `--add-dir` was
+  blocked and listed in `permission_denials` ("may only change directories to
+  the allowed working directories"). Write and Edit with absolute worktree
+  paths worked, with Write and Edit allowed through `--allowedTools`.
+- **§4.** A subagent's `run_in_background` completion notification was
+  queued at 08:45:56 while it ran a 40 s foreground call, and delivered to
+  that subagent, not the parent, when the call returned at 08:46:24. It
+  carried the summary and the output-file path, not stdout.
+- **§5 and §6.** Transcripts were under `~/.claude/projects/<mangled cwd>/`,
+  subagents under `<session>/subagents/agent-<id>.jsonl` with a `.meta.json`
+  holding `toolUseId`; the parent's tool_result carried
+  `toolUseResult.agentId`.
+- **§7.** Every `.meta.json` recorded `requestShape: "foreground"` and
+  `requestNonInteractive: true`; no `run_in_background` was passed on the
+  Agent calls.
+- **§8.** `Bash(git worktree:*)`, `Bash(git merge:*)`, `Bash(git branch:*)`
+  and `Bash(git -C:*)` admitted `git worktree add`/`remove`,
+  `git merge --no-ff`, `git branch -d` and the subagents' `git -C <wt> add`
+  and `commit`, with `permission_denials: []`.
+
+**T7, the live evals:**
+
+- **F1.** Every Bash write to `.git/info/exclude` was refused as a sensitive
+  file, and so was an Edit with `--allowedTools "Edit(.git/info/exclude)"`
+  (a $0.17 probe). Eval 6 and eval 7's first run fell back to running tasks
+  one at a time.
+- **F2.** Under pattern allow rules, a command with a `( … )` group or a
+  variable was denied ("can't be checked before it runs"); under sandbox
+  auto-allow, a `&` job died when the call's shell exited. Agents that wrote
+  a script and started it with `run_in_background` had no such denials.
+- **F3.** Orchestrators chose background Agent calls in eval6-resume and an
+  eval 7 run; in eval6-resume T1 and T3 still ran with overlapping active
+  intervals. In one eval 7 run a conflict foreseen at spot-check was handled
+  by fix rounds before any merge.
+- **T7-fix1, eval 6 round 2** (after `bc413e1`): PASS, $1.94, with the two
+  independent dispatches sharing one message id, overlapping intervals and
+  `--no-ff` merges each followed by a check. Each background implementer's
+  first call, a `cd <wt> && … && git ls-files …` compound, was refused
+  ("Permission to use Bash has been denied") without appearing in
+  `result.permission_denials`; their `git -C` calls ran.
+
 ### What to watch next audit
 
 1. **Main-loop cache cost** (writes+reads vs output) per execution session — the reason for file handoff and short returns. It should fall relative to the $1,280 vs $574 split.
@@ -712,3 +774,140 @@ machine so far are spikes and port tests, too few to conclude anything.
 3. **Approval gap per harness**: the `apprv` column where design-spec was
    loaded. A `0` means implementation started with no user turn after the
    design; on a gated harness that transcript is the first one to read.
+
+## Decisions (2026-10-31): parallel execution
+
+0.8.0 runs a plan's independent tasks in parallel by default, each in its own
+task worktree, and makes test loops cheaper. The evidence is an audit of eight
+recent Claude Code sessions across three private projects (A, B and C),
+measured from their transcripts (active agent time only; idle gaps over 10
+minutes excluded, the logic `scripts/session-timeline.py` now ships). They all
+ran the installed plugin, 0.2.0, but every rule changed here read the same in
+0.7.1: parallelism was one line, "independent tasks may run in parallel".
+
+| Session | Agents | Agent-hours | Wall-hours with ≥1 agent | Avg concurrency | Peak |
+|---|---|---|---|---|---|
+| Project A, phase 0 build | 34 | 8.9 | 6.8 | 1.31 | 3 |
+| Project A, phase 1 slice | 5 | 1.0 | 1.0 | 1.00 | 1 |
+| Project B, performance work | 33 | 4.9 | 4.8 | 1.01 | 2 |
+| Project B, metrics feature | 14 | 2.2 | 2.2 | 1.00 | 1 |
+| Project C, greenfield build | 89 | 28.5 | 28.1 | 1.01 | 2 |
+| Project C, UX batch | 20 | 7.1 | 7.1 | 1.00 | 2 |
+| Project C, bug-fix batch | 13 | 8.7 | 8.5 | 1.02 | 2 |
+| **Project B, backlog ("Parallelize where you can")** | **47** | **9.9** | **3.4** | **2.88** | **8** |
+
+### Findings
+
+1. **The orchestrator is not the bottleneck.** Orchestrator-only time was
+   3–9% of execution windows.
+2. **Parallelism happened only when the user asked.** The one session told to
+   parallelize reached 2.9× concurrency.
+3. **Plans didn't record dependencies in a schedulable form.** 9 of 10
+   Project C plans had no Depends on line; one plan ordered tasks for an e2e
+   reason, not a code dependency; in Project A's phase 1 slice, T2 depended on T1
+   only for enum types, and T4 on "API shapes" the plan already specified.
+4. **Merging parallel work costs something after review.** The backlog
+   session's orchestrator resolved five merge conflicts itself, and one
+   resolution reintroduced a stale assertion that broke two tests.
+5. **Test loops dominate implementer time** (43–46% of it is tool calls).
+   Project A ran 117 unscoped full-suite pytest runs (67 min), with mutation
+   scripts that reran the full suite per mutant; Project C spent about
+   295 min sleep-polling for Playwright in one session.
+6. **Waits matched by name, not by process.** `pgrep -f "playwright test"`
+   would, in parallel, wait on every other agent's run.
+7. **The review tail is large.** Integration review plus its fix rounds took
+   24% and 45% of execution wall time in Project A; one feature took four
+   fix rounds.
+
+What 0.8.0 does about them: every task carries `**Depends on:**` and
+`**Touches:**` lines and the plan a `## Parallel safety` section; the
+`plan-waves` script computes the waves; the orchestrator dispatches every
+ready task up to Max parallel (default 4), each in a task worktree, merges
+each back with `--no-ff` after its checks and runs the full suite after each
+merge; conflicts go to a merge-fix implementer, never the orchestrator. Test
+loops run targeted tests while iterating and per mutant, the full suite once
+before commit, and wait on the agent's own marker. The first integration fix
+round takes the should-fix items by default.
+
+### Rejected alternatives
+
+- **Claude Code's Agent `isolation: "worktree"`** for task worktrees. It
+  takes no base ref, so the worktree can't be pinned to the plan branch tip,
+  and it is host-owned, so fablepowers can't clean it up.
+- **Splitting the integration review across several reviewers.** It would
+  lose the single cross-seam view that the review exists for.
+- **Lanes (parallel slices) in this release.** They need gate-layout,
+  landing and rebase-review designs that waves do not. Deferred to 0.9.0,
+  below.
+
+### Deferred to 0.9.0: lanes
+
+Decided with the user: independent slices run as lanes inside one
+orchestrator session, not as separate sessions; designs are approved per wave
+of lanes, with one spec pending at a time; each lane opens its own PR; and
+after one OK from the user on the ordered list, the orchestrator lands the
+lanes itself, rebasing and re-testing between landings.
+
+Still open for the 0.9.0 design:
+
+- **Gate layout.** Where a lane's spec, plan and workspace live so the gate
+  sees them: probably the base checkout's `docs/specs/` and `docs/plans/`,
+  with lane worktrees holding code only.
+- **Builder checks for later lanes.** They need a written spec, and a second
+  pending spec stops question approval from recording.
+- **Re-review after a rebase.** What range it covers (a merge commit's
+  `--remerge-diff` against a rebase), and what happens when the cap is spent.
+- **Workflow map.** About 56 characters of budget remain, so a lanes entry
+  needs an explicit re-budget.
+
+### What the live evals changed
+
+The plan's live evals (`tests/evals/`, headless `claude -p` on Claude Code
+2.1.306, about $18.40 with the permission probes; the T0 spike before them
+cost $1.26) changed four things before release:
+
+- **`.worktrees/` is ignored by a self-ignoring `.worktrees/.gitignore`.**
+  The first design appended `.worktrees/` to the shared `info/exclude`. In
+  eval 6 every write under `.git/` was refused as a sensitive file, by Bash
+  or by Edit, and an Edit allow rule didn't lift it, so the orchestrator fell
+  back to running the tasks one at a time. A `.worktrees/.gitignore` holding
+  `*`, the mechanism `.fablepowers/` already used, needs no `.git` write and
+  no commit; eval 6 then passed with it.
+- **Long runs start from a script file as a background command.** The
+  one-line `( cmd; echo "exit $?" > out.done ) > out &` was denied under
+  pattern allow rules (a group or a variable "can't be checked before it
+  runs"), and under sandbox auto-allow its `&` job died with the call's
+  shell. Agents that wrote a script writing its own `.done` marker and
+  started it with `run_in_background` had no denials, so that shape is now
+  the prescribed one, in skills, agents and references.
+- **Git in a task worktree runs as its own `git -C <worktree> …` call.**
+  `cd <worktree> && git …` was refused in `-p`, and the refusal wasn't listed
+  in `result.permission_denials`; `git -C` ran. Dispatches and the implementer
+  bodies now say so.
+- **Eval 7 seeds its conflict.** In four live designs no conflict ever
+  reached a merge: the orchestrator serialized tasks it saw sharing a file,
+  implementers gave each module its own constant, and an orchestrator that saw
+  both branches unmerged sent them back before merging. The eval now starts
+  from a crashed run's state (T1 merged, T2's branch finished), which is the
+  only way it exercised the abort and merge-fix path.
+- **Eval 7's tasks set adjacent entries of one constant** (after the
+  integration review). With one `PAGE_SIZE` both tasks set, T2's own diff
+  broke T1's page size, which a spot-check rightly caught: the orchestrator
+  sent T2 to a fix round before merging, and the abort path ran in 1 of 6
+  runs. With `SIZES["page"]` and `SIZES["batch"]` on adjacent lines, neither
+  diff is wrong but the merge still conflicts; it passed 2 of 2 runs ($0.79,
+  $0.73), one orchestrator noting the conflict "as expected" and still
+  merging, aborting and handing it to a merge fix as the skill says.
+
+### What to watch next audit
+
+1. **Concurrency per session** from `scripts/session-timeline.py`: average
+   and peak against the table above, on plans that weren't told to
+   parallelize. Eval 6 reached 1.45–1.55 in wave 1.
+2. **Merge-fix frequency**: `merge` ledger lines per merged task. Frequent
+   merge fixes mean plans are missing shared files in Parallel safety.
+3. **Check FAIL frequency**: FAIL `check` lines per merge, and how often a
+   check fix was needed. A clean merge that fails the suite is the seam the
+   post-merge check exists for.
+4. **Full-suite runs per task** in implementer transcripts, against
+   Project A's 117. The rule is one, plus one after a fix to that run.

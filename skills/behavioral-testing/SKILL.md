@@ -16,11 +16,46 @@ Ordering (test-first vs. test-with) is free for frontier models. The demonstrati
 For each core behavior, after implementation and tests are green:
 
 1. Break the behavior — flip the comparison, hard-code the return, skip the branch, zero the parameter.
-2. Run the tests. **At least one must fail.**
+2. Run the tests covering that behavior. **At least one must fail.**
 3. If nothing fails, the behavior is untested no matter how green the suite is. Write the missing test before proceeding.
 4. Restore the code, confirm green.
 
 Do this for every behavior the spec calls out as a success criterion, and for every configurable knob (see below). Cheap behaviors in the same function can share one mutation pass — use judgment, but bias toward checking; the check costs seconds and the alternative cost us a shipped inert feature.
+
+## Which tests to run, and when
+
+- **While iterating,** run the tests covering the files the task touches, not the whole suite.
+- **Per mutant,** run only the tests covering the mutated behavior. Run mutants one at a time: they share one worktree's files, so two at once break each other's runs.
+- **The full suite,** browser e2e included, runs once before commit, plus once more after any fix made in response to that run. A green targeted run is not a substitute for it.
+- **In a parallel plan,** the full suite you run before commit is the one your dispatch names. When the plan has `serialize` run resources (a fixed e2e port, a shared test schema), that is the plan's `pre-commit suite` command, which skips every serialized part, plus the part of each one your task's Touches line names, run while you hold it. Never run a part you don't hold: another implementer may be holding it. The post-merge check runs the true full suite. Use the `isolate` instances your dispatch assigns (your own test DB, your own port offset).
+- **The report says which runs were targeted and which were full,** so a reader can tell a mutant's run from the run that gates the commit.
+
+## Waiting on a long run
+
+These wait rules apply to every agent, the orchestrator included, whenever a run may take longer than a single tool call allows.
+
+1. Write the run into a small script file in your scratch space. It runs the command with output to a log, then writes the exit status to a `.done` marker:
+
+   ```bash
+   # <scratch-dir>/suite.sh
+   cd <worktree>
+   <test command> > <scratch-dir>/suite.log 2>&1
+   echo "exit $?" > <scratch-dir>/suite.done
+   ```
+
+   Remove a marker left by an earlier run (`rm -f <scratch-dir>/suite.done`), or use a new name, before you start.
+2. Start `bash <scratch-dir>/suite.sh` as a background command, the way the harness reference says (on Claude Code, Bash with `run_in_background`). A one-line `( cmd; echo "exit $?" > … ) &` is not a substitute: permission layers refuse commands with groups or variables, and some harnesses kill a `&` job when the call's shell exits.
+3. Wait on that marker, or the harness's completion notification for that command, in separate calls, each kept under the harness's tool timeout:
+
+   ```bash
+   timeout 540 bash -c 'until [ -f <scratch-dir>/suite.done ]; do sleep 5; done'
+   ```
+
+   Repeat the call until the marker exists, then read the marker and the log.
+4. Never wait with `pgrep -f <pattern>`, and never with a sleep loop that has no completion condition. A pattern match can latch onto someone else's process (another agent's `playwright test`, a stale run) and wait on work that isn't yours.
+5. The overall wait is capped at the plan's stated suite budget, or 30 minutes when the plan states none. At the cap, report the hang with the tail of the output, and stop waiting.
+
+A harness reference may name a native mechanism in place of the marker once it is verified to reach a subagent. The marker pattern is the portable default.
 
 ## Why this replaces test-first
 

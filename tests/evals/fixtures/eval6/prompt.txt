@@ -1,0 +1,7 @@
+You are the orchestrator in this repository, with the fablepowers plugin.
+
+The design in docs/specs/demo.md is approved by me, the user, and the plan docs/plans/demo.md has already passed plan review. Execute the plan now with fablepowers:subagent-execution. This checkout, on branch main, is the plan worktree: don't create another worktree for the plan, and don't run fablepowers:using-git-worktrees.
+
+This is a non-interactive run: nobody can answer questions, so make each decision yourself and say what you decided.
+
+Stop once the last task's `task` line is in the ledger and its cleanup is done. Do not run integration review, do not finish the branch, do not push. End with the ledger's contents.

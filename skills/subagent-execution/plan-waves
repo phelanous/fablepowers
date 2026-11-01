@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Print a plan's dispatch waves (fablepowers:subagent-execution).
+#
+# Usage: bash <dir>/plan-waves <plan-file>
+#        bash <dir>/plan-waves --format <plan-file>
+#
+# Exit 0: one line per wave, `wave <k>: <id>, <id>, ...`, plan order within a
+# wave. Exit 2: one stderr line per problem, every problem in one run, nothing
+# on stdout. Each problem line starts `plan-waves: <kind>:` with kind one of
+# usage, file, unclosed-fence, heading-in-fence, no-tasks, duplicate,
+# no-depends, two-depends, bad-depends, unknown-id, cycle or python. The
+# grammar is in plan_waves.py. --format prints `0.8.0` or `pre-0.8.0` (a plan
+# with a **Touches:** line or a Parallel safety heading anywhere, fenced or
+# not, is 0.8.0) and exits 0. Never writes files.
+#
+# Python: $FABLEPOWERS_PYTHON if set (a user override and the test seam; when
+# set it is the only candidate), else python3 on PATH, then /usr/bin/python3,
+# /usr/local/bin/python3, /opt/homebrew/bin/python3. A candidate must be
+# Python 3.8+. The helper runs with -I.
+
+case "$0" in
+    */*) SCRIPT_DIR="${0%/*}"; SCRIPT_DIR="${SCRIPT_DIR:-/}" ;;
+    *) SCRIPT_DIR="." ;;
+esac
+
+args=("$@")
+if [[ "${1:-}" == "--format" ]]; then
+    plan_args=$(( $# - 1 ))
+else
+    plan_args=$#
+fi
+if (( plan_args != 1 )); then
+    echo "plan-waves: usage: plan-waves <plan-file>, or plan-waves --format <plan-file> (got $plan_args arguments)" >&2
+    exit 2
+fi
+
+usable() {
+    [[ -n "$1" && -f "$1" && -x "$1" ]] \
+        && "$1" -I -c 'import sys; sys.exit(sys.version_info < (3, 8))' </dev/null >/dev/null 2>&1
+}
+
+if [[ -n "${FABLEPOWERS_PYTHON:-}" ]]; then
+    candidates=("$FABLEPOWERS_PYTHON")
+else
+    candidates=()
+    p="$(command -v python3 2>/dev/null)" && candidates+=("$p")
+    candidates+=(/usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3)
+fi
+
+for py in "${candidates[@]}"; do
+    if usable "$py"; then
+        exec "$py" -I "$SCRIPT_DIR/plan_waves.py" "${args[@]}"
+    fi
+done
+
+if [[ -n "${FABLEPOWERS_PYTHON:-}" ]]; then
+    echo "plan-waves: python: FABLEPOWERS_PYTHON=$FABLEPOWERS_PYTHON is not a Python 3.8+ interpreter" >&2
+else
+    echo "plan-waves: python: no Python 3.8+ found (python3 on PATH, /usr/bin, /usr/local/bin, /opt/homebrew/bin); set FABLEPOWERS_PYTHON" >&2
+fi
+exit 2

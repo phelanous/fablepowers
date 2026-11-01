@@ -779,7 +779,7 @@ machine so far are spikes and port tests, too few to conclude anything.
 
 0.8.0 runs a plan's independent tasks in parallel by default, each in its own
 task worktree, and makes test loops cheaper. The evidence is an audit of eight
-recent Claude Code sessions across Ledgerline, SwingScope and fact-forge,
+recent Claude Code sessions across three private projects (A, B and C),
 measured from their transcripts (active agent time only; idle gaps over 10
 minutes excluded, the logic `scripts/session-timeline.py` now ships). They all
 ran the installed plugin, 0.2.0, but every rule changed here read the same in
@@ -787,14 +787,14 @@ ran the installed plugin, 0.2.0, but every rule changed here read the same in
 
 | Session | Agents | Agent-hours | Wall-hours with ≥1 agent | Avg concurrency | Peak |
 |---|---|---|---|---|---|
-| Ledgerline Phase 0 + guesses | 34 | 8.9 | 6.8 | 1.31 | 3 |
-| Ledgerline Phase 1 slice A | 5 | 1.0 | 1.0 | 1.00 | 1 |
-| SwingScope performance | 33 | 4.9 | 4.8 | 1.01 | 2 |
-| SwingScope trade metrics | 14 | 2.2 | 2.2 | 1.00 | 1 |
-| fact-forge greenfield | 89 | 28.5 | 28.1 | 1.01 | 2 |
-| fact-forge Group B UX | 20 | 7.1 | 7.1 | 1.00 | 2 |
-| fact-forge math bugs | 13 | 8.7 | 8.5 | 1.02 | 2 |
-| **SwingScope backlog ("Parallelize where you can")** | **47** | **9.9** | **3.4** | **2.88** | **8** |
+| Project A, phase 0 build | 34 | 8.9 | 6.8 | 1.31 | 3 |
+| Project A, phase 1 slice | 5 | 1.0 | 1.0 | 1.00 | 1 |
+| Project B, performance work | 33 | 4.9 | 4.8 | 1.01 | 2 |
+| Project B, metrics feature | 14 | 2.2 | 2.2 | 1.00 | 1 |
+| Project C, greenfield build | 89 | 28.5 | 28.1 | 1.01 | 2 |
+| Project C, UX batch | 20 | 7.1 | 7.1 | 1.00 | 2 |
+| Project C, bug-fix batch | 13 | 8.7 | 8.5 | 1.02 | 2 |
+| **Project B, backlog ("Parallelize where you can")** | **47** | **9.9** | **3.4** | **2.88** | **8** |
 
 ### Findings
 
@@ -803,20 +803,20 @@ ran the installed plugin, 0.2.0, but every rule changed here read the same in
 2. **Parallelism happened only when the user asked.** The one session told to
    parallelize reached 2.9× concurrency.
 3. **Plans didn't record dependencies in a schedulable form.** 9 of 10
-   fact-forge plans had no Depends on line; one plan ordered tasks for an e2e
-   reason, not a code dependency; in Ledgerline slice A, T2 depended on T1
+   Project C plans had no Depends on line; one plan ordered tasks for an e2e
+   reason, not a code dependency; in Project A's phase 1 slice, T2 depended on T1
    only for enum types, and T4 on "API shapes" the plan already specified.
 4. **Merging parallel work costs something after review.** The backlog
    session's orchestrator resolved five merge conflicts itself, and one
    resolution reintroduced a stale assertion that broke two tests.
 5. **Test loops dominate implementer time** (43–46% of it is tool calls).
-   Ledgerline ran 117 unscoped full-suite pytest runs (67 min), with mutation
-   scripts that reran the full suite per mutant; fact-forge spent about
+   Project A ran 117 unscoped full-suite pytest runs (67 min), with mutation
+   scripts that reran the full suite per mutant; Project C spent about
    295 min sleep-polling for Playwright in one session.
 6. **Waits matched by name, not by process.** `pgrep -f "playwright test"`
    would, in parallel, wait on every other agent's run.
 7. **The review tail is large.** Integration review plus its fix rounds took
-   24% and 45% of execution wall time in Ledgerline; one feature took four
+   24% and 45% of execution wall time in Project A; one feature took four
    fix rounds.
 
 What 0.8.0 does about them: every task carries `**Depends on:**` and
@@ -910,4 +910,4 @@ cost $1.26) changed four things before release:
    check fix was needed. A clean merge that fails the suite is the seam the
    post-merge check exists for.
 4. **Full-suite runs per task** in implementer transcripts, against
-   Ledgerline's 117. The rule is one, plus one after a fix to that run.
+   Project A's 117. The rule is one, plus one after a fix to that run.

@@ -549,6 +549,70 @@ def assert_no_integration(s, c, name="no-merge-pr-push"):
                    "no merge, PR or push command in the transcript")
 
 
+class Cycle:
+    """One review cycle in the ledger: its opening `review integration*` line
+    and the `review rereview-` lines after it, up to the next opening line."""
+
+    def __init__(self, number, opening):
+        self.number, self.opening, self.rereviews = number, opening, []
+
+    @property
+    def used(self):
+        return len(self.rereviews)
+
+    @property
+    def capped(self):
+        """Two re-reviews used; more than two (an old or hand-edited ledger)
+        reads as capped too."""
+        return self.used >= 2
+
+
+def review_cycles(session):
+    """The ledger's review cycles in order (the shared contract). A line whose
+    id starts `integration` opens a cycle, numbered by its count; `rereview-`
+    lines count against the open cycle; `review carried` opens nothing, and a
+    re-review line before any opening line belongs to no cycle."""
+    cycles = []
+    for e in review_entries(session):
+        if e.id.startswith("integration"):
+            cycles.append(Cycle(len(cycles) + 1, e))
+        elif e.id.startswith("rereview-") and cycles:
+            cycles[-1].rereviews.append(e)
+    return cycles
+
+
+def current_cycle(session):
+    """The cycle opened by the last `review integration*` line, or None."""
+    cycles = review_cycles(session)
+    return cycles[-1] if cycles else None
+
+
+CAPPED_WORDS = re.compile(r"\bcapped\b|\bcap\b.{0,60}?\b(?:reached|spent|used|hit|exhausted)\b|"
+                          r"\b(?:reached|hit|spent|exhausted)\b.{0,60}?\bcap\b", re.I)
+
+
+def says_capped(text):
+    """The text says the review loop was capped (`capped`, or `cap` with
+    reached/spent/used/hit/exhausted within a clause either way)."""
+    return bool(CAPPED_WORDS.search(" ".join((text or "").split())))
+
+
+SUITE = re.compile(r"tests/run-all\.sh|\bunittest\s+discover\b")
+
+
+def suite_runs(session, rx=SUITE):
+    """Main-session Bash calls that ran the full suite (the permission layer
+    did not refuse them). A call that runs a script the session wrote is read
+    together with that script, so a suite started through a wrapper counts."""
+    scripts = {x.path: x.input.get("content") or "" for x in session.calls if x.name == "Write" and x.path}
+    out = []
+    for x in session.bash():
+        text = "\n".join([x.command] + [body for path, body in scripts.items() if path in x.command])
+        if rx.search(text) and not denied(x):
+            out.append(x)
+    return out
+
+
 # --- reporting ------------------------------------------------------------------
 
 class Checker:

@@ -274,7 +274,7 @@ else
   done <<<"$out"
 fi
 
-echo "Test 9: the eval11 setup scripts build the states their checkers assume"
+echo "Test 9: the eval11 and eval12 setup scripts build the states their checkers assume"
 # As run-eval.sh does: the seed committed on main as "init", then setup.sh.
 build_state() {
   local ev="$1" dir="$TEST_ROOT/state-$1" seed
@@ -294,7 +294,7 @@ build_state() {
 state_check() { # <name> <condition result 0/1> <detail>
   if [[ "$2" == 0 ]]; then pass "$1"; else fail "$1: $3"; fi
 }
-for ev in eval11 eval11-clean eval11-rebase; do
+for ev in eval11 eval11-clean eval11-rebase eval12 eval12-c2; do
   if ! build_state "$ev"; then
     fail "$ev: setup.sh failed"
     continue
@@ -340,6 +340,27 @@ for ev in eval11 eval11-clean eval11-rebase; do
       state_check "$ev: range-diff pairs all $n commits with =" "$rc" "$rd"
       rc=1; [[ -n "$img" && "$img" == "$(G rev-parse HEAD)" && "$(G rev-list --count main)" == 2 ]] && rc=0
       state_check "$ev: reviewed-image.txt is HEAD; main moved one commit" "$rc" "image $img, HEAD $(G rev-parse HEAD)"
+      ;;
+    eval12|eval12-c2)
+      kinds="$(grep -E '^(review|fix) ' "$led" | cut -d'|' -f1 | sed 's/ *$//' | paste -sd, -)"
+      want_l="review integration,fix integration-1,review rereview-1,fix integration-2,review rereview-2,fix integration-3"
+      [[ "$ev" == eval12-c2 ]] && want_l="$want_l,review integration-c2,fix integration-c2-1"
+      rc=1; [[ "$kinds" == "$want_l" ]] && rc=0
+      state_check "$ev: the ledger ends with its owed fix line" "$rc" "$kinds"
+      last="$(grep -E '^(review|fix) ' "$led" | tail -n 1)"
+      rc=1; [[ "$(printf '%s' "$last" | cut -d'|' -f2 | tr -d ' ')" == "$(G rev-parse --short=7 HEAD)" ]] \
+        && [[ "$(G rev-list --count "$rh..HEAD")" == 1 ]] && G merge-base --is-ancestor "$rh" HEAD && rc=0
+      state_check "$ev: one commit past the reviewed head, the last fix line's, at HEAD" "$rc" "$last / HEAD $(G rev-parse --short=7 HEAD)"
+      if [[ "$ev" == eval12 ]]; then
+        rc=1; [[ "$(G log -1 --format=%s)" == "docs: mul returns the product" ]] \
+          && ! grep -qi 'verify-done\|capped' "$R/.fablepowers/demo/reports/integration-fix3.md" && rc=0
+        state_check "$ev: fix 3 at HEAD, its report not yet verified or capped" "$rc" "$(G log -1 --format=%s)"
+      else
+        rc=1; [[ "$(G log -1 --format=%s "$rh")" == "feat: neg" ]] \
+          && G show "$rh:mathx/neg.py" | grep -q 'return -abs(x)$' && G show HEAD:mathx/neg.py | grep -q 'return -x$' \
+          && [[ -s "$R/.fablepowers/demo/reports/review-integration-c2.md" && -s "$R/.fablepowers/demo/reports/integration-fix-c2-1.md" ]] && rc=0
+        state_check "$ev: the cycle-2 head is feat: neg with the must-fix bug; both cycle-2 reports seeded" "$rc" "$(G log -1 --format=%s "$rh")"
+      fi
       ;;
   esac
 done
@@ -418,6 +439,67 @@ for row in "pass|0||yes" "pass|1|a|no" "pass|0|a|no" "a|1|a|yes" "a|1|b|no" "a|0
   if [[ "$got" == "$want" ]]; then pass "expect '$e', exit $st, failing '${fl:-nothing}': match $got"
   else fail "expect '$e', exit $st, failing '${fl:-nothing}': match $got, wanted $want"; fi
 done
+
+echo "Test 12: the cycle helpers count each cycle's re-reviews from its own opening line"
+rc=0
+out="$("$PY" -I - "${EVAL_LIB:-$SCRIPT_DIR/lib}" 2>&1 <<'PYEOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import evalcheck as ec
+
+def say(ok, what):
+    print("%s %s" % ("ok" if ok else "bad", what))
+
+class S:
+    def __init__(self, lines):
+        self.text = "# Progress: docs/plans/demo.md\n" + "".join(l + "\n" for l in lines)
+    def progress(self):
+        return self.text
+
+def L(kind_id, sha="abc1201", verdict="0 must-fix", report="—"):
+    return "%s | %s | %s | %s" % (kind_id, sha, verdict, report)
+
+c1 = [L("task 1"), L("review integration", verdict="1 must-fix"), L("fix integration-1"), L("review rereview-1"),
+      L("fix integration-2"), L("review rereview-2"), L("fix integration-3")]
+rows = [
+    ("no review line: no cycle", [L("task 1")], None),
+    ("a re-review before any integration line belongs to no cycle", [L("review rereview-1")], None),
+    ("cycle 1 with two re-reviews is capped", c1, (1, "integration", 2, True)),
+    ("one re-review is not capped", c1[:4], (1, "integration", 1, False)),
+    ("three re-reviews in one cycle read as capped", c1 + [L("review rereview-3")], (1, "integration", 3, True)),
+    ("integration-c2 opens cycle 2 with its own count", c1 + [L("review integration-c2")], (2, "integration-c2", 0, False)),
+    ("rereview-c2-1 counts against cycle 2", c1 + [L("review integration-c2"), L("review rereview-c2-1")],
+     (2, "integration-c2", 1, False)),
+    ("review carried opens nothing", c1 + [L("review carried", verdict="patch-identical")], (1, "integration", 2, True)),
+    ("the cycle number is the count of opening lines, whatever the id", [L("review integration"), L("review integration-c3")],
+     (2, "integration-c3", 0, False)),
+]
+for name, lines, want in rows:
+    cur = ec.current_cycle(S(lines))
+    got = (cur.number, cur.opening.id, cur.used, cur.capped) if cur else None
+    say(got == want, "%s: %s" % (name, got))
+say([c.used for c in ec.review_cycles(S(c1 + [L("review integration-c2"), L("review rereview-c2-1")]))] == [2, 1],
+    "review_cycles keeps each cycle's own count")
+for text, want in [("The review loop was capped after re-review 2.", True),
+                   ("the re-review cap of cycle 1 was reached", True),
+                   ("the cap of two re-reviews is used", True),
+                   ("We hit the\nre-review cap.", True),
+                   ("Ready to merge; the suite passes.", False),
+                   ("capability check passed; recap below", False),
+                   ("no cap applies here", False)]:
+    say(ec.says_capped(text) == want, "says_capped(%r) is %s" % (text, want))
+PYEOF
+)" || rc=$?
+if [[ $rc -ne 0 ]]; then
+  fail "the helper checks exited $rc:"$'\n'"$out"
+else
+  while IFS= read -r line; do
+    case "$line" in
+      ok\ *) pass "${line#ok }" ;;
+      *) fail "${line#bad }" ;;
+    esac
+  done <<<"$out"
+fi
 
 echo
 if [[ $FAILURES -eq 0 ]]; then

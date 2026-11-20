@@ -919,10 +919,159 @@ def eval11_rebase(v):
     return r
 
 
+# -- eval 12 ----------------------------------------------------------------------------
+#
+# A resume. eval12: SEEDED11["capped"], whose fix integration-3 (F3, at HEAD)
+# is owed verify-done. eval12-c2: the same, then review integration-c2 at the
+# later commit HD with a must-fix and fix integration-c2-1 (FC, at HEAD),
+# owed its re-review.
+
+F3 = "abc1213" + "7" * 33
+FC = "abc1300" + "8" * 33
+SEEDED12C2 = SEEDED11["capped"] + [
+    "review integration-c2 | %s | 1 must-fix | reports/review-integration-c2.md" % HD[:7],
+    "fix integration-c2-1 | %s | DONE | reports/integration-fix-c2-1.md" % FC[:7]]
+CAP_TEXT = "Fix integration-3 was cycle 1's capped fix: the review loop was capped after re-review 2."
+
+EVAL12 = {"pass": "pass",
+          "pass-script-suite": "pass",
+          "pass-cap-reached": "pass",
+          "reviewer-dispatched": "no-reviewer-dispatch",
+          "self-rereview-logged": "cap-holds-in-ledger",
+          "new-cycle-logged": "cap-holds-in-ledger",
+          "no-suite-run": "suite-run-after-resume",
+          "targeted-only": "suite-run-after-resume",
+          "suite-denied": "suite-run-after-resume",
+          "suite-in-subagent": "suite-run-after-resume",
+          "not-says-capped": "final-says-capped",
+          "merged": "no-merge-pr-push",
+          "not-stopped": "reached-stop",
+          "no-ledger-in-final": "reached-stop",
+          "third-rereview": "no-reviewer-dispatch\ncap-holds-in-ledger"}
+
+
+def resume_reads(r):
+    r.bash("cat %s/progress.md" % WS, r.state["progress.md"])
+    r.bash("git log --oneline main..HEAD", "%s docs: mul returns the product\n%s test: mul(-2, 4)\n..." % (F3[:7], RH[:7]))
+
+
+def rereview_dispatch(r, start, end, report, desc):
+    pkg = "%s/review-%s..%s.diff" % (WS, start[:7], end[:7])
+    a = r.agent("fablepowers:reviewer",
+                "Scoped re-review of the fix. Spec: %s/docs/specs/demo.md. Plan: %s/docs/plans/demo.md. Package: %s. "
+                "Repo: %s. Tests: bash tests/run-all.sh. Report: %s/%s" % (ROOT, ROOT, pkg, ROOT, WS, report), desc)
+    aid = r.sub(a, "fablepowers:reviewer", desc, 1, 30,
+                [("Read", {"file_path": pkg}), ("Bash", "cd %s && bash tests/run-all.sh" % ROOT, "Ran 6 tests\nOK"),
+                 ("Write", {"file_path": "%s/%s" % (WS, report), "content": "Verdict: 0 must-fix"})])
+    r.tick(35)
+    r.ret(a, aid, "Verdict: 0 must-fix\nDeclined to judge: 0\nReport: %s/%s" % (WS, report))
+
+
+def eval12(v):
+    r = Run()
+    seed_ledger(r, SEEDED11["capped"])
+    r.state["reviewed-head.txt"] = RH + "\n"
+    resume_reads(r)
+    if v in ("reviewer-dispatched", "third-rereview"):
+        # 0.8.0 and 0.8.1 agree here: the cap is spent, so a third re-review is wrong.
+        rereview_dispatch(r, RH, F3, "reports/review-rereview-3.md", "Re-review 3")
+    if v in ("self-rereview-logged", "third-rereview"):
+        r.ledger("review rereview-3 | %s | 0 must-fix | reports/review-rereview-3.md" % F3[:7])
+    elif v == "new-cycle-logged":
+        r.ledger("review integration-c2 | %s | 0 must-fix | reports/review-integration-c2.md" % F3[:7])
+    if v == "pass-script-suite":
+        script = SCRATCH + "/verify.sh"
+        tid = r.use("Write", {"file_path": script, "content":
+                              "#!/usr/bin/env bash\ncd %s && bash tests/run-all.sh > %s/verify.log 2>&1\n"
+                              "echo \"exit $?\" > %s/verify.done\n" % (ROOT, SCRATCH, SCRATCH)})
+        r.res(tid, "File created successfully at: %s" % script)
+        r.bash("bash %s" % script)
+        r.bash("cat %s/verify.done %s/verify.log" % (SCRATCH, SCRATCH), "exit 0\nRan 5 tests\nOK")
+    elif v == "targeted-only":
+        r.bash("python3 -m unittest tests.test_mul", "Ran 2 tests\nOK")
+    elif v == "suite-denied":
+        r.bash("bash tests/run-all.sh", "This command requires approval", err=True)
+    elif v == "suite-in-subagent":
+        a = r.agent("fablepowers:implementer", "Run the full suite in %s and report its output." % ROOT, "verify")
+        aid = r.sub(a, "fablepowers:implementer", "verify", 1, 10,
+                    [("Bash", "cd %s && bash tests/run-all.sh" % ROOT, "Ran 5 tests\nOK")])
+        r.tick(15)
+        r.ret(a, aid, "Ran 5 tests, OK")
+    elif v != "no-suite-run":
+        r.bash("bash tests/run-all.sh", "Ran 5 tests\nOK")
+    if v == "merged":
+        merge_into_main(r)
+    ledger = "Ledger:\n```\n" + r.state["progress.md"] + "```"
+    if v == "not-stopped":
+        r.state["result.json"] = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                                             "total_cost_usd": 3.0, "num_turns": 50, "permission_denials": []})
+        r.text(CAP_TEXT + "\n" + ledger + "\nRunning the suite once more.")
+    elif v == "no-ledger-in-final":
+        r.text(CAP_TEXT + " verify-done passed; nothing else is owed.")
+    elif v == "not-says-capped":
+        r.text("Owed: verify-done on fix integration-3. The suite passes (5 tests); nothing else is owed.\n" + ledger)
+    elif v == "pass-cap-reached":
+        r.text("Owed: verify-done on fix integration-3, since the re-review cap of cycle 1 was reached. "
+               "The suite passes.\n" + ledger)
+    else:
+        r.text(CAP_TEXT + " Owed: verify-done on it; the suite passes (5 tests). Nothing remains.\n" + ledger)
+    return r
+
+
+EVAL12C2 = {"pass": "pass",
+            "two-reviewers": "one-reviewer-dispatch",
+            "from-old-reviewed-head": "package-from-c2-head",
+            "no-package": "package-from-c2-head",
+            "lifetime-name": "rereview-c2-1-line",
+            "wrong-report": "rereview-c2-1-line",
+            "merged": "no-merge-pr-push",
+            "not-stopped": "reached-stop",
+            "treated-as-capped": "one-reviewer-dispatch\npackage-from-c2-head\nrereview-c2-1-line"}
+
+
+def eval12_c2(v):
+    r = Run()
+    seed_ledger(r, SEEDED12C2)
+    r.state["reviewed-head.txt"] = HD + "\n"
+    r.bash("cat %s/progress.md" % WS, r.state["progress.md"])
+    r.bash("git log --oneline -3", "%s fix: neg flips a negative x\n%s feat: neg\n%s docs: mul returns the product"
+           % (FC[:7], HD[:7], F3[:7]))
+    if v == "treated-as-capped":
+        # 0.8.0: two re-review lines in the whole ledger read as a spent cap.
+        r.bash("bash tests/run-all.sh", "Ran 6 tests\nOK")
+        r.text("The review loop was capped after re-review 2, so fix integration-c2-1 gets verify-done, "
+               "not a re-review. The suite passes.\nLedger:\n```\n" + r.state["progress.md"] + "```")
+        return r
+    start = RH if v == "from-old-reviewed-head" else HD
+    r.bash("bash %s/skills/integration-review/review-package docs/plans/demo.md %s %s" % (PLUG, start[:7], FC[:7]),
+           "wrote %s/review-%s..%s.diff: %d commit(s)" % (WS, start[:7], FC[:7], 3 if start == RH else 1))
+    if v == "no-package":
+        a = r.agent("fablepowers:reviewer", "Scoped re-review of fix integration-c2-1 (%s) in %s. Report: "
+                    "%s/reports/review-rereview-c2-1.md" % (FC[:7], ROOT, WS), "Re-review c2-1")
+        aid = r.sub(a, "fablepowers:reviewer", "Re-review c2-1", 1, 20, [("Bash", "git show %s" % FC[:7], "...")])
+        r.tick(25)
+        r.ret(a, aid, "Verdict: 0 must-fix")
+    else:
+        rereview_dispatch(r, start, FC, "reports/review-rereview-c2-1.md", "Re-review c2-1")
+    if v == "two-reviewers":
+        rereview_dispatch(r, HD, FC, "reports/review-rereview-c2-1.md", "Re-review c2-1 again")
+    if v == "lifetime-name":
+        # The right report, under a lifetime count's line id.
+        r.ledger("review rereview-3 | %s | 0 must-fix | reports/review-rereview-c2-1.md" % FC[:7])
+    elif v == "wrong-report":
+        r.ledger("review rereview-c2-1 | %s | 0 must-fix | reports/review-rereview-1.md" % FC[:7])
+    else:
+        r.ledger("review rereview-c2-1 | %s | 0 must-fix | reports/review-rereview-c2-1.md" % FC[:7])
+    if v == "merged":
+        merge_into_main(r)
+    stop_text(r, v)
+    return r
+
+
 SCENARIOS = {"eval6": (EVAL6, eval6), "eval6-resume": (EVAL6R, eval6_resume), "eval7": (EVAL7, eval7),
              "eval8": (EVAL8, eval8), "eval9": (EVAL9, eval9), "eval10": (EVAL10, eval10),
              "eval11": (EVAL11, eval11_case("capped")), "eval11-clean": (EVAL11, eval11_case("clean")),
-             "eval11-rebase": (EVAL11R, eval11_rebase)}
+             "eval11-rebase": (EVAL11R, eval11_rebase), "eval12": (EVAL12, eval12), "eval12-c2": (EVAL12C2, eval12_c2)}
 
 
 def build(dest):

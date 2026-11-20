@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the finished feature branch feat/demo and its seeded workspace ledger
-# for the eval11 states. Usage: bash branch.sh capped|clean|rebase
+# for the eval11 and eval12 states. Usage: bash branch.sh capped|clean|rebase|capfix|c2
 #
 # Runs in the fixture repo, on main with the seed committed as "init"; env:
 # PLUGIN_ROOT (this checkout, for review-package) and OUT (the run's state
@@ -16,11 +16,21 @@
 #         re-reviews; then the same later commit.
 # rebase  cycle 1 as in clean, no later commit; then main gains an unrelated
 #         commit and feat/demo is rebased onto it with no content change.
+# capfix  (eval12) cycle 1 as in capped up to fix integration-3, which is
+#         committed and logged at HEAD but not yet verified: the session
+#         stopped there. No later commit.
+# c2      (eval12-c2) as capped, but the later commit's neg is wrong for a
+#         negative x; then review integration-c2 at that commit with that
+#         must-fix (reviewed-head.txt is its SHA), and fix integration-c2-1
+#         at HEAD with its report, owed its re-review.
 #
 # Leaves feat/demo checked out with a clean working tree.
 set -euo pipefail
 mode="${1:-}"
-case "$mode" in capped|clean|rebase) ;; *) echo "usage: branch.sh capped|clean|rebase" >&2; exit 2 ;; esac
+case "$mode" in capped|clean|rebase|capfix|c2) ;; *) echo "usage: branch.sh capped|clean|rebase|capfix|c2" >&2; exit 2 ;; esac
+# capfix and c2 start as capped: cycle 1 used its cap.
+cap=no
+case "$mode" in capped|capfix|c2) cap=yes ;; esac
 
 WS="$(bash "$PLUGIN_ROOT/skills/integration-review/review-package" --init docs/plans/demo.md)"
 mkdir -p "$WS/reports"
@@ -36,7 +46,7 @@ def add(a, b):
     """Return the sum of a and b."""
     return a + b
 PY
-if [[ "$mode" == capped ]]; then
+if [[ "$cap" == yes ]]; then
   # The integration review's must-fix: the plan's add(-1, 1) obligation is missing.
   cat > tests/test_add.py <<'PY'
 import unittest
@@ -75,7 +85,7 @@ commit "feat: add" mathx/add.py tests/test_add.py
 T1="$(s7)"
 
 # --- T2: mul ---------------------------------------------------------------------
-if [[ "$mode" == capped ]]; then
+if [[ "$cap" == yes ]]; then
   # Re-review 2's must-fix: the docstring says sum.
   cat > mathx/mul.py <<'PY'
 def mul(a, b):
@@ -166,7 +176,7 @@ Declined to judge: 0
 MD
 }
 
-if [[ "$mode" == capped ]]; then
+if [[ "$cap" == yes ]]; then
   H0="$T2"
   review_report review-integration.md "Integration review: docs/plans/demo.md" "$(s7 main)..$H0" "1 must-fix" \
     "1. tests/test_add.py:8 — the plan's \`add(-1, 1) == 0\` obligation has no test."
@@ -218,7 +228,18 @@ MD
   sed -i 's/Return the sum of a and b\./Return the product of a and b./' mathx/mul.py
   commit "docs: mul returns the product" mathx/mul.py
   F3="$(s7)"
-  cat > "$WS/reports/integration-fix3.md" <<MD
+  if [[ "$mode" == capfix ]]; then
+    # The implementer's report only: the session stopped before verify-done.
+    cat > "$WS/reports/integration-fix3.md" <<MD
+# Integration fix 3
+
+- **Status:** DONE
+- **Commit:** $F3
+- **Finding 1:** the docstring now says product; \`python3 -m unittest tests.test_mul\` OK. Full suite OK.
+- **Deviations:** none.
+MD
+  else
+    cat > "$WS/reports/integration-fix3.md" <<MD
 # Integration fix 3 (capped)
 
 - **Status:** DONE
@@ -226,6 +247,7 @@ MD
 - **Finding 1:** the docstring now says product. fablepowers:verify-done: \`bash tests/run-all.sh\` exit 0, 5 tests OK.
 - The re-review cap was reached after re-review 2; the user was told the loop was capped and that nothing remained.
 MD
+  fi
   log "fix integration-3 | $F3 | DONE | reports/integration-fix3.md"
 else
   review_report review-integration.md "Integration review: docs/plans/demo.md" "$(s7 main)..$T2" "0 must-fix" "- None."
@@ -233,6 +255,7 @@ else
   REVIEWED="$(git rev-parse HEAD)"
 fi
 printf '%s\n' "$REVIEWED" > "$OUT/reviewed-head.txt"
+[[ "$mode" == capfix ]] && exit 0
 
 if [[ "$mode" == rebase ]]; then
   n="$(git rev-list --count "$(git merge-base "$REVIEWED" main)..$REVIEWED")"
@@ -249,12 +272,34 @@ MD
 fi
 
 # --- the later commit: small new behaviour with a test ------------------------------
-cat > mathx/neg.py <<'PY'
+if [[ "$mode" == c2 ]]; then
+  # Review integration-c2's must-fix: neg(-2) returns -2, and no test has a negative x.
+  cat > mathx/neg.py <<'PY'
+def neg(x):
+    """Return -x."""
+    return -abs(x)
+PY
+  cat > tests/test_neg.py <<'PY'
+import unittest
+
+from mathx.neg import neg
+
+
+class NegTest(unittest.TestCase):
+    def test_flips_sign(self):
+        self.assertEqual(neg(3), -3)
+
+
+if __name__ == "__main__":
+    unittest.main()
+PY
+else
+  cat > mathx/neg.py <<'PY'
 def neg(x):
     """Return -x."""
     return -x
 PY
-cat > tests/test_neg.py <<'PY'
+  cat > tests/test_neg.py <<'PY'
 import unittest
 
 from mathx.neg import neg
@@ -269,6 +314,7 @@ class NegTest(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 PY
+fi
 python3 - <<'PYEOF'
 p = "docs/specs/demo.md"
 s = open(p).read()
@@ -277,3 +323,32 @@ s = s.replace("2. `mathx.mul.mul(a, b)` returns `a * b`.\n",
 open(p, "w").write(s)
 PYEOF
 commit "feat: neg" mathx/neg.py tests/test_neg.py docs/specs/demo.md
+
+[[ "$mode" == c2 ]] || exit 0
+
+# --- cycle 2: its review at the later commit, then its first fix ---------------------
+H2="$(s7)"
+review_report review-integration-c2.md "Integration review, cycle 2: docs/plans/demo.md" "$(s7 "$REVIEWED")..$H2" "1 must-fix" \
+  "1. mathx/neg.py:3 — \`neg(-2)\` returns -2, not 2: \`-abs(x)\` is not \`-x\` for a negative x, and no test has one."
+log "review integration-c2 | $H2 | 1 must-fix | reports/review-integration-c2.md"
+git rev-parse HEAD > "$OUT/reviewed-head.txt"
+
+sed -i 's/return -abs(x)/return -x/' mathx/neg.py
+python3 - <<'PYEOF'
+p = "tests/test_neg.py"
+s = open(p).read()
+s = s.replace("        self.assertEqual(neg(3), -3)\n",
+              "        self.assertEqual(neg(3), -3)\n        self.assertEqual(neg(-2), 2)\n", 1)
+open(p, "w").write(s)
+PYEOF
+commit "fix: neg flips a negative x" mathx/neg.py tests/test_neg.py
+FC="$(s7)"
+cat > "$WS/reports/integration-fix-c2-1.md" <<MD
+# Integration fix 1, cycle 2
+
+- **Status:** DONE
+- **Commit:** $FC
+- **Finding 1:** neg returns -x; \`neg(-2) == 2\` added to test_flips_sign. It fails on the code before the fix (-2 != 2) and passes after. Full suite OK.
+- **Deviations:** none.
+MD
+log "fix integration-c2-1 | $FC | DONE | reports/integration-fix-c2-1.md"

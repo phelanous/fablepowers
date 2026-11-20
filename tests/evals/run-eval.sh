@@ -3,7 +3,7 @@
 # Code login: each run is capped at $3 (--max-budget-usd) and a --max-turns cap.
 #
 # Usage: bash tests/evals/run-eval.sh <eval-name>     (eval6, eval6-resume, eval7, eval8, eval9, eval10,
-#                                                       eval11, eval11-clean, eval11-rebase)
+#                                                       eval11, eval11-clean, eval11-rebase, eval12, eval12-c2)
 #
 # 1. Copies tests/evals/fixtures/<eval>/seed/ (or the seed of the fixture named
 #    in its seed-from file) into a fresh `mktemp -d`, as a git repo on main.

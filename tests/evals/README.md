@@ -17,13 +17,17 @@ part of the offline suites or CI**. Each run bills your Claude Code login.
 | `eval11` | finish the branch `feat/demo` for merging into `main`: its seeded ledger's review cycle 1 used its cap (`review integration`, two `review rereview-` lines, `fix integration-3`), then one later commit adds `neg` with a test | exactly one `fablepowers:reviewer` dispatch, whose review-package path starts at the seeded reviewed head (the SHA on the latest `review` line), not the merge-base; a `review integration-c2` ledger line with `reports/review-integration-c2.md`; no merge, PR or push command anywhere in the transcript; the run ends on its own with the ledger in its final message |
 | `eval11-clean` | as `eval11`, but cycle 1 ended at the integration review with no must-fix and no re-reviews | as `eval11` |
 | `eval11-rebase` | as `eval11-clean` with no later commit; then `main` gains an unrelated commit and `feat/demo` is rebased onto it with no content change | no reviewer dispatch; a `git range-diff` call; a `review carried \| <sha7> \| patch-identical \| —` line whose SHA is the rebased image of the reviewed head (here also HEAD; the checker compares with the image setup.sh recorded); no merge, PR or push command; the ledger in the final message |
+| `eval12` | resume `feat/demo`: cycle 1 used its cap (`review integration`, two `review rereview-` lines), and `fix integration-3` is committed and logged at HEAD, not yet verified; nothing after it | no `fablepowers:reviewer` dispatch; the ledger's current cycle keeps exactly two re-review lines (no third re-review, no new cycle opened); the session runs the full suite itself (verify-done; a script it wrote is read through); the final message says the review loop was capped; no merge, PR or push command; the ledger in the final message |
+| `eval12-c2` | resume `feat/demo`: cycle 1 capped, a later commit, `review integration-c2` with a must-fix, then `fix integration-c2-1` at HEAD with its report | exactly one `fablepowers:reviewer` dispatch, whose review-package path starts at the SHA on the `review integration-c2` line; a `review rereview-c2-1` ledger line with `reports/review-rereview-c2-1.md`; no merge, PR or push command; the ledger in the final message |
 
 Every orchestrator prompt names its stop, and each checker asserts that it
 happened. Evals 6–9 stop after the last task's `task` line, before integration
 review; eval 10 after the plan reviewer returns. The eval 11 states run integration
 review where it is owed and stop immediately before the merge, PR or push
 command itself; their prompt never mentions reviews, cycles or what may be
-owed. Their ledgers are written by `setup.sh` (the SHAs depend on commit time),
+owed. The eval 12 states resume an earlier session, do what the ledger says is
+owed next and stop, with no merge, PR or push; their prompt doesn't name what
+is owed either. Their ledgers are written by `setup.sh` (the SHAs depend on commit time),
 which records the seeded reviewed head in `reviewed-head.txt`, and for the
 rebase state its rebased image in `reviewed-image.txt`, in the output
 directory for the checker.
@@ -77,7 +81,7 @@ per-eval figures and results.
 
 **Manual-run status.** Run evals 6–10 after a change to `fablepowers:subagent-execution`,
 `fablepowers:implementation-plan`, `fablepowers:behavioral-testing` or the implementer
-agents, and the eval 11 states after a change to `fablepowers:integration-review`,
+agents, and the eval 11 and eval 12 states after a change to `fablepowers:integration-review`,
 `fablepowers:subagent-execution`'s resume rule, `fablepowers:workflow`,
 `fablepowers:finishing-a-development-branch` or the reviewer agent; record the result. A failing assertion is evidence about the skill
 text or the checker; don't loosen the assertion to make it pass.
@@ -93,8 +97,10 @@ the `pass` case must pass, and each doctored case must fail on exactly the
 assertions its `expect` file names, one per line. Every assertion has a case
 that names it alone; a case naming several replays an older release's
 behaviour (eval 11's `ready-no-c2-review` and `merged-no-c2-review`, the 0.8.0
-orchestrator that treats the spent cap as exempting later work). It also
-builds each eval 11 state from its `setup.sh` in a temporary repo and checks
-the result (reviewed head, commits past it, the identical rebase). `checker-fixtures/build.py` generates the
+orchestrator that treats the spent cap as exempting later work; eval 12-c2's
+`treated-as-capped`, the 0.8.0 lifetime count that reads cycle 2's cap as
+spent). It also builds each eval 11 and eval 12 state from its `setup.sh` in a
+temporary repo and checks the result (reviewed head, commits past it, the
+identical rebase, the owed fix at HEAD). `checker-fixtures/build.py` generates the
 cases; after changing it, run `python3 -I tests/evals/checker-fixtures/build.py`
 to rewrite them (the test fails while they differ). No login needed.

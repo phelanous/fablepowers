@@ -243,16 +243,17 @@ test('bootstrap: no python -> the gate-off note; session-start failure -> note a
 
 test('bootstrap: the JS-appended notes fit the 8,000-char cap (N6)', { skip }, async () => {
   // (a) session-start answered: its context (Task 2 worst case 7322 chars) plus the
-  // notes that can join it (no python, env without the flag); Task 4 may add <= 120.
+  // notes that can join it (no python, env without the flag); Task 4 may add <= 120,
+  // raised to 160 in 0.8.1 (review-cycle resume sentence; tests/hooks/test-session-start.sh).
   const pi = load({ env: envWith({ FABLEPOWERS_PYTHON: '/nonexistent/python3', FABLEPOWERS_PARENT_SESSION: 'x' }) });
   const ev = bootEvent();
   await pi.emit('before_agent_start', ev, fakeCtx({ cwd: newRepo() }));
   const text = ev.systemPromptOptions.sections[SECTION];
   assert.match(text, /^fablepowers approval gate disabled[\s\S]*FABLEPOWERS_PARENT_SESSION is set[\s\S]*You have fablepowers on Pi/);
   const notes = text.slice(0, text.indexOf('You have fablepowers on Pi'));
-  assert.ok(notes.length + 7322 + 120 <= 8000, `notes ${notes.length} chars`);
+  assert.ok(notes.length + 7322 + 160 <= 8000, `notes ${notes.length} chars`);
   // (b) session-start failed: every note plus the plain workflow map, with room for a
-  // plugin root 200 chars longer than this checkout's and Task 4's 120.
+  // plugin root 200 chars longer than this checkout's and the map budget of 160 (0.8.1).
   const fakeBash = path.join(tmpdir('bash'), 'bash');
   fs.writeFileSync(fakeBash, '#!/bin/sh\necho not-json\n', { mode: 0o755 });
   const pi2 = load({ env: envWith({ FABLEPOWERS_PYTHON: '/nonexistent/python3', FABLEPOWERS_BASH: fakeBash, FABLEPOWERS_PARENT_SESSION: 'x' }) });
@@ -260,7 +261,7 @@ test('bootstrap: the JS-appended notes fit the 8,000-char cap (N6)', { skip }, a
   await pi2.emit('before_agent_start', ev2, fakeCtx({ cwd: newRepo() }));
   const text2 = ev2.systemPromptOptions.sections[SECTION];
   assert.match(text2, /^fablepowers approval gate disabled[\s\S]*hooks\/session-start failed[\s\S]*FABLEPOWERS_PARENT_SESSION is set[\s\S]*# Workflow Map/);
-  assert.ok(text2.length + 200 + 120 <= 8000, `fallback bootstrap ${text2.length} chars`);
+  assert.ok(text2.length + 200 + 160 <= 8000, `fallback bootstrap ${text2.length} chars`);
 });
 
 test('session_start is idempotent: one child log line and one watchdog across repeated events', async () => {

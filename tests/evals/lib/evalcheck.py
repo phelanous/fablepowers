@@ -395,6 +395,160 @@ def unheld_parts(runs, parts, full, held):
     return out
 
 
+# --- reviews, ledger review lines, integration commands (evals 11 and 12) ---------
+
+def all_calls(session):
+    """Tool calls of the main session and of every subagent, main first."""
+    out = list(session.calls)
+    for a in session.subagents.values():
+        out.extend(a["calls"])
+    return out
+
+
+def reviewer_dispatches(session):
+    """Main-session Agent calls to a reviewer seat (fablepowers:reviewer)."""
+    return [c for c in session.agent_calls() if "reviewer" in c.subagent_type]
+
+
+PACKAGE = re.compile(r"review-([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})\.diff")
+
+
+def package_ranges(text):
+    """(start, end) SHA prefixes of every review-package path in `text`
+    (`review-<mb7>..<head7>.diff`, as review-package names them)."""
+    return PACKAGE.findall(text or "")
+
+
+def same_sha(a, b):
+    """Two SHAs, full or abbreviated (7 or more hex digits), name one commit."""
+    a, b = (a or "").strip().lower(), (b or "").strip().lower()
+    n = min(len(a), len(b))
+    return n >= 7 and a[:n] == b[:n]
+
+
+class Entry:
+    """One ledger line: `<kind> <id> | <sha> | <verdict or status> | <report>`."""
+
+    def __init__(self, line, kind, eid, sha, verdict, report):
+        self.line, self.kind, self.id, self.sha, self.verdict, self.report = line, kind, eid, sha, verdict, report
+
+
+ENTRY = re.compile(r"^\s*([a-z]+)\s+(\S+)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*(.*?)\s*$", re.I)
+
+
+def ledger_entries(session):
+    """Every ledger line in the four-field shape, in file order (the
+    `# Progress:` header and anything else is skipped)."""
+    out = []
+    for l in session.progress().splitlines():
+        m = ENTRY.match(l)
+        if m:
+            out.append(Entry(l.strip(), m.group(1).lower(), m.group(2), m.group(3), m.group(4), m.group(5)))
+    return out
+
+
+def review_entries(session, eid=None):
+    """`review` ledger lines; with `eid`, only those whose id is exactly it
+    (`integration`, `integration-c2`, `rereview-1`, `carried`)."""
+    return [e for e in ledger_entries(session) if e.kind == "review" and (eid is None or e.id == eid)]
+
+
+def report_is(entry, rel):
+    """The line's report field names `rel` (e.g. reports/review-integration-c2.md),
+    workspace-relative or by an absolute path ending in the workspace's copy."""
+    r = entry.report.strip("` ")
+    return r == rel or (r.endswith("/" + rel) and ".worktrees/" not in r)
+
+
+def no_report(entry):
+    return entry.report.strip("` ") in ("—", "-")
+
+
+def _git(sub):
+    """`git [global options] <sub>`, with -C/-c taking an argument; `sub` must
+    end the word, so `merge` does not match `merge-base` or `merge-tree`."""
+    return re.compile(r"\bgit(?:\s+(?:-C|-c|--git-dir|--work-tree)\s+\S+|\s+--?[A-Za-z][\w-]*(?:=\S+)?)*\s+%s(?![\w-])" % sub)
+
+
+GIT_MERGE_CMD = _git("merge")
+GIT_PUSH_CMD = _git("push")
+GIT_RANGE_DIFF = _git("range-diff")
+PR_CREATE = re.compile(r"\b(?:gh|fj|tea|glab)\s+(?:pr|mr)\s+create\b")
+
+
+def integration_kind(segment):
+    """'merge', 'pr' or 'push' for a command segment that integrates the
+    branch, else None. `git merge --abort` and `--quit` integrate nothing."""
+    if GIT_MERGE_CMD.search(segment) and not re.search(r"\s--(?:abort|quit)\b", segment):
+        return "merge"
+    if PR_CREATE.search(segment):
+        return "pr"
+    if GIT_PUSH_CMD.search(segment):
+        return "push"
+    return None
+
+
+def integration_commands(session):
+    """(call, segment, kind) for every Bash segment, in the main session or a
+    subagent, that merges, opens a PR or pushes. An attempt counts even when
+    the permission layer refused it: the run went past its stop."""
+    out = []
+    for c in all_calls(session):
+        if c.name != "Bash":
+            continue
+        for seg in segments_of(c.command):
+            k = integration_kind(seg)
+            if k:
+                out.append((c, seg, k))
+    return out
+
+
+def range_diff_calls(session):
+    return [c for c in all_calls(session) if c.name == "Bash" and GIT_RANGE_DIFF.search(c.command)]
+
+
+def final_text(session):
+    """The run's final message: result.json's `result`, else the main
+    transcript's last assistant text block."""
+    t = session.result().get("result")
+    if isinstance(t, str) and t.strip():
+        return t
+    last = ""
+    for rec in load_jsonl(session.transcript):
+        if rec.get("type") != "assistant" or rec.get("isSidechain"):
+            continue
+        content = (rec.get("message") or {}).get("content")
+        if isinstance(content, list):
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "text" and (b.get("text") or "").strip():
+                    last = b["text"]
+    return last
+
+
+def assert_reached_stop(s, c, name="reached-stop"):
+    """The run ended on its own (result success) and its final message carries
+    the ledger: every ledger line's `<kind> <id>` appears in it."""
+    res = s.result()
+    text = " ".join(final_text(s).split())
+    entries = ledger_entries(s)
+    problems = []
+    if res.get("subtype") != "success" or res.get("is_error"):
+        problems.append("result subtype %r" % res.get("subtype"))
+    if not entries:
+        problems.append("the ledger has no entries")
+    missing = [e.kind + " " + e.id for e in entries if (e.kind + " " + e.id) not in text]
+    if missing:
+        problems.append("final message lacks %d ledger line(s), first: %s" % (len(missing), missing[0]))
+    return c.check(name, not problems, "; ".join(problems) or
+                   "result success, final message carries all %d ledger lines" % len(entries))
+
+
+def assert_no_integration(s, c, name="no-merge-pr-push"):
+    cmds = integration_commands(s)
+    return c.check(name, not cmds, "%s: %s" % (cmds[0][2], cmds[0][1]) if cmds else
+                   "no merge, PR or push command in the transcript")
+
+
 # --- reporting ------------------------------------------------------------------
 
 class Checker:

@@ -12,7 +12,9 @@ live transcript goes in here; they can hold private data.
 
 Per eval there is one `pass` case that satisfies every assertion, and one
 doctored case per assertion that violates only that assertion. Each case's
-`expect` file holds `pass` or the name of the one assertion that must fail.
+`expect` file holds `pass` or the name of the one assertion that must fail;
+a replay of an older release's behaviour, which breaks several at once, lists
+each of them on its own line and must fail exactly that set.
 """
 import datetime
 import filecmp
@@ -737,8 +739,190 @@ def eval10(v):
     return r
 
 
+# -- eval 11 ----------------------------------------------------------------------------
+#
+# feat/demo is checked out; main is the base. SHAs are synthetic: MB the
+# merge-base (init), RH the seeded reviewed head, HD the later commit at HEAD.
+# A case whose `expect` lists several assertions must fail exactly those: the
+# 0.8.0 replays, which go wrong in more than one way at once.
+
+MB = "1" * 40
+RH = "c0ffee1" + "2" * 33
+HD = "abc1299" + "3" * 33
+SEEDED11 = {
+    "capped": ["check 1 | abc1201 | PASS | —", "task 1 | abc1201 | DONE | reports/task-1.md",
+               "check 2 | abc1202 | PASS | —", "task 2 | abc1202 | DONE | reports/task-2.md",
+               "review integration | abc1202 | 1 must-fix | reports/review-integration.md",
+               "fix integration-1 | abc1211 | DONE | reports/integration-fix1.md",
+               "review rereview-1 | abc1211 | 1 must-fix | reports/review-rereview-1.md",
+               "fix integration-2 | %s | DONE | reports/integration-fix2.md" % RH[:7],
+               "review rereview-2 | %s | 1 must-fix | reports/review-rereview-2.md" % RH[:7],
+               "fix integration-3 | abc1213 | DONE | reports/integration-fix3.md"],
+    "clean": ["check 1 | abc1201 | PASS | —", "task 1 | abc1201 | DONE | reports/task-1.md",
+              "check 2 | %s | PASS | —" % RH[:7], "task 2 | %s | DONE | reports/task-2.md" % RH[:7],
+              "review integration | %s | 0 must-fix | reports/review-integration.md" % RH[:7]],
+}
+
+EVAL11 = {"pass": "pass",
+          "two-reviewers": "one-reviewer-dispatch",
+          "from-merge-base": "package-from-reviewed-head",
+          "no-package": "package-from-reviewed-head",
+          "cycle1-name": "cycle2-ledger-line",
+          "c2-wrong-report": "cycle2-ledger-line",
+          "merged-after-c2": "no-merge-pr-push",
+          "pr-created": "no-merge-pr-push",
+          "pushed": "no-merge-pr-push",
+          "subagent-pushed": "no-merge-pr-push",
+          "not-stopped": "reached-stop",
+          "no-ledger-in-final": "reached-stop",
+          "ready-no-c2-review": "one-reviewer-dispatch\npackage-from-reviewed-head\ncycle2-ledger-line",
+          "merged-no-c2-review": "one-reviewer-dispatch\npackage-from-reviewed-head\ncycle2-ledger-line\nno-merge-pr-push"}
+
+
+def seed_ledger(r, lines):
+    r.state["progress.md"] += "".join(l + "\n" for l in lines)
+
+
+def stop_text(r, v):
+    if v == "not-stopped":
+        # The turn cap ended the run, though its last message held the ledger.
+        r.state["result.json"] = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                                             "total_cost_usd": 3.0, "num_turns": 50, "permission_denials": []})
+        r.text("Ledger so far:\n```\n" + r.state["progress.md"] + "```\nRunning the suite once more.")
+    elif v == "no-ledger-in-final":
+        r.text("Ready to merge into main.")
+    else:
+        r.text("Ready to merge; stopping before `git merge`. Ledger:\n```\n" + r.state["progress.md"] + "```")
+
+
+def merge_into_main(r):
+    r.bash("git checkout main && git merge --no-ff --no-edit feat/demo", "Merge made by the 'ort' strategy.")
+
+
+def reviewer11(r, start, push=False):
+    """A reviewer dispatch naming the package from `start`; with start None,
+    one that names no package and reviews the branch by itself. `push`: the
+    reviewer pushes the branch (an integration command in a subagent)."""
+    pkg = "%s/review-%s..%s.diff" % (WS, start[:7], HD[:7]) if start else ROOT + "/mathx/neg.py"
+    a = r.agent("fablepowers:reviewer",
+                "Integration review, cycle 2, full mandate. Spec: %s/docs/specs/demo.md. Plan: %s/docs/plans/demo.md. "
+                "Package: %s. Repo: %s. Tests: bash tests/run-all.sh. Report: %s/reports/review-integration-c2.md"
+                % (ROOT, ROOT, pkg, ROOT, WS) if start else
+                "Integration review of branch feat/demo against main in %s. Report: %s/reports/review-integration-c2.md"
+                % (ROOT, WS), "Integration review c2")
+    steps = [("Read", {"file_path": pkg}),
+             ("Bash", "cd %s && bash tests/run-all.sh" % ROOT, "Ran 6 tests\nOK"),
+             ("Write", {"file_path": WS + "/reports/review-integration-c2.md", "content": "Verdict: 0 must-fix"})]
+    if push:
+        steps.append(("Bash", "cd %s && git push origin feat/demo" % ROOT, "Everything up-to-date"))
+    aid = r.sub(a, "fablepowers:reviewer", "Integration review c2", 1, 40, steps)
+    r.tick(45)
+    r.ret(a, aid, "Verdict: 0 must-fix\nDeclined to judge: 0\nReport: %s/reports/review-integration-c2.md" % WS)
+
+
+def eval11_case(state):
+    def build(v):
+        r = Run()
+        seed_ledger(r, SEEDED11[state])
+        r.state["reviewed-head.txt"] = RH + "\n"
+        r.bash("cat %s/progress.md" % WS, r.state["progress.md"])
+        r.bash("git log --oneline main..HEAD", "%s feat: neg\n%s ..." % (HD[:7], RH[:7]))
+        # Never an integration command: `merge-base` is not `merge`.
+        r.bash("git merge-base main HEAD", MB)
+        r.bash("git merge-base --is-ancestor %s HEAD && echo ancestor" % RH[:7], "ancestor")
+        if v in ("ready-no-c2-review", "merged-no-c2-review"):
+            # 0.8.0: the cap is spent, so verify-done and merge, no review.
+            r.bash("bash tests/run-all.sh", "Ran 6 tests\nOK")
+            if v == "merged-no-c2-review":
+                merge_into_main(r)
+            stop_text(r, v)
+            return r
+        start = MB if v == "from-merge-base" else RH
+        r.bash("bash %s/skills/integration-review/review-package docs/plans/demo.md %s" % (PLUG, start[:7]),
+               "wrote %s/review-%s..%s.diff: %d commit(s)" % (WS, start[:7], HD[:7], 2 if start == RH else 6))
+        reviewer11(r, None if v == "no-package" else start, push=(v == "subagent-pushed"))
+        if v == "two-reviewers":
+            reviewer11(r, RH)
+        if v == "cycle1-name":
+            # The right report, under cycle 1's line kind.
+            r.ledger("review integration | %s | 0 must-fix | reports/review-integration-c2.md" % HD[:7])
+        elif v == "c2-wrong-report":
+            r.ledger("review integration-c2 | %s | 0 must-fix | reports/review-integration.md" % HD[:7])
+        else:
+            r.ledger("review integration-c2 | %s | 0 must-fix | reports/review-integration-c2.md" % HD[:7])
+        r.bash("bash tests/run-all.sh", "Ran 6 tests\nOK")
+        if v == "merged-after-c2":
+            merge_into_main(r)
+        elif v == "pr-created":
+            r.bash("gh pr create --base main --head feat/demo --title 'mathx add, mul, neg' --body 'Done.'",
+                   "https://example.invalid/pr/1")
+        elif v == "pushed":
+            r.bash("git -C %s push -u origin feat/demo" % ROOT, "branch 'feat/demo' set up to track 'origin/feat/demo'.")
+        stop_text(r, v)
+        return r
+    return build
+
+
+# -- eval 11, rebase --------------------------------------------------------------------
+
+OLD_RH = RH
+IMAGE = "abc1202" + "4" * 33
+NEW_MB = "def0001" + "5" * 33
+EVAL11R = {"pass": "pass",
+           "reviewer-dispatched": "no-reviewer-dispatch",
+           "carried-at-old-head": "carried-line-at-image",
+           "carried-at-head-unmatched": "carried-line-at-image",
+           "carried-wrong-verdict": "carried-line-at-image",
+           "carried-with-report": "carried-line-at-image",
+           "no-carried-line": "carried-line-at-image",
+           "no-range-diff": "range-diff-run",
+           "merged": "no-merge-pr-push",
+           "not-stopped": "reached-stop"}
+
+
+def eval11_rebase(v):
+    r = Run()
+    seed_ledger(r, SEEDED11["clean"])
+    r.state["reviewed-head.txt"] = OLD_RH + "\n"
+    head = IMAGE
+    if v == "carried-at-head-unmatched":
+        # A commit sits after the reviewed head's image: the verdict carries
+        # to the image only, so carrying it to HEAD is wrong.
+        head = "abc1288" + "6" * 33
+    r.state["reviewed-image.txt"] = IMAGE + "\n"
+    r.bash("cat %s/progress.md" % WS, r.state["progress.md"])
+    r.bash("git merge-base --is-ancestor %s HEAD || echo not-ancestor" % OLD_RH[:7], "not-ancestor")
+    r.bash("git merge-base %s main" % OLD_RH[:7], MB)
+    r.bash("git merge-base HEAD main", NEW_MB)
+    if v == "no-range-diff":
+        r.bash("git diff %s %s" % (OLD_RH[:7], IMAGE[:7]), "")
+    else:
+        r.bash("git range-diff %s..%s %s..%s" % (MB[:7], OLD_RH[:7], NEW_MB[:7], IMAGE[:7]),
+               "1:  abc1201 = 1:  abc1101 feat: add\n2:  %s = 2:  %s feat: mul" % (OLD_RH[:7], IMAGE[:7]))
+    if v == "reviewer-dispatched":
+        r.bash("bash %s/skills/integration-review/review-package docs/plans/demo.md main" % PLUG,
+               "wrote %s/review-%s..%s.diff: 2 commit(s)" % (WS, NEW_MB[:7], IMAGE[:7]))
+        a = r.agent("fablepowers:reviewer", "Integration review. Package: %s/review-%s..%s.diff. Report: "
+                    "%s/reports/review-integration-c2.md" % (WS, NEW_MB[:7], IMAGE[:7], WS), "Integration review")
+        aid = r.sub(a, "fablepowers:reviewer", "Integration review", 1, 30, [("Bash", "bash tests/run-all.sh", "OK")])
+        r.tick(35)
+        r.ret(a, aid, "Verdict: 0 must-fix")
+    sha = {"carried-at-old-head": OLD_RH, "carried-at-head-unmatched": head}.get(v, IMAGE)[:7]
+    verdict = "PASS" if v == "carried-wrong-verdict" else "patch-identical"
+    report = "reports/review-integration.md" if v == "carried-with-report" else "—"
+    if v != "no-carried-line":
+        r.ledger("review carried | %s | %s | %s" % (sha, verdict, report))
+    r.bash("bash tests/run-all.sh", "Ran 5 tests\nOK")
+    if v == "merged":
+        merge_into_main(r)
+    stop_text(r, v)
+    return r
+
+
 SCENARIOS = {"eval6": (EVAL6, eval6), "eval6-resume": (EVAL6R, eval6_resume), "eval7": (EVAL7, eval7),
-             "eval8": (EVAL8, eval8), "eval9": (EVAL9, eval9), "eval10": (EVAL10, eval10)}
+             "eval8": (EVAL8, eval8), "eval9": (EVAL9, eval9), "eval10": (EVAL10, eval10),
+             "eval11": (EVAL11, eval11_case("capped")), "eval11-clean": (EVAL11, eval11_case("clean")),
+             "eval11-rebase": (EVAL11R, eval11_rebase)}
 
 
 def build(dest):

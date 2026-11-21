@@ -951,7 +951,7 @@ ledger and report names are unchanged, so existing ledgers resume as before.
 **What the evals showed.** These were live `claude -p` runs on Claude Code
 2.1.322, one each, against the 0.8.1 skills, plus a baseline of two of them
 against the 0.8.0 skills on `main`, plus two reruns of `eval11-rebase` on
-later wordings of its test. In total, nine runs cost $6.05.
+later wordings of its test. In total, ten runs cost $6.72.
 
 | Eval | 0.8.1 | 0.8.0 baseline |
 |---|---|---|
@@ -1016,7 +1016,7 @@ later wordings of its test. In total, nine runs cost $6.05.
      `--ignore-submodules=none` stays because a submodule's `ignore = all`
      hides gitlink changes from `diff-tree` too. The review loop had reached
      its cap of two re-reviews, so this change was not reviewed.
-- **The shipped `git diff-tree` wording has no live run** as of this commit.
+- **The shipped `git diff-tree` wording passed one further live run** of `eval11-rebase` (5 of 5, $0.67, 23 turns), made after the capped fix. It was not reviewed.
 
 ### What to watch next audit
 

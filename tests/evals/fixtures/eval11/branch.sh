@@ -258,7 +258,8 @@ printf '%s\n' "$REVIEWED" > "$OUT/reviewed-head.txt"
 [[ "$mode" == capfix ]] && exit 0
 
 if [[ "$mode" == rebase ]]; then
-  pid() { git diff "$1" "$2" | git patch-id --stable | cut -d' ' -f1; }
+  # The recipe of integration-review, Later changes, word for word.
+  pid() { git diff --no-color --no-ext-diff --no-textconv --no-relative --ignore-submodules=none "$1" "$2" | git patch-id --verbatim | cut -d' ' -f1; }
   want="$(pid "$(git merge-base "$REVIEWED" main)" "$REVIEWED")"
   git checkout -q main
   cat >> README.md <<'MD'
@@ -272,7 +273,7 @@ MD
   # patch-identical to the reviewed range (integration-review, Later changes).
   nb="$(git merge-base HEAD main)"
   for x in $(git rev-list "$nb..HEAD"); do
-    if [[ "$(pid "$nb" "$x")" == "$want" ]]; then printf '%s\n' "$x" > "$OUT/reviewed-image.txt"; break; fi
+    if [[ -n "$want" && "$(pid "$nb" "$x")" == "$want" ]]; then printf '%s\n' "$x" > "$OUT/reviewed-image.txt"; break; fi
   done
   exit 0
 fi

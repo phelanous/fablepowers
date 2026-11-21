@@ -878,8 +878,20 @@ EVAL11R = {"pass": "pass",
            "carried-with-report": "carried-line-at-image",
            "no-carried-line": "carried-line-at-image",
            "no-patch-id": "patch-id-run",
+           "patch-id-refused": "patch-id-run",
+           "patch-id-refused-text": "patch-id-run",
+           "pass-patch-id-refused-then-run": "pass",
+           "pass-patch-id-stable": "pass",
            "merged": "no-merge-pr-push",
            "not-stopped": "reached-stop"}
+
+
+# integration-review's identical-rebase recipe (Later changes).
+DIFF_FLAGS = "--no-color --no-ext-diff --no-textconv --no-relative --ignore-submodules=none"
+PATCH_ID_LOOP = ("M=$(git merge-base %s main); NB=$(git merge-base HEAD main); "
+                 "echo \"R: $(git diff %s $M %s | git patch-id --verbatim)\"; "
+                 "for X in $(git rev-list $NB..HEAD); do echo \"$X: $(git diff %s $NB $X | git patch-id --verbatim)\"; done"
+                 % (OLD_RH[:7], DIFF_FLAGS, OLD_RH[:7], DIFF_FLAGS))
 
 
 def eval11_rebase(v):
@@ -898,10 +910,22 @@ def eval11_rebase(v):
     r.bash("git merge-base HEAD main", NEW_MB)
     if v == "no-patch-id":
         r.bash("git diff %s %s" % (OLD_RH[:7], IMAGE[:7]), "")
-    else:
+    if v in ("patch-id-refused", "patch-id-refused-text", "pass-patch-id-refused-then-run"):
+        # The loop form the permission layer refuses (Claude Code 2.1.322,
+        # word for word); in the live record shape, or by its wording alone.
+        tid = r.use("Bash", {"command": PATCH_ID_LOOP, "description": "run"})
+        r.res(tid, "A variable in this command can't be checked before it runs", err=True,
+              meta=None if v == "patch-id-refused-text" else
+              {"toolDenialKind": "user-rejected",
+               "permissionDecision": {"decision": "reject", "source": "config", "reasonCode": "bashMiss:too-complex"}})
+    if v not in ("no-patch-id", "patch-id-refused", "patch-id-refused-text"):
+        # pass-patch-id-stable: the 0.8.1 fix-1 wording, which patch-id-run
+        # accepts too: it judges that the comparison ran, not its flags.
+        pi = ("git diff %s %s | git patch-id --stable" if v == "pass-patch-id-stable" else
+              "git diff " + DIFF_FLAGS + " %s %s | git patch-id --verbatim")
         pid = "9f1e" + "2" * 36
-        r.bash("git diff %s %s | git patch-id --stable" % (MB[:7], OLD_RH[:7]), "%s %s" % (pid, "0" * 40))
-        r.bash("git diff %s %s | git patch-id --stable" % (NEW_MB[:7], IMAGE[:7]), "%s %s" % (pid, "0" * 40))
+        r.bash(pi % (MB[:7], OLD_RH[:7]), "%s %s" % (pid, "0" * 40))
+        r.bash(pi % (NEW_MB[:7], IMAGE[:7]), "%s %s" % (pid, "0" * 40))
     if v == "reviewer-dispatched":
         r.bash("bash %s/skills/integration-review/review-package docs/plans/demo.md main" % PLUG,
                "wrote %s/review-%s..%s.diff: 2 commit(s)" % (WS, NEW_MB[:7], IMAGE[:7]))
@@ -947,6 +971,7 @@ EVAL12 = {"pass": "pass",
           "suite-denied": "suite-run-after-resume",
           "suite-denied-cd-git": "suite-run-after-resume",
           "suite-denied-shape": "suite-run-after-resume",
+          "pass-suite-failed": "pass",
           "suite-in-subagent": "suite-run-after-resume",
           "not-says-capped": "final-says-capped",
           "merged": "no-merge-pr-push",
@@ -1009,6 +1034,12 @@ def eval12(v):
         r.res(tid, "This command was not run.", err=True,
               meta={"toolDenialKind": "user-rejected",
                     "permissionDecision": {"decision": "reject", "source": "config", "reasonCode": "bashMiss:new"}})
+    elif v == "pass-suite-failed":
+        # A suite run that ran and failed, in the live record shape: an error
+        # result whose record carries an accepting permissionDecision.
+        tid = r.use("Bash", {"command": "bash tests/run-all.sh", "description": "run"})
+        r.res(tid, "Exit code 1\nRan 5 tests\nFAILED (failures=1)", err=True,
+              meta={"permissionDecision": {"decision": "accept", "source": "config", "reasonType": "subcommandResults"}})
     elif v == "suite-in-subagent":
         a = r.agent("fablepowers:implementer", "Run the full suite in %s and report its output." % ROOT, "verify")
         aid = r.sub(a, "fablepowers:implementer", "verify", 1, 10,

@@ -940,20 +940,23 @@ verify-done, or it is owed a new cycle: a fresh `fablepowers:reviewer` with
 the full mandate over `<reviewed head>..HEAD`, logged as
 `review integration-c<c>`, with its own cap of two. Size never exempts a
 change. A rebase carries the verdict (`review carried`) only to a commit `X`
-whose `git diff <new merge-base> X | git patch-id --stable` equals the
-reviewed range's (`git diff <old merge-base> <reviewed head>`). Any other
+whose `git diff --no-color --no-ext-diff --no-textconv --no-relative
+--ignore-submodules=none <new merge-base> X | git patch-id --verbatim` is
+non-empty and equals the reviewed range's (the same pipeline on
+`<old merge-base> <reviewed head>`). Any other
 rebase, amend or reset gets a whole-branch cycle from the merge-base. Cycle-1
 ledger and report names are unchanged, so existing ledgers resume as before.
 
 **What the evals showed.** These were live `claude -p` runs on Claude Code
 2.1.322, one each, against the 0.8.1 skills, plus a baseline of two of them
-against the 0.8.0 skills on `main`. In total, seven runs cost $4.97.
+against the 0.8.0 skills on `main`, plus one rerun of `eval11-rebase` on the
+patch-id test. In total, eight runs cost $5.49.
 
 | Eval | 0.8.1 | 0.8.0 baseline |
 |---|---|---|
 | `eval11`: follow-up after a capped cycle | pass, $0.95 | fail on 3 of 5 assertions, $0.57 |
 | `eval11-clean`: follow-up after a clean cycle | pass, $0.90 | not run (guard) |
-| `eval11-rebase`: identical rebase | pass, $0.44 (range-diff test; see below) | not run (guard) |
+| `eval11-rebase`: identical rebase | pass, $0.44 (range-diff test); rerun pass, $0.52 (patch-id `--stable` wording; see below) | not run (guard) |
 | `eval12`: cap inside a cycle | pass, $0.50 | not run (guard) |
 | `eval12-c2`: second cycle's own count | pass, $0.79 | pass, $0.82 (guard) |
 
@@ -983,8 +986,26 @@ against the 0.8.0 skills on `main`. In total, seven runs cost $4.97.
   none after a `--rebase-merges` rebase with a differently resolved conflict.
   A base change touching lines next to the branch's hunks also finds none,
   since the diff's context differs: conservative, a whole-branch cycle. The
-  `eval11-rebase` live run used the range-diff test; rechecked with the
-  updated checker it fails `patch-id-run`, and the patch-id test has no live
+  first `eval11-rebase` live run used the range-diff test; rechecked with the
+  updated checker it fails `patch-id-run`.
+- **`eval11-rebase` was rerun once on the patch-id test and passed** (5 of 5,
+  $0.52, 15 turns). That run used the first patch-id wording,
+  `git diff | git patch-id --stable`. Claude Code refused its `for` loop and
+  `$(…)` form ("can't be checked before it runs"); it then ran the
+  comparisons with literal SHAs and no loop. The skill now says to compare one
+  candidate per command, with literal SHAs, HEAD first.
+- **The patch-id wording changed again after that rerun.** The re-review
+  found that `--stable` ignores whitespace, so an amend that only reindents
+  Python or turns a Makefile tab into spaces carried the verdict. It also
+  found that a user's `diff.external` or `color.ui=always` makes both ids
+  empty, so "empty equals empty" carried the verdict to HEAD over changed and
+  new commits. On scratch repos, a lossy textconv driver, `diff.relative` run
+  from a subdirectory and `diff.ignoreSubmodules=all` hid changes the same
+  way. The final recipe is `git diff --no-color --no-ext-diff --no-textconv
+  --no-relative --ignore-submodules=none … | git patch-id --verbatim`, and an
+  empty id never matches. On scratch repos it rejects every one of those cases
+  and still finds the image in the linear, linearized and `--rebase-merges`
+  identical shapes and before a later commit. This final wording has no live
   run.
 
 ### What to watch next audit
@@ -992,5 +1013,5 @@ against the 0.8.0 skills on `main`. In total, seven runs cost $4.97.
 1. **Review lines per merged feature**: `review integration-c<c>` lines, and
    commits past the reviewed head at merge time (should be none).
 2. **`review carried` lines**: each should follow a matching pair of
-   `git patch-id --stable` ids. A carried verdict after a conflict-resolving
+   `git patch-id --verbatim` ids. A carried verdict after a conflict-resolving
    rebase means the rule was misread.

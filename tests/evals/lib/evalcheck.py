@@ -512,7 +512,9 @@ def integration_commands(session):
 
 
 def patch_id_calls(session):
-    return [c for c in all_calls(session) if c.name == "Bash" and GIT_PATCH_ID.search(c.command)]
+    """Bash calls, in the main session or a subagent, that ran `git patch-id`
+    (with any flags); a call the permission layer refused never ran."""
+    return [c for c in all_calls(session) if c.name == "Bash" and GIT_PATCH_ID.search(c.command) and not denied(c)]
 
 
 def final_text(session):

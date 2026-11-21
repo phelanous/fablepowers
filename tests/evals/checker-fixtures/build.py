@@ -882,16 +882,27 @@ EVAL11R = {"pass": "pass",
            "patch-id-refused-text": "patch-id-run",
            "pass-patch-id-refused-then-run": "pass",
            "pass-patch-id-stable": "pass",
+           "pass-patch-id-verbatim": "pass",
+           "diff-tree-refused": "patch-id-run",
            "merged": "no-merge-pr-push",
            "not-stopped": "reached-stop"}
 
 
-# integration-review's identical-rebase recipe (Later changes).
+# integration-review's identical-rebase recipe (Later changes), and the
+# 0.8.1 fix-2 patch-id wording that saved runs used.
+DIFF_TREE = "git diff-tree -r --ignore-submodules=none %s %s"
 DIFF_FLAGS = "--no-color --no-ext-diff --no-textconv --no-relative --ignore-submodules=none"
 PATCH_ID_LOOP = ("M=$(git merge-base %s main); NB=$(git merge-base HEAD main); "
                  "echo \"R: $(git diff %s $M %s | git patch-id --verbatim)\"; "
                  "for X in $(git rev-list $NB..HEAD); do echo \"$X: $(git diff %s $NB $X | git patch-id --verbatim)\"; done"
                  % (OLD_RH[:7], DIFF_FLAGS, OLD_RH[:7], DIFF_FLAGS))
+# The same loop shape with the diff-tree recipe.
+DIFF_TREE_LOOP = ("M=$(git merge-base %s main); NB=$(git merge-base HEAD main); "
+                  "git diff-tree -r --ignore-submodules=none $M %s; "
+                  "for X in $(git rev-list $NB..HEAD); do echo \"== $X\"; git diff-tree -r --ignore-submodules=none $NB $X; done"
+                  % (OLD_RH[:7], OLD_RH[:7]))
+REFUSED_META = {"toolDenialKind": "user-rejected",
+                "permissionDecision": {"decision": "reject", "source": "config", "reasonCode": "bashMiss:too-complex"}}
 
 
 def eval11_rebase(v):
@@ -911,21 +922,30 @@ def eval11_rebase(v):
     if v == "no-patch-id":
         r.bash("git diff %s %s" % (OLD_RH[:7], IMAGE[:7]), "")
     if v in ("patch-id-refused", "patch-id-refused-text", "pass-patch-id-refused-then-run"):
-        # The loop form the permission layer refuses (Claude Code 2.1.322,
-        # word for word); in the live record shape, or by its wording alone.
+        # The loop form the permission layer refuses (Claude Code 2.1.322; the
+        # command shape the live run used, with the fix-2 flags); in the live
+        # record shape, or by its wording alone.
         tid = r.use("Bash", {"command": PATCH_ID_LOOP, "description": "run"})
         r.res(tid, "A variable in this command can't be checked before it runs", err=True,
-              meta=None if v == "patch-id-refused-text" else
-              {"toolDenialKind": "user-rejected",
-               "permissionDecision": {"decision": "reject", "source": "config", "reasonCode": "bashMiss:too-complex"}})
-    if v not in ("no-patch-id", "patch-id-refused", "patch-id-refused-text"):
-        # pass-patch-id-stable: the 0.8.1 fix-1 wording, which patch-id-run
-        # accepts too: it judges that the comparison ran, not its flags.
-        pi = ("git diff %s %s | git patch-id --stable" if v == "pass-patch-id-stable" else
-              "git diff " + DIFF_FLAGS + " %s %s | git patch-id --verbatim")
-        pid = "9f1e" + "2" * 36
-        r.bash(pi % (MB[:7], OLD_RH[:7]), "%s %s" % (pid, "0" * 40))
-        r.bash(pi % (NEW_MB[:7], IMAGE[:7]), "%s %s" % (pid, "0" * 40))
+              meta=None if v == "patch-id-refused-text" else REFUSED_META)
+    if v == "diff-tree-refused":
+        # The same refusal of the diff-tree recipe in loop form: it never ran.
+        tid = r.use("Bash", {"command": DIFF_TREE_LOOP, "description": "run"})
+        r.res(tid, "A variable in this command can't be checked before it runs", err=True, meta=REFUSED_META)
+    if v not in ("no-patch-id", "patch-id-refused", "patch-id-refused-text", "diff-tree-refused"):
+        # pass-patch-id-stable / -verbatim: the 0.8.1 fix-1 and fix-2 wordings,
+        # which saved runs used and patch-id-run accepts too: it judges that
+        # the comparison ran, not which wording.
+        if v in ("pass-patch-id-stable", "pass-patch-id-verbatim"):
+            pi = ("git diff %s %s | git patch-id --stable" if v == "pass-patch-id-stable" else
+                  "git diff " + DIFF_FLAGS + " %s %s | git patch-id --verbatim")
+            pid = "9f1e" + "2" * 36
+            r.bash(pi % (MB[:7], OLD_RH[:7]), "%s %s" % (pid, "0" * 40))
+            r.bash(pi % (NEW_MB[:7], IMAGE[:7]), "%s %s" % (pid, "0" * 40))
+        else:
+            raw = ":100644 100644 %s %s M\tmathx/core.py" % ("1a2b" + "3" * 36, "4c5d" + "6" * 36)
+            r.bash(DIFF_TREE % (MB[:7], OLD_RH[:7]), raw)
+            r.bash(DIFF_TREE % (NEW_MB[:7], IMAGE[:7]), raw)
     if v == "reviewer-dispatched":
         r.bash("bash %s/skills/integration-review/review-package docs/plans/demo.md main" % PLUG,
                "wrote %s/review-%s..%s.diff: 2 commit(s)" % (WS, NEW_MB[:7], IMAGE[:7]))

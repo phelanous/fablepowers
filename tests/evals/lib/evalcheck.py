@@ -481,6 +481,7 @@ def _git(sub):
 GIT_MERGE_CMD = _git("merge")
 GIT_PUSH_CMD = _git("push")
 GIT_PATCH_ID = _git("patch-id")
+GIT_DIFF_TREE = _git("diff-tree")
 PR_CREATE = re.compile(r"\b(?:gh|fj|tea|glab)\s+(?:pr|mr)\s+create\b")
 
 
@@ -512,9 +513,12 @@ def integration_commands(session):
 
 
 def patch_id_calls(session):
-    """Bash calls, in the main session or a subagent, that ran `git patch-id`
-    (with any flags); a call the permission layer refused never ran."""
-    return [c for c in all_calls(session) if c.name == "Bash" and GIT_PATCH_ID.search(c.command) and not denied(c)]
+    """Bash calls, in the main session or a subagent, that ran the
+    identical-rebase comparison: `git diff-tree` (the shipped recipe) or
+    `git patch-id` (the earlier wordings, which saved runs used), with any
+    flags. A call the permission layer refused never ran."""
+    return [c for c in all_calls(session) if c.name == "Bash" and not denied(c)
+            and (GIT_DIFF_TREE.search(c.command) or GIT_PATCH_ID.search(c.command))]
 
 
 def final_text(session):

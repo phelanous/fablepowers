@@ -259,8 +259,8 @@ printf '%s\n' "$REVIEWED" > "$OUT/reviewed-head.txt"
 
 if [[ "$mode" == rebase ]]; then
   # The recipe of integration-review, Later changes, word for word.
-  pid() { git diff --no-color --no-ext-diff --no-textconv --no-relative --ignore-submodules=none "$1" "$2" | git patch-id --verbatim | cut -d' ' -f1; }
-  want="$(pid "$(git merge-base "$REVIEWED" main)" "$REVIEWED")"
+  changes() { git diff-tree -r --ignore-submodules=none "$1" "$2"; }
+  want="$(changes "$(git merge-base "$REVIEWED" main)" "$REVIEWED")"
   git checkout -q main
   cat >> README.md <<'MD'
 
@@ -269,11 +269,11 @@ MD
   commit "docs: note the Python version" README.md
   git checkout -q feat/demo
   git rebase -q main
-  # The image: the newest commit whose diff from the new merge-base is
-  # patch-identical to the reviewed range (integration-review, Later changes).
+  # The image: the newest commit whose raw tree changes from the new
+  # merge-base equal the reviewed range's (integration-review, Later changes).
   nb="$(git merge-base HEAD main)"
   for x in $(git rev-list "$nb..HEAD"); do
-    if [[ -n "$want" && "$(pid "$nb" "$x")" == "$want" ]]; then printf '%s\n' "$x" > "$OUT/reviewed-image.txt"; break; fi
+    if [[ -n "$want" && "$(changes "$nb" "$x")" == "$want" ]]; then printf '%s\n' "$x" > "$OUT/reviewed-image.txt"; break; fi
   done
   exit 0
 fi

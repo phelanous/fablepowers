@@ -334,13 +334,13 @@ for ev in eval11 eval11-clean eval11-rebase eval12 eval12-c2; do
       rc=1; [[ "$(G cat-file -t "$rh" 2>/dev/null)" == commit ]] && ! G merge-base --is-ancestor "$rh" HEAD && rc=0
       state_check "$ev: the reviewed head exists and is not an ancestor of HEAD" "$rc" "$rh"
       old_mb="$(G merge-base "$rh" main)"
-      want_pid="$(G diff --no-color --no-ext-diff --no-textconv --no-relative --ignore-submodules=none "$old_mb" "$rh" | G patch-id --verbatim | cut -d' ' -f1)"
+      want_ch="$(G diff-tree -r --ignore-submodules=none "$old_mb" "$rh")"
       match=""
       for x in $(G rev-list "$mb..HEAD"); do
-        [[ "$(G diff --no-color --no-ext-diff --no-textconv --no-relative --ignore-submodules=none "$mb" "$x" | G patch-id --verbatim | cut -d' ' -f1)" == "$want_pid" ]] && { match="$x"; break; }
+        [[ "$(G diff-tree -r --ignore-submodules=none "$mb" "$x")" == "$want_ch" ]] && { match="$x"; break; }
       done
-      rc=1; [[ -n "$want_pid" && -n "$match" && "$match" == "$img" ]] && rc=0
-      state_check "$ev: the newest commit patch-identical to the reviewed range is reviewed-image.txt" "$rc" "match '$match', image '$img'"
+      rc=1; [[ -n "$want_ch" && -n "$match" && "$match" == "$img" ]] && rc=0
+      state_check "$ev: the newest commit with the reviewed range's raw tree changes is reviewed-image.txt" "$rc" "match '$match', image '$img'"
       rc=1; [[ -n "$img" && "$img" == "$(G rev-parse HEAD)" && "$(G rev-list --count main)" == 2 ]] && rc=0
       state_check "$ev: reviewed-image.txt is HEAD; main moved one commit" "$rc" "image $img, HEAD $(G rev-parse HEAD)"
       ;;

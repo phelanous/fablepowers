@@ -940,23 +940,24 @@ verify-done, or it is owed a new cycle: a fresh `fablepowers:reviewer` with
 the full mandate over `<reviewed head>..HEAD`, logged as
 `review integration-c<c>`, with its own cap of two. Size never exempts a
 change. A rebase carries the verdict (`review carried`) only to a commit `X`
-whose `git diff --no-color --no-ext-diff --no-textconv --no-relative
---ignore-submodules=none <new merge-base> X | git patch-id --verbatim` is
-non-empty and equals the reviewed range's (the same pipeline on
-`<old merge-base> <reviewed head>`). Any other
+for which `git diff-tree -r --ignore-submodules=none <new merge-base> X`
+prints exactly what the same command prints for
+`<old merge-base> <reviewed head>`, and that output is not empty: the
+branch changes the same files from the same content to the same content.
+Any other
 rebase, amend or reset gets a whole-branch cycle from the merge-base. Cycle-1
 ledger and report names are unchanged, so existing ledgers resume as before.
 
 **What the evals showed.** These were live `claude -p` runs on Claude Code
 2.1.322, one each, against the 0.8.1 skills, plus a baseline of two of them
-against the 0.8.0 skills on `main`, plus one rerun of `eval11-rebase` on the
-patch-id test. In total, eight runs cost $5.49.
+against the 0.8.0 skills on `main`, plus two reruns of `eval11-rebase` on
+later wordings of its test. In total, nine runs cost $6.05.
 
 | Eval | 0.8.1 | 0.8.0 baseline |
 |---|---|---|
 | `eval11`: follow-up after a capped cycle | pass, $0.95 | fail on 3 of 5 assertions, $0.57 |
 | `eval11-clean`: follow-up after a clean cycle | pass, $0.90 | not run (guard) |
-| `eval11-rebase`: identical rebase | pass, $0.44 (range-diff test); rerun pass, $0.52 (patch-id `--stable` wording; see below) | not run (guard) |
+| `eval11-rebase`: identical rebase | pass, $0.44 (range-diff test); reruns pass, $0.52 (patch-id `--stable`) and $0.56 (patch-id `--verbatim`, five flags); see below | not run (guard) |
 | `eval12`: cap inside a cycle | pass, $0.50 | not run (guard) |
 | `eval12-c2`: second cycle's own count | pass, $0.79 | pass, $0.82 (guard) |
 
@@ -976,42 +977,51 @@ patch-id test. In total, eight runs cost $5.49.
   pending, an amended or garbage-collected reviewed head, a ledger with no
   `review` line, and a docs-only follow-up are not covered by an eval. Only
   the skill wording covers them.
-- **The identical-rebase test changed after the evals.** The integration
-  review found that `git range-diff` skips merge commits, so on a plan branch
-  of `--no-ff` task merges a rebase that re-resolved a conflict differently
-  still showed only `=` pairs, and a linearizing rebase left no commit to
-  pair with the reviewed head. The patch-id test replaced it. On scratch
-  repos it found the image for a linear identical rebase, for a merge-shaped
-  branch rebased plain (linearized), and before one later commit, and found
-  none after a `--rebase-merges` rebase with a differently resolved conflict.
-  A base change touching lines next to the branch's hunks also finds none,
-  since the diff's context differs: conservative, a whole-branch cycle. The
-  first `eval11-rebase` live run used the range-diff test; rechecked with the
-  updated checker it fails `patch-id-run`.
-- **`eval11-rebase` was rerun once on the patch-id test and passed** (5 of 5,
-  $0.52, 15 turns). That run used the first patch-id wording,
-  `git diff | git patch-id --stable`. Claude Code refused its `for` loop and
-  `$(…)` form ("can't be checked before it runs"); it then ran the
-  comparisons with literal SHAs and no loop. The skill now says to compare one
-  candidate per command, with literal SHAs, HEAD first.
-- **The patch-id wording changed again after that rerun.** The re-review
-  found that `--stable` ignores whitespace, so an amend that only reindents
-  Python or turns a Makefile tab into spaces carried the verdict. It also
-  found that a user's `diff.external` or `color.ui=always` makes both ids
-  empty, so "empty equals empty" carried the verdict to HEAD over changed and
-  new commits. On scratch repos, a lossy textconv driver, `diff.relative` run
-  from a subdirectory and `diff.ignoreSubmodules=all` hid changes the same
-  way. The final recipe is `git diff --no-color --no-ext-diff --no-textconv
-  --no-relative --ignore-submodules=none … | git patch-id --verbatim`, and an
-  empty id never matches. On scratch repos it rejects every one of those cases
-  and still finds the image in the linear, linearized and `--rebase-merges`
-  identical shapes and before a later commit. This final wording has no live
-  run.
+- **The identical-rebase test changed three times after the evals**, each
+  time because a review reproduced a carry over changed code on scratch
+  repos:
+  1. `git range-diff` ("only `=` pairs"), replaced after the integration
+     review: it skips merge commits, so on a plan branch of `--no-ff` task
+     merges a differently re-resolved conflict still showed only `=` pairs,
+     and a linearizing rebase left no commit to pair with the reviewed head.
+     The first `eval11-rebase` live run used it; rechecked with the current
+     checker it fails `patch-id-run`.
+  2. `git diff | git patch-id --stable`, replaced after re-review 1:
+     `--stable` ignores whitespace, so a reindent of Python or a Makefile tab
+     turned to spaces carried; and a user's `diff.external` or
+     `color.ui=always` emptied both ids, so "empty equals empty" carried.
+     `eval11-rebase` was rerun on it and passed (5 of 5, $0.52, 15 turns).
+     Claude Code refused its `for` loop and `$(…)` form ("can't be checked
+     before it runs"); it then compared with literal SHAs and no loop, so the
+     skill says to compare one candidate per command, HEAD first.
+  3. Porcelain `git diff` with five flags (`--no-color --no-ext-diff
+     --no-textconv --no-relative --ignore-submodules=none`) into
+     `git patch-id --verbatim`, replaced after re-review 2:
+     `diff.submodule=log` turned a gitlink change into a line patch-id does
+     not hash, so a dropped submodule bump carried; and patch-id ignores
+     where a hunk sits, so `debug: on` moved between two identical YAML
+     stanzas, or a line moved to an identical-context spot in another
+     function, carried (with `diff.context=0`, any move did).
+     `eval11-rebase` was rerun on it and passed (5 of 5, $0.56, 18 turns).
+  4. Raw tree changes, shipped: `git diff-tree -r --ignore-submodules=none`
+     on both ranges must print the same paths, modes, statuses and full
+     pre- and post-image blob or gitlink SHAs. That compares whole file
+     contents, so it is conservative by construction: a base change to any
+     file the branch touches reads as not identical and costs a whole-branch
+     cycle, a cost accepted for a test with no known false carry. On scratch
+     repos it finds the image for a linear identical rebase, before one later
+     commit, and for a merge-shaped branch rebased with `--rebase-merges` or
+     linearized, and finds none for every case above. The plumbing command
+     ignores the porcelain diff settings that broke the earlier wordings;
+     `--ignore-submodules=none` stays because a submodule's `ignore = all`
+     hides gitlink changes from `diff-tree` too. The review loop had reached
+     its cap of two re-reviews, so this change was not reviewed.
+- **The shipped `git diff-tree` wording has no live run** as of this commit.
 
 ### What to watch next audit
 
 1. **Review lines per merged feature**: `review integration-c<c>` lines, and
    commits past the reviewed head at merge time (should be none).
 2. **`review carried` lines**: each should follow a matching pair of
-   `git patch-id --verbatim` ids. A carried verdict after a conflict-resolving
+   `git diff-tree -r` outputs. A carried verdict after a conflict-resolving
    rebase means the rule was misread.

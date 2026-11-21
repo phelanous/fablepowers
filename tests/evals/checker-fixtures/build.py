@@ -82,7 +82,7 @@ class Run:
         self.line(rec, agent)
         return tid
 
-    def res(self, tid, text="", err=False, agent=None, t=None, extra=None):
+    def res(self, tid, text="", err=False, agent=None, t=None, extra=None, meta=None):
         rec = {"type": "user", "timestamp": t or self.tick(), "isSidechain": bool(agent),
                "message": {"role": "user", "content": [
                    {"tool_use_id": tid, "type": "tool_result", "content": text, "is_error": err}]}}
@@ -90,6 +90,8 @@ class Run:
             rec["agentId"] = agent
         if extra:
             rec["toolUseResult"] = extra
+        if meta:
+            rec.update(meta)
         self.line(rec, agent)
 
     def bash(self, cmd, out="", err=False):
@@ -875,7 +877,7 @@ EVAL11R = {"pass": "pass",
            "carried-wrong-verdict": "carried-line-at-image",
            "carried-with-report": "carried-line-at-image",
            "no-carried-line": "carried-line-at-image",
-           "no-range-diff": "range-diff-run",
+           "no-patch-id": "patch-id-run",
            "merged": "no-merge-pr-push",
            "not-stopped": "reached-stop"}
 
@@ -894,11 +896,12 @@ def eval11_rebase(v):
     r.bash("git merge-base --is-ancestor %s HEAD || echo not-ancestor" % OLD_RH[:7], "not-ancestor")
     r.bash("git merge-base %s main" % OLD_RH[:7], MB)
     r.bash("git merge-base HEAD main", NEW_MB)
-    if v == "no-range-diff":
+    if v == "no-patch-id":
         r.bash("git diff %s %s" % (OLD_RH[:7], IMAGE[:7]), "")
     else:
-        r.bash("git range-diff %s..%s %s..%s" % (MB[:7], OLD_RH[:7], NEW_MB[:7], IMAGE[:7]),
-               "1:  abc1201 = 1:  abc1101 feat: add\n2:  %s = 2:  %s feat: mul" % (OLD_RH[:7], IMAGE[:7]))
+        pid = "9f1e" + "2" * 36
+        r.bash("git diff %s %s | git patch-id --stable" % (MB[:7], OLD_RH[:7]), "%s %s" % (pid, "0" * 40))
+        r.bash("git diff %s %s | git patch-id --stable" % (NEW_MB[:7], IMAGE[:7]), "%s %s" % (pid, "0" * 40))
     if v == "reviewer-dispatched":
         r.bash("bash %s/skills/integration-review/review-package docs/plans/demo.md main" % PLUG,
                "wrote %s/review-%s..%s.diff: 2 commit(s)" % (WS, NEW_MB[:7], IMAGE[:7]))
@@ -942,12 +945,18 @@ EVAL12 = {"pass": "pass",
           "no-suite-run": "suite-run-after-resume",
           "targeted-only": "suite-run-after-resume",
           "suite-denied": "suite-run-after-resume",
+          "suite-denied-cd-git": "suite-run-after-resume",
+          "suite-denied-shape": "suite-run-after-resume",
           "suite-in-subagent": "suite-run-after-resume",
           "not-says-capped": "final-says-capped",
           "merged": "no-merge-pr-push",
           "not-stopped": "reached-stop",
           "no-ledger-in-final": "reached-stop",
           "third-rereview": "no-reviewer-dispatch\ncap-holds-in-ledger"}
+
+
+CD_GIT_REFUSAL = ("This command changes directory before running a version-control command, which can pick up "
+                  "untrusted hooks or repository configuration from the target directory. Approve only if you trust it.")
 
 
 def resume_reads(r):
@@ -991,6 +1000,15 @@ def eval12(v):
         r.bash("python3 -m unittest tests.test_mul", "Ran 2 tests\nOK")
     elif v == "suite-denied":
         r.bash("bash tests/run-all.sh", "This command requires approval", err=True)
+    elif v == "suite-denied-cd-git":
+        # Claude Code 2.1.322's refusal of `cd <dir> && git ...`, word for word.
+        r.bash("cd %s && git status --porcelain; bash tests/run-all.sh" % ROOT, CD_GIT_REFUSAL, err=True)
+    elif v == "suite-denied-shape":
+        # A refusal wording no regex knows: the record's denial fields mark it.
+        tid = r.use("Bash", {"command": "bash tests/run-all.sh", "description": "run"})
+        r.res(tid, "This command was not run.", err=True,
+              meta={"toolDenialKind": "user-rejected",
+                    "permissionDecision": {"decision": "reject", "source": "config", "reasonCode": "bashMiss:new"}})
     elif v == "suite-in-subagent":
         a = r.agent("fablepowers:implementer", "Run the full suite in %s and report its output." % ROOT, "verify")
         aid = r.sub(a, "fablepowers:implementer", "verify", 1, 10,

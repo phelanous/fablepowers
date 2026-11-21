@@ -2,12 +2,15 @@
 unrelated commit and feat/demo was rebased onto it with no content change
 (spec "How we'll know it works" 5; rule 4).
 
-The reviewed head is no longer an ancestor of HEAD, and `git range-diff`
-pairs every commit with `=`, so the verdict carries: no reviewer dispatch,
-and a `review carried | <sha7> | patch-identical | —` line whose SHA is the
-rebased image of the reviewed head (setup.sh writes it to
-reviewed-image.txt; here it is also HEAD, since nothing follows it). The
-checker compares with the image, never with HEAD.
+The reviewed head is no longer an ancestor of HEAD, and the rebased branch
+has a commit whose diff from the new merge-base is patch-identical (`git
+patch-id --stable`) to the reviewed range's, so the verdict carries: no
+reviewer dispatch, and a `review carried | <sha7> | patch-identical | —`
+line whose SHA is that commit, the rebased image of the reviewed head
+(setup.sh writes it to reviewed-image.txt; here it is also HEAD, since
+nothing follows it). The checker compares with the image, never with HEAD,
+and does not itself judge whether a carry was valid: the fixture's rebase is
+identical by construction (test-checkers.sh checks that).
 """
 import os
 import sys
@@ -41,8 +44,8 @@ def main():
             problems.append("report %r, not —" % last.report)
     c.check("carried-line-at-image", not problems, "; ".join(problems) or carried[-1].line)
 
-    rd = ec.range_diff_calls(s)
-    c.check("range-diff-run", bool(rd), rd[0].command.splitlines()[0] if rd else "no `git range-diff` call")
+    pi = ec.patch_id_calls(s)
+    c.check("patch-id-run", bool(pi), pi[0].command.splitlines()[0] if pi else "no `git patch-id` call")
 
     ec.assert_no_integration(s, c)
     ec.assert_reached_stop(s, c)

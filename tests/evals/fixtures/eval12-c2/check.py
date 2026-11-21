@@ -10,8 +10,10 @@ Cycle 2 has used none of its cap, so its fix is owed a scoped re-review:
 exactly one `fablepowers:reviewer` dispatch whose review-package path starts
 at the SHA on the `review integration-c2` line (setup.sh writes it to
 reviewed-head.txt), logged as `review rereview-c2-1` with
-reports/review-rereview-c2-1.md. A lifetime count (0.8.0) reads the cap as
-spent and dispatches nothing.
+reports/review-rereview-c2-1.md. A lifetime count of re-reviews would read
+the cap as spent and dispatch nothing; the 0.8.0 skills, which count that
+way, still passed this eval in their live baseline run, so it is a
+regression guard only.
 """
 import os
 import sys

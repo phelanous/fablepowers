@@ -334,10 +334,13 @@ for ev in eval11 eval11-clean eval11-rebase eval12 eval12-c2; do
       rc=1; [[ "$(G cat-file -t "$rh" 2>/dev/null)" == commit ]] && ! G merge-base --is-ancestor "$rh" HEAD && rc=0
       state_check "$ev: the reviewed head exists and is not an ancestor of HEAD" "$rc" "$rh"
       old_mb="$(G merge-base "$rh" main)"
-      n="$(G rev-list --count "$old_mb..$rh")"
-      rd="$(G range-diff "$old_mb..$rh" "$mb..$(G rev-list --reverse "$mb..HEAD" | sed -n "${n}p")")"
-      rc=1; [[ -n "$rd" ]] && ! printf '%s\n' "$rd" | grep -qvE '^[0-9]+: +[0-9a-f]+ = ' && rc=0
-      state_check "$ev: range-diff pairs all $n commits with =" "$rc" "$rd"
+      want_pid="$(G diff "$old_mb" "$rh" | G patch-id --stable | cut -d' ' -f1)"
+      match=""
+      for x in $(G rev-list "$mb..HEAD"); do
+        [[ "$(G diff "$mb" "$x" | G patch-id --stable | cut -d' ' -f1)" == "$want_pid" ]] && { match="$x"; break; }
+      done
+      rc=1; [[ -n "$want_pid" && -n "$match" && "$match" == "$img" ]] && rc=0
+      state_check "$ev: the newest commit patch-identical to the reviewed range is reviewed-image.txt" "$rc" "match '$match', image '$img'"
       rc=1; [[ -n "$img" && "$img" == "$(G rev-parse HEAD)" && "$(G rev-list --count main)" == 2 ]] && rc=0
       state_check "$ev: reviewed-image.txt is HEAD; main moved one commit" "$rc" "image $img, HEAD $(G rev-parse HEAD)"
       ;;

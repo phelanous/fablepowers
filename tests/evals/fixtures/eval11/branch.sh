@@ -258,7 +258,8 @@ printf '%s\n' "$REVIEWED" > "$OUT/reviewed-head.txt"
 [[ "$mode" == capfix ]] && exit 0
 
 if [[ "$mode" == rebase ]]; then
-  n="$(git rev-list --count "$(git merge-base "$REVIEWED" main)..$REVIEWED")"
+  pid() { git diff "$1" "$2" | git patch-id --stable | cut -d' ' -f1; }
+  want="$(pid "$(git merge-base "$REVIEWED" main)" "$REVIEWED")"
   git checkout -q main
   cat >> README.md <<'MD'
 
@@ -267,7 +268,12 @@ MD
   commit "docs: note the Python version" README.md
   git checkout -q feat/demo
   git rebase -q main
-  git rev-list --reverse "$(git merge-base HEAD main)..HEAD" | sed -n "${n}p" > "$OUT/reviewed-image.txt"
+  # The image: the newest commit whose diff from the new merge-base is
+  # patch-identical to the reviewed range (integration-review, Later changes).
+  nb="$(git merge-base HEAD main)"
+  for x in $(git rev-list "$nb..HEAD"); do
+    if [[ "$(pid "$nb" "$x")" == "$want" ]]; then printf '%s\n' "$x" > "$OUT/reviewed-image.txt"; break; fi
+  done
   exit 0
 fi
 

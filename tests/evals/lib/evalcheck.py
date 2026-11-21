@@ -72,6 +72,7 @@ class Call:
         self.result_ts = None
         self.result_text = ""
         self.is_error = False
+        self.refused = False  # the result record says the permission layer rejected it
 
     @property
     def command(self):
@@ -134,6 +135,9 @@ def parse_calls(path, main_only=False):
                     c.result_ts = rec.get("timestamp") or ""
                     c.result_text = _result_text(block.get("content"))
                     c.is_error = bool(block.get("is_error"))
+                    pd = rec.get("permissionDecision")
+                    c.refused = bool(rec.get("toolDenialKind")) or (
+                        isinstance(pd, dict) and pd.get("decision") == "reject")
                 n += 1
     return calls
 
@@ -324,12 +328,16 @@ def merge_calls(session, key, tid):
 
 
 DENIED = re.compile(r"can't be checked before it runs|requires? approval|was blocked|Claude requested permissions|"
-                    r"permission to use .* has been denied|expansion obfuscation|unanalyzable", re.I)
+                    r"permission to use .* has been denied|expansion obfuscation|unanalyzable|"
+                    r"Approve only if you trust it", re.I)
 
 
 def denied(call):
-    """A call the permission layer refused: it never ran."""
-    return call.is_error and bool(DENIED.search(call.result_text))
+    """A call the permission layer refused: it never ran. Keyed on the
+    refusal's shape (an error result whose record carries `toolDenialKind` or
+    a rejecting `permissionDecision`), with known refusal wordings for
+    transcripts that lack those fields."""
+    return call.is_error and (call.refused or bool(DENIED.search(call.result_text)))
 
 
 def merge_conflicted(call):
@@ -472,7 +480,7 @@ def _git(sub):
 
 GIT_MERGE_CMD = _git("merge")
 GIT_PUSH_CMD = _git("push")
-GIT_RANGE_DIFF = _git("range-diff")
+GIT_PATCH_ID = _git("patch-id")
 PR_CREATE = re.compile(r"\b(?:gh|fj|tea|glab)\s+(?:pr|mr)\s+create\b")
 
 
@@ -503,8 +511,8 @@ def integration_commands(session):
     return out
 
 
-def range_diff_calls(session):
-    return [c for c in all_calls(session) if c.name == "Bash" and GIT_RANGE_DIFF.search(c.command)]
+def patch_id_calls(session):
+    return [c for c in all_calls(session) if c.name == "Bash" and GIT_PATCH_ID.search(c.command)]
 
 
 def final_text(session):

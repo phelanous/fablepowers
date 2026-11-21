@@ -860,8 +860,9 @@ Still open for the 0.9.0 design:
   another. What happens when the cap is spent is settled in 0.8.1 (Decisions
   2026-11-20, below): the cap is per review cycle, an identical rebase carries
   the verdict, and any other rebase gets a whole-branch cycle.
-- **Workflow map.** About 56 characters of budget remain, so a lanes entry
-  needs an explicit re-budget.
+- **Workflow map.** After 0.8.1 the Pi growth budget has 8 characters left
+  (152 of 160) and the Claude cap 20 (5980 of 6000), so a lanes entry needs
+  an explicit re-budget.
 
 ### What the live evals changed
 
@@ -938,8 +939,9 @@ latest `review` line) is either a fix the current cycle owes a re-review or
 verify-done, or it is owed a new cycle: a fresh `fablepowers:reviewer` with
 the full mandate over `<reviewed head>..HEAD`, logged as
 `review integration-c<c>`, with its own cap of two. Size never exempts a
-change. A rebase whose `git range-diff` shows only `=` pairs carries the
-verdict (`review carried`) to the reviewed head's rebased image. Any other
+change. A rebase carries the verdict (`review carried`) only to a commit `X`
+whose `git diff <new merge-base> X | git patch-id --stable` equals the
+reviewed range's (`git diff <old merge-base> <reviewed head>`). Any other
 rebase, amend or reset gets a whole-branch cycle from the merge-base. Cycle-1
 ledger and report names are unchanged, so existing ledgers resume as before.
 
@@ -951,7 +953,7 @@ against the 0.8.0 skills on `main`. In total, seven runs cost $4.97.
 |---|---|---|
 | `eval11`: follow-up after a capped cycle | pass, $0.95 | fail on 3 of 5 assertions, $0.57 |
 | `eval11-clean`: follow-up after a clean cycle | pass, $0.90 | not run (guard) |
-| `eval11-rebase`: identical rebase | pass, $0.44 | not run (guard) |
+| `eval11-rebase`: identical rebase | pass, $0.44 (range-diff test; see below) | not run (guard) |
 | `eval12`: cap inside a cycle | pass, $0.50 | not run (guard) |
 | `eval12-c2`: second cycle's own count | pass, $0.79 | pass, $0.82 (guard) |
 
@@ -971,11 +973,24 @@ against the 0.8.0 skills on `main`. In total, seven runs cost $4.97.
   pending, an amended or garbage-collected reviewed head, a ledger with no
   `review` line, and a docs-only follow-up are not covered by an eval. Only
   the skill wording covers them.
+- **The identical-rebase test changed after the evals.** The integration
+  review found that `git range-diff` skips merge commits, so on a plan branch
+  of `--no-ff` task merges a rebase that re-resolved a conflict differently
+  still showed only `=` pairs, and a linearizing rebase left no commit to
+  pair with the reviewed head. The patch-id test replaced it. On scratch
+  repos it found the image for a linear identical rebase, for a merge-shaped
+  branch rebased plain (linearized), and before one later commit, and found
+  none after a `--rebase-merges` rebase with a differently resolved conflict.
+  A base change touching lines next to the branch's hunks also finds none,
+  since the diff's context differs: conservative, a whole-branch cycle. The
+  `eval11-rebase` live run used the range-diff test; rechecked with the
+  updated checker it fails `patch-id-run`, and the patch-id test has no live
+  run.
 
 ### What to watch next audit
 
 1. **Review lines per merged feature**: `review integration-c<c>` lines, and
    commits past the reviewed head at merge time (should be none).
-2. **`review carried` lines**: each should follow a `git range-diff` with only
-   `=` pairs. A carried verdict after a conflict-resolving rebase means the
-   rule was misread.
+2. **`review carried` lines**: each should follow a matching pair of
+   `git patch-id --stable` ids. A carried verdict after a conflict-resolving
+   rebase means the rule was misread.

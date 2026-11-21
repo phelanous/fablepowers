@@ -855,8 +855,11 @@ Still open for the 0.9.0 design:
   with lane worktrees holding code only.
 - **Builder checks for later lanes.** They need a written spec, and a second
   pending spec stops question approval from recording.
-- **Re-review after a rebase.** What range it covers (a merge commit's
-  `--remerge-diff` against a rebase), and what happens when the cap is spent.
+- **Re-review after a rebase within lanes.** What range it covers (a merge
+  commit's `--remerge-diff` against a rebase) when lanes land one after
+  another. What happens when the cap is spent is settled in 0.8.1 (Decisions
+  2026-11-20, below): the cap is per review cycle, an identical rebase carries
+  the verdict, and any other rebase gets a whole-branch cycle.
 - **Workflow map.** About 56 characters of budget remain, so a lanes entry
   needs an explicit re-budget.
 
@@ -911,3 +914,68 @@ cost $1.26) changed four things before release:
    post-merge check exists for.
 4. **Full-suite runs per task** in implementer transcripts, against
    Project A's 117. The rule is one, plus one after a fix to that run.
+
+## Decisions (2026-11-20): the re-review cap per review cycle
+
+**Reported symptom.** After the two scoped re-reviews of a feature were used,
+the orchestrator treated every later change as past the cap. Follow-up work
+the user asked for after the review loop had finished got
+`fablepowers:verify-done` and a merge, with no reviewer seeing it. The cap was
+meant to stop a loop chasing one review's findings. It was never meant to
+exempt new work from the rigid gate "no merge without a fresh-context
+integration review".
+
+**Cause: a lifetime count.** `integration-review` capped re-reviews "per
+feature", the resume rule counted every `review rereview-` line in the
+ledger, and the workflow map said a fix after two re-reviews was owed
+verify-done. Nothing said what a commit made after the loop ended was owed.
+
+**The rule (0.8.1).** The cap belongs to a *review cycle*: one integration
+review plus the fix rounds and re-reviews that chase its findings. Inside a
+cycle nothing changed (fix 3, verify-done, tell the user). The gate is now
+stated in commits. Every commit past the *reviewed head* (the SHA on the
+latest `review` line) is either a fix the current cycle owes a re-review or
+verify-done, or it is owed a new cycle: a fresh `fablepowers:reviewer` with
+the full mandate over `<reviewed head>..HEAD`, logged as
+`review integration-c<c>`, with its own cap of two. Size never exempts a
+change. A rebase whose `git range-diff` shows only `=` pairs carries the
+verdict (`review carried`) to the reviewed head's rebased image. Any other
+rebase, amend or reset gets a whole-branch cycle from the merge-base. Cycle-1
+ledger and report names are unchanged, so existing ledgers resume as before.
+
+**What the evals showed.** These were live `claude -p` runs on Claude Code
+2.1.322, one each, against the 0.8.1 skills, plus a baseline of two of them
+against the 0.8.0 skills on `main`. In total, seven runs cost $4.97.
+
+| Eval | 0.8.1 | 0.8.0 baseline |
+|---|---|---|
+| `eval11`: follow-up after a capped cycle | pass, $0.95 | fail on 3 of 5 assertions, $0.57 |
+| `eval11-clean`: follow-up after a clean cycle | pass, $0.90 | not run (guard) |
+| `eval11-rebase`: identical rebase | pass, $0.44 | not run (guard) |
+| `eval12`: cap inside a cycle | pass, $0.50 | not run (guard) |
+| `eval12-c2`: second cycle's own count | pass, $0.79 | pass, $0.82 (guard) |
+
+- **`eval11` reproduces the fault on 0.8.0 and passes on 0.8.1.** The 0.8.0
+  orchestrator dispatched no reviewer and gave as its reason that a review
+  "would also go past the limit of two re-reviews". It did not merge, because
+  the unplanned commit also lacked a ledger line, so the baseline shows a
+  refused review rather than a merge. On 0.8.1 the orchestrator opened cycle
+  2 from the reviewed head, and its ruling said it treated the commit "as new
+  work needing its own review".
+- **`eval12-c2` passed on 0.8.0 as well.** The 0.8.0 orchestrator dispatched
+  the re-review and logged `review rereview-c2-1` instead of reading cycle 2's
+  cap as spent. Its pass on 0.8.1 is a regression guard, not evidence for the
+  fix. `eval11-clean`, `eval11-rebase` and `eval12` had no baseline run and
+  are guards as well.
+- Rebase in the middle of a cycle, new work arriving while a re-review is
+  pending, an amended or garbage-collected reviewed head, a ledger with no
+  `review` line, and a docs-only follow-up are not covered by an eval. Only
+  the skill wording covers them.
+
+### What to watch next audit
+
+1. **Review lines per merged feature**: `review integration-c<c>` lines, and
+   commits past the reviewed head at merge time (should be none).
+2. **`review carried` lines**: each should follow a `git range-diff` with only
+   `=` pairs. A carried verdict after a conflict-resolving rebase means the
+   rule was misread.

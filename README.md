@@ -304,7 +304,7 @@ On Codex they resolve as described in
 | `fablepowers:implementation-plan` | Turn the approved spec into an interface-level plan: contracts, invariants, test obligations per task. No code in the plan. A **Review Focus** section names up to five spec-implied inputs no task tests yet, each assigned to the task that owns the code; plan review checks it. |
 | `fablepowers:subagent-execution` | Dispatch one fresh implementer agent per plan task. The orchestrator coordinates and spot-checks; it does not implement. Tasks the plan marks independent run in parallel by default (waves from the `plan-waves` script, up to the plan's Max parallel, default 4), each in its own task worktree under `.worktrees/` on an `fp/<plan-key>/t<id>` branch; the orchestrator merges each back with `--no-ff`, hands any conflict to an implementer, and runs the full suite after each merge. Dispatches name the plan path and task heading instead of pasting the task; agents write full reports to files and return at most 15 lines; a progress ledger lets a resumed session skip finished tasks. |
 | `fablepowers:behavioral-testing` | Every spec behavior gets a test, and you break the behavior to watch that test fail. Ordering is free; the mutation check is not. |
-| `fablepowers:integration-review` | **Rigid gate.** Before any merge, a fresh-context adversarial reviewer hunts the integration seams — inert knobs, migration/model parity, deployment config, contract drift. It gets a review package diffed from the merge-base, ends its report with what it declined to judge, and the orchestrator closes with the **Rulings I made** on the user's behalf. Capped at two re-reviews. |
+| `fablepowers:integration-review` | **Rigid gate.** Before any merge, a fresh-context adversarial reviewer hunts the integration seams — inert knobs, migration/model parity, deployment config, contract drift. It gets a review package diffed from the merge-base, ends its report with what it declined to judge, and the orchestrator closes with the **Rulings I made** on the user's behalf. Capped at two re-reviews per review cycle; any commit past the reviewed head (follow-up work, a non-identical rebase) gets a new review cycle before merge. |
 | `fablepowers:verify-done` | **Rigid gate.** No "done", "fixed", or "passing" without running the command now and reading the output. |
 | `fablepowers:systematic-debugging` | Vendored from superpowers v7.0.0, unchanged in substance. |
 | `fablepowers:using-git-worktrees` | Vendored from superpowers v7.0.0. Adapted: an `implementation-plan` worktree request counts as consent; worktrees go under the project root. |
@@ -411,7 +411,7 @@ in. A resumed session finds unfinished work from those branch names.
 | `implementation-plan` | writing-plans | Interface level — contracts, invariants, test obligations, PR-sized tasks — and **no code in the plan**. Adds an up-front plan review. The header names the implementing agent, not a "tier". |
 | `subagent-execution` | subagent-driven-development, executing-plans | Fresh implementer per task kept. Per-task spec review only for the strict tier. Every dispatch names an agent type; the orchestrator never implements a plan task. |
 | `behavioral-testing` | test-driven-development | TDD-as-ritual replaced by a rigid outcome plus a mutation check. Ordering free for frontier models; strict red-green retained for weak subagents and for bug fixes, where the failing test is the reproduction. |
-| `integration-review` | requesting-code-review | Rigid gate, fresh-context adversarial reviewer that must execute the code, seam-focused checklist, ranked findings. Adds a two-round re-review cap. |
+| `integration-review` | requesting-code-review | Rigid gate, fresh-context adversarial reviewer that must execute the code, seam-focused checklist, ranked findings. Adds a two-round re-review cap per review cycle. |
 | `verify-done` | verification-before-completion | Condensed, unchanged in spirit. Rigid gate. |
 
 Dropped on purpose: per-task spec-compliance review of a frontier-model plan
@@ -442,8 +442,8 @@ bash tests/subagent-execution/test-plan-waves.sh        # plan-waves wave script
 bash tests/evals/test-checkers.sh                       # live-eval checkers against offline fixtures
 ```
 
-The live evals of the parallel-execution rules (headless `claude -p` on fixture
-repos) are manual runs, not part of these suites: each one bills your Claude
+The live evals of the parallel-execution and review-cycle rules (headless
+`claude -p` on fixture repos) are manual runs, not part of these suites: each one bills your Claude
 Code login, up to $3 a run. See [`tests/evals/README.md`](tests/evals/README.md).
 
 ## Measuring it

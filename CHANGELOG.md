@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.1 — 2026-11-20
+
+The integration review's cap of two re-reviews now counts per review cycle, not per feature. Once a branch's re-reviews were used up, the orchestrator stopped reviewing later changes and merged follow-up work that no reviewer had seen. Now every commit past the reviewed head is reviewed before merge. The change is to skill text only: no hook or script enforces it. Per harness:
+
+- **Claude Code: verified** for the reported fault, a follow-up after a capped cycle getting its own review: live eval `eval11` passed here and failed on the 0.8.0 skills. Asked to finish the branch, the 0.8.0 orchestrator dispatched no reviewer and said a review "would also go past the limit of two re-reviews". The following passed here and are recorded as **regression guards only**:
+  - `eval12-c2` (a second cycle's re-review, counted from its own review line) also passed on 0.8.0;
+  - `eval11-clean` (follow-up after a clean cycle), `eval11-rebase` (an identical rebase carries the verdict) and `eval12` (the cap still holds inside a cycle) had no baseline run.
+
+  One run each, on Claude Code 2.1.322; seven runs, $4.97 in total. **Wording only, no eval:** rebase with commits past the reviewed head, new work arriving while a re-review is pending, an amended, reset or garbage-collected reviewed head, a ledger with no `review` line, and a docs-only follow-up.
+- **Codex, OpenCode, Pi: unverified.** The skill text is shared, so the rule reads the same on these harnesses, but no live run was done on any of them.
+
+Reasons and the eval results are in `docs/rationale.md` (Decisions 2026-11-20: the re-review cap per review cycle).
+
+- **Cap per review cycle** (`integration-review`). A review cycle is one integration review plus the fix rounds and scoped re-reviews that chase its findings, and it gets at most two re-reviews. Inside a cycle nothing changed: after the second re-review comes fix 3, then `fablepowers:verify-done`, then the user is told the loop was capped. The skill says plainly that the cap never exempts new work from the gate.
+- **Later changes** (`integration-review`, new section). The reviewed head is the SHA on the latest `review` ledger line. Every commit past it must be either a fix the current cycle owes a re-review or verify-done, or be reviewed by a new cycle. A new cycle is a fresh `fablepowers:reviewer` with the full mandate over `<reviewed head>..HEAD` and its own cap of two. New work that arrives in the middle of a cycle waits for the next cycle, and a re-review's package ends at its fix commit. A rebase whose `git range-diff` shows only `=` pairs carries the verdict to the reviewed head's rebased image (`review carried | <sha7> | patch-identical | —`). Any other rebase, amend or reset gets a whole-branch cycle from the merge-base. Size never exempts a change, docs-only included.
+- **Ledger and report names.** Cycle 1 keeps the old names, so existing ledgers resume unchanged. Cycle `c` ≥ 2 adds `c<c>`: `review integration-c<c>`, `review rereview-c<c>-<k>`, `fix integration-c<c>-<k>`, and `reports/review-integration-c<c>.md`, `reports/review-rereview-c<c>-<k>.md`, `reports/integration-fix-c<c>-<k>.md`.
+- **Resume rule** (`subagent-execution`, `workflow` map). Only `review rereview-` lines after the last `review integration` line count toward the current cycle's cap. Commits past the reviewed head that are not an owed fix are owed a new cycle.
+- **Finishing** (`finishing-a-development-branch`). Its precondition now also requires that no commit past the reviewed head is unreviewed.
+- **Live evals** (`tests/evals/`): `eval11`, `eval11-clean`, `eval11-rebase`, `eval12` and `eval12-c2`, with offline checker cases in `tests/evals/test-checkers.sh`. `run-eval.sh` gains `EVAL_PLUGIN_DIR=<dir>` for baseline runs against another checkout.
+
 ## 0.8.0 — 2026-10-31
 
 Tasks a plan marks independent run in parallel by default, each in its own task worktree, with merge conflicts handed to an implementer and test loops that run targeted tests and wait on their own process. Per harness:

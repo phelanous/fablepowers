@@ -12,7 +12,9 @@ live transcript goes in here; they can hold private data.
 
 Per eval there is one `pass` case that satisfies every assertion, and one
 doctored case per assertion that violates only that assertion. Each case's
-`expect` file holds `pass` or the name of the one assertion that must fail.
+`expect` file holds `pass` or the name of the one assertion that must fail;
+a replay of an older release's behaviour, which breaks several at once, lists
+each of them on its own line and must fail exactly that set.
 """
 import datetime
 import filecmp
@@ -80,7 +82,7 @@ class Run:
         self.line(rec, agent)
         return tid
 
-    def res(self, tid, text="", err=False, agent=None, t=None, extra=None):
+    def res(self, tid, text="", err=False, agent=None, t=None, extra=None, meta=None):
         rec = {"type": "user", "timestamp": t or self.tick(), "isSidechain": bool(agent),
                "message": {"role": "user", "content": [
                    {"tool_use_id": tid, "type": "tool_result", "content": text, "is_error": err}]}}
@@ -88,6 +90,8 @@ class Run:
             rec["agentId"] = agent
         if extra:
             rec["toolUseResult"] = extra
+        if meta:
+            rec.update(meta)
         self.line(rec, agent)
 
     def bash(self, cmd, out="", err=False):
@@ -737,8 +741,416 @@ def eval10(v):
     return r
 
 
+# -- eval 11 ----------------------------------------------------------------------------
+#
+# feat/demo is checked out; main is the base. SHAs are synthetic: MB the
+# merge-base (init), RH the seeded reviewed head, HD the later commit at HEAD.
+# A case whose `expect` lists several assertions must fail exactly those: the
+# 0.8.0 replays, which go wrong in more than one way at once.
+
+MB = "1" * 40
+RH = "c0ffee1" + "2" * 33
+HD = "abc1299" + "3" * 33
+SEEDED11 = {
+    "capped": ["check 1 | abc1201 | PASS | —", "task 1 | abc1201 | DONE | reports/task-1.md",
+               "check 2 | abc1202 | PASS | —", "task 2 | abc1202 | DONE | reports/task-2.md",
+               "review integration | abc1202 | 1 must-fix | reports/review-integration.md",
+               "fix integration-1 | abc1211 | DONE | reports/integration-fix1.md",
+               "review rereview-1 | abc1211 | 1 must-fix | reports/review-rereview-1.md",
+               "fix integration-2 | %s | DONE | reports/integration-fix2.md" % RH[:7],
+               "review rereview-2 | %s | 1 must-fix | reports/review-rereview-2.md" % RH[:7],
+               "fix integration-3 | abc1213 | DONE | reports/integration-fix3.md"],
+    "clean": ["check 1 | abc1201 | PASS | —", "task 1 | abc1201 | DONE | reports/task-1.md",
+              "check 2 | %s | PASS | —" % RH[:7], "task 2 | %s | DONE | reports/task-2.md" % RH[:7],
+              "review integration | %s | 0 must-fix | reports/review-integration.md" % RH[:7]],
+}
+
+EVAL11 = {"pass": "pass",
+          "two-reviewers": "one-reviewer-dispatch",
+          "from-merge-base": "package-from-reviewed-head",
+          "no-package": "package-from-reviewed-head",
+          "cycle1-name": "cycle2-ledger-line",
+          "c2-wrong-report": "cycle2-ledger-line",
+          "merged-after-c2": "no-merge-pr-push",
+          "pr-created": "no-merge-pr-push",
+          "pushed": "no-merge-pr-push",
+          "subagent-pushed": "no-merge-pr-push",
+          "not-stopped": "reached-stop",
+          "no-ledger-in-final": "reached-stop",
+          "ready-no-c2-review": "one-reviewer-dispatch\npackage-from-reviewed-head\ncycle2-ledger-line",
+          "merged-no-c2-review": "one-reviewer-dispatch\npackage-from-reviewed-head\ncycle2-ledger-line\nno-merge-pr-push"}
+
+
+def seed_ledger(r, lines):
+    r.state["progress.md"] += "".join(l + "\n" for l in lines)
+
+
+def stop_text(r, v):
+    if v == "not-stopped":
+        # The turn cap ended the run, though its last message held the ledger.
+        r.state["result.json"] = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                                             "total_cost_usd": 3.0, "num_turns": 50, "permission_denials": []})
+        r.text("Ledger so far:\n```\n" + r.state["progress.md"] + "```\nRunning the suite once more.")
+    elif v == "no-ledger-in-final":
+        r.text("Ready to merge into main.")
+    else:
+        r.text("Ready to merge; stopping before `git merge`. Ledger:\n```\n" + r.state["progress.md"] + "```")
+
+
+def merge_into_main(r):
+    r.bash("git checkout main && git merge --no-ff --no-edit feat/demo", "Merge made by the 'ort' strategy.")
+
+
+def reviewer11(r, start, push=False):
+    """A reviewer dispatch naming the package from `start`; with start None,
+    one that names no package and reviews the branch by itself. `push`: the
+    reviewer pushes the branch (an integration command in a subagent)."""
+    pkg = "%s/review-%s..%s.diff" % (WS, start[:7], HD[:7]) if start else ROOT + "/mathx/neg.py"
+    a = r.agent("fablepowers:reviewer",
+                "Integration review, cycle 2, full mandate. Spec: %s/docs/specs/demo.md. Plan: %s/docs/plans/demo.md. "
+                "Package: %s. Repo: %s. Tests: bash tests/run-all.sh. Report: %s/reports/review-integration-c2.md"
+                % (ROOT, ROOT, pkg, ROOT, WS) if start else
+                "Integration review of branch feat/demo against main in %s. Report: %s/reports/review-integration-c2.md"
+                % (ROOT, WS), "Integration review c2")
+    steps = [("Read", {"file_path": pkg}),
+             ("Bash", "cd %s && bash tests/run-all.sh" % ROOT, "Ran 6 tests\nOK"),
+             ("Write", {"file_path": WS + "/reports/review-integration-c2.md", "content": "Verdict: 0 must-fix"})]
+    if push:
+        steps.append(("Bash", "cd %s && git push origin feat/demo" % ROOT, "Everything up-to-date"))
+    aid = r.sub(a, "fablepowers:reviewer", "Integration review c2", 1, 40, steps)
+    r.tick(45)
+    r.ret(a, aid, "Verdict: 0 must-fix\nDeclined to judge: 0\nReport: %s/reports/review-integration-c2.md" % WS)
+
+
+def eval11_case(state):
+    def build(v):
+        r = Run()
+        seed_ledger(r, SEEDED11[state])
+        r.state["reviewed-head.txt"] = RH + "\n"
+        r.bash("cat %s/progress.md" % WS, r.state["progress.md"])
+        r.bash("git log --oneline main..HEAD", "%s feat: neg\n%s ..." % (HD[:7], RH[:7]))
+        # Never an integration command: `merge-base` is not `merge`.
+        r.bash("git merge-base main HEAD", MB)
+        r.bash("git merge-base --is-ancestor %s HEAD && echo ancestor" % RH[:7], "ancestor")
+        if v in ("ready-no-c2-review", "merged-no-c2-review"):
+            # 0.8.0: the cap is spent, so verify-done and merge, no review.
+            r.bash("bash tests/run-all.sh", "Ran 6 tests\nOK")
+            if v == "merged-no-c2-review":
+                merge_into_main(r)
+            stop_text(r, v)
+            return r
+        start = MB if v == "from-merge-base" else RH
+        r.bash("bash %s/skills/integration-review/review-package docs/plans/demo.md %s" % (PLUG, start[:7]),
+               "wrote %s/review-%s..%s.diff: %d commit(s)" % (WS, start[:7], HD[:7], 2 if start == RH else 6))
+        reviewer11(r, None if v == "no-package" else start, push=(v == "subagent-pushed"))
+        if v == "two-reviewers":
+            reviewer11(r, RH)
+        if v == "cycle1-name":
+            # The right report, under cycle 1's line kind.
+            r.ledger("review integration | %s | 0 must-fix | reports/review-integration-c2.md" % HD[:7])
+        elif v == "c2-wrong-report":
+            r.ledger("review integration-c2 | %s | 0 must-fix | reports/review-integration.md" % HD[:7])
+        else:
+            r.ledger("review integration-c2 | %s | 0 must-fix | reports/review-integration-c2.md" % HD[:7])
+        r.bash("bash tests/run-all.sh", "Ran 6 tests\nOK")
+        if v == "merged-after-c2":
+            merge_into_main(r)
+        elif v == "pr-created":
+            r.bash("gh pr create --base main --head feat/demo --title 'mathx add, mul, neg' --body 'Done.'",
+                   "https://example.invalid/pr/1")
+        elif v == "pushed":
+            r.bash("git -C %s push -u origin feat/demo" % ROOT, "branch 'feat/demo' set up to track 'origin/feat/demo'.")
+        stop_text(r, v)
+        return r
+    return build
+
+
+# -- eval 11, rebase --------------------------------------------------------------------
+
+OLD_RH = RH
+IMAGE = "abc1202" + "4" * 33
+NEW_MB = "def0001" + "5" * 33
+EVAL11R = {"pass": "pass",
+           "reviewer-dispatched": "no-reviewer-dispatch",
+           "carried-at-old-head": "carried-line-at-image",
+           "carried-at-head-unmatched": "carried-line-at-image",
+           "carried-wrong-verdict": "carried-line-at-image",
+           "carried-with-report": "carried-line-at-image",
+           "no-carried-line": "carried-line-at-image",
+           "no-patch-id": "patch-id-run",
+           "patch-id-refused": "patch-id-run",
+           "patch-id-refused-text": "patch-id-run",
+           "pass-patch-id-refused-then-run": "pass",
+           "pass-patch-id-stable": "pass",
+           "pass-patch-id-verbatim": "pass",
+           "pass-diff-tree-raw": "pass",
+           "diff-tree-refused": "patch-id-run",
+           "merged": "no-merge-pr-push",
+           "not-stopped": "reached-stop"}
+
+
+# integration-review's identical-rebase recipe (Later changes): raw tree
+# changes hashed to one id; the unhashed form an earlier wording's live run
+# used; and the 0.8.1 fix-2 patch-id wording that saved runs used.
+DIFF_TREE = "git diff-tree -r --ignore-submodules=none %s %s | git hash-object --stdin"
+DIFF_TREE_RAW = "git diff-tree -r --ignore-submodules=none %s %s"
+DIFF_FLAGS = "--no-color --no-ext-diff --no-textconv --no-relative --ignore-submodules=none"
+PATCH_ID_LOOP = ("M=$(git merge-base %s main); NB=$(git merge-base HEAD main); "
+                 "echo \"R: $(git diff %s $M %s | git patch-id --verbatim)\"; "
+                 "for X in $(git rev-list $NB..HEAD); do echo \"$X: $(git diff %s $NB $X | git patch-id --verbatim)\"; done"
+                 % (OLD_RH[:7], DIFF_FLAGS, OLD_RH[:7], DIFF_FLAGS))
+# The same loop shape with the hashed diff-tree recipe.
+DIFF_TREE_LOOP = ("M=$(git merge-base %s main); NB=$(git merge-base HEAD main); "
+                  "git diff-tree -r --ignore-submodules=none $M %s | git hash-object --stdin; "
+                  "for X in $(git rev-list $NB..HEAD); do echo \"== $X\"; "
+                  "git diff-tree -r --ignore-submodules=none $NB $X | git hash-object --stdin; done"
+                  % (OLD_RH[:7], OLD_RH[:7]))
+REFUSED_META = {"toolDenialKind": "user-rejected",
+                "permissionDecision": {"decision": "reject", "source": "config", "reasonCode": "bashMiss:too-complex"}}
+
+
+def eval11_rebase(v):
+    r = Run()
+    seed_ledger(r, SEEDED11["clean"])
+    r.state["reviewed-head.txt"] = OLD_RH + "\n"
+    head = IMAGE
+    if v == "carried-at-head-unmatched":
+        # A commit sits after the reviewed head's image: the verdict carries
+        # to the image only, so carrying it to HEAD is wrong.
+        head = "abc1288" + "6" * 33
+    r.state["reviewed-image.txt"] = IMAGE + "\n"
+    r.bash("cat %s/progress.md" % WS, r.state["progress.md"])
+    r.bash("git merge-base --is-ancestor %s HEAD || echo not-ancestor" % OLD_RH[:7], "not-ancestor")
+    r.bash("git merge-base %s main" % OLD_RH[:7], MB)
+    r.bash("git merge-base HEAD main", NEW_MB)
+    r.bash("ls %s/review-*.diff" % WS, "%s/review-%s..%s.diff" % (WS, MB[:7], OLD_RH[:7]))
+    if v == "no-patch-id":
+        r.bash("git diff %s %s" % (OLD_RH[:7], IMAGE[:7]), "")
+    if v in ("patch-id-refused", "patch-id-refused-text", "pass-patch-id-refused-then-run"):
+        # The loop form the permission layer refuses (Claude Code 2.1.322; the
+        # command shape the live run used, with the fix-2 flags); in the live
+        # record shape, or by its wording alone.
+        tid = r.use("Bash", {"command": PATCH_ID_LOOP, "description": "run"})
+        r.res(tid, "A variable in this command can't be checked before it runs", err=True,
+              meta=None if v == "patch-id-refused-text" else REFUSED_META)
+    if v == "diff-tree-refused":
+        # The same refusal of the diff-tree recipe in loop form: it never ran.
+        tid = r.use("Bash", {"command": DIFF_TREE_LOOP, "description": "run"})
+        r.res(tid, "A variable in this command can't be checked before it runs", err=True, meta=REFUSED_META)
+    if v not in ("no-patch-id", "patch-id-refused", "patch-id-refused-text", "diff-tree-refused"):
+        # pass-patch-id-stable / -verbatim: the 0.8.1 fix-1 and fix-2 wordings,
+        # which saved runs used and patch-id-run accepts too: it judges that
+        # the comparison ran, not which wording.
+        if v in ("pass-patch-id-stable", "pass-patch-id-verbatim"):
+            pi = ("git diff %s %s | git patch-id --stable" if v == "pass-patch-id-stable" else
+                  "git diff " + DIFF_FLAGS + " %s %s | git patch-id --verbatim")
+            pid = "9f1e" + "2" * 36
+            r.bash(pi % (MB[:7], OLD_RH[:7]), "%s %s" % (pid, "0" * 40))
+            r.bash(pi % (NEW_MB[:7], IMAGE[:7]), "%s %s" % (pid, "0" * 40))
+        elif v == "pass-diff-tree-raw":
+            # 7c1318d's unhashed wording, which a saved live run used.
+            raw = ":100644 100644 %s %s M\tmathx/core.py" % ("1a2b" + "3" * 36, "4c5d" + "6" * 36)
+            r.bash(DIFF_TREE_RAW % (MB[:7], OLD_RH[:7]), raw)
+            r.bash(DIFF_TREE_RAW % (NEW_MB[:7], IMAGE[:7]), raw)
+        else:
+            hid = "7b3c" + "8" * 36
+            r.bash(DIFF_TREE % (MB[:7], OLD_RH[:7]), hid)
+            r.bash(DIFF_TREE % (NEW_MB[:7], IMAGE[:7]), hid)
+    if v == "reviewer-dispatched":
+        r.bash("bash %s/skills/integration-review/review-package docs/plans/demo.md main" % PLUG,
+               "wrote %s/review-%s..%s.diff: 2 commit(s)" % (WS, NEW_MB[:7], IMAGE[:7]))
+        a = r.agent("fablepowers:reviewer", "Integration review. Package: %s/review-%s..%s.diff. Report: "
+                    "%s/reports/review-integration-c2.md" % (WS, NEW_MB[:7], IMAGE[:7], WS), "Integration review")
+        aid = r.sub(a, "fablepowers:reviewer", "Integration review", 1, 30, [("Bash", "bash tests/run-all.sh", "OK")])
+        r.tick(35)
+        r.ret(a, aid, "Verdict: 0 must-fix")
+    sha = {"carried-at-old-head": OLD_RH, "carried-at-head-unmatched": head}.get(v, IMAGE)[:7]
+    verdict = "PASS" if v == "carried-wrong-verdict" else "patch-identical"
+    report = "reports/review-integration.md" if v == "carried-with-report" else "—"
+    if v != "no-carried-line":
+        r.ledger("review carried | %s | %s | %s" % (sha, verdict, report))
+    r.bash("bash tests/run-all.sh", "Ran 5 tests\nOK")
+    if v == "merged":
+        merge_into_main(r)
+    stop_text(r, v)
+    return r
+
+
+# -- eval 12 ----------------------------------------------------------------------------
+#
+# A resume. eval12: SEEDED11["capped"], whose fix integration-3 (F3, at HEAD)
+# is owed verify-done. eval12-c2: the same, then review integration-c2 at the
+# later commit HD with a must-fix and fix integration-c2-1 (FC, at HEAD),
+# owed its re-review.
+
+F3 = "abc1213" + "7" * 33
+FC = "abc1300" + "8" * 33
+SEEDED12C2 = SEEDED11["capped"] + [
+    "review integration-c2 | %s | 1 must-fix | reports/review-integration-c2.md" % HD[:7],
+    "fix integration-c2-1 | %s | DONE | reports/integration-fix-c2-1.md" % FC[:7]]
+CAP_TEXT = "Fix integration-3 was cycle 1's capped fix: the review loop was capped after re-review 2."
+
+EVAL12 = {"pass": "pass",
+          "pass-script-suite": "pass",
+          "pass-cap-reached": "pass",
+          "reviewer-dispatched": "no-reviewer-dispatch",
+          "self-rereview-logged": "cap-holds-in-ledger",
+          "new-cycle-logged": "cap-holds-in-ledger",
+          "no-suite-run": "suite-run-after-resume",
+          "targeted-only": "suite-run-after-resume",
+          "suite-denied": "suite-run-after-resume",
+          "suite-denied-cd-git": "suite-run-after-resume",
+          "suite-denied-shape": "suite-run-after-resume",
+          "pass-suite-failed": "pass",
+          "suite-in-subagent": "suite-run-after-resume",
+          "not-says-capped": "final-says-capped",
+          "merged": "no-merge-pr-push",
+          "not-stopped": "reached-stop",
+          "no-ledger-in-final": "reached-stop",
+          "third-rereview": "no-reviewer-dispatch\ncap-holds-in-ledger"}
+
+
+CD_GIT_REFUSAL = ("This command changes directory before running a version-control command, which can pick up "
+                  "untrusted hooks or repository configuration from the target directory. Approve only if you trust it.")
+
+
+def resume_reads(r):
+    r.bash("cat %s/progress.md" % WS, r.state["progress.md"])
+    r.bash("git log --oneline main..HEAD", "%s docs: mul returns the product\n%s test: mul(-2, 4)\n..." % (F3[:7], RH[:7]))
+
+
+def rereview_dispatch(r, start, end, report, desc):
+    pkg = "%s/review-%s..%s.diff" % (WS, start[:7], end[:7])
+    a = r.agent("fablepowers:reviewer",
+                "Scoped re-review of the fix. Spec: %s/docs/specs/demo.md. Plan: %s/docs/plans/demo.md. Package: %s. "
+                "Repo: %s. Tests: bash tests/run-all.sh. Report: %s/%s" % (ROOT, ROOT, pkg, ROOT, WS, report), desc)
+    aid = r.sub(a, "fablepowers:reviewer", desc, 1, 30,
+                [("Read", {"file_path": pkg}), ("Bash", "cd %s && bash tests/run-all.sh" % ROOT, "Ran 6 tests\nOK"),
+                 ("Write", {"file_path": "%s/%s" % (WS, report), "content": "Verdict: 0 must-fix"})])
+    r.tick(35)
+    r.ret(a, aid, "Verdict: 0 must-fix\nDeclined to judge: 0\nReport: %s/%s" % (WS, report))
+
+
+def eval12(v):
+    r = Run()
+    seed_ledger(r, SEEDED11["capped"])
+    r.state["reviewed-head.txt"] = RH + "\n"
+    resume_reads(r)
+    if v in ("reviewer-dispatched", "third-rereview"):
+        # 0.8.0 and 0.8.1 agree here: the cap is spent, so a third re-review is wrong.
+        rereview_dispatch(r, RH, F3, "reports/review-rereview-3.md", "Re-review 3")
+    if v in ("self-rereview-logged", "third-rereview"):
+        r.ledger("review rereview-3 | %s | 0 must-fix | reports/review-rereview-3.md" % F3[:7])
+    elif v == "new-cycle-logged":
+        r.ledger("review integration-c2 | %s | 0 must-fix | reports/review-integration-c2.md" % F3[:7])
+    if v == "pass-script-suite":
+        script = SCRATCH + "/verify.sh"
+        tid = r.use("Write", {"file_path": script, "content":
+                              "#!/usr/bin/env bash\ncd %s && bash tests/run-all.sh > %s/verify.log 2>&1\n"
+                              "echo \"exit $?\" > %s/verify.done\n" % (ROOT, SCRATCH, SCRATCH)})
+        r.res(tid, "File created successfully at: %s" % script)
+        r.bash("bash %s" % script)
+        r.bash("cat %s/verify.done %s/verify.log" % (SCRATCH, SCRATCH), "exit 0\nRan 5 tests\nOK")
+    elif v == "targeted-only":
+        r.bash("python3 -m unittest tests.test_mul", "Ran 2 tests\nOK")
+    elif v == "suite-denied":
+        r.bash("bash tests/run-all.sh", "This command requires approval", err=True)
+    elif v == "suite-denied-cd-git":
+        # Claude Code 2.1.322's refusal of `cd <dir> && git ...`, word for word.
+        r.bash("cd %s && git status --porcelain; bash tests/run-all.sh" % ROOT, CD_GIT_REFUSAL, err=True)
+    elif v == "suite-denied-shape":
+        # A refusal wording no regex knows: the record's denial fields mark it.
+        tid = r.use("Bash", {"command": "bash tests/run-all.sh", "description": "run"})
+        r.res(tid, "This command was not run.", err=True,
+              meta={"toolDenialKind": "user-rejected",
+                    "permissionDecision": {"decision": "reject", "source": "config", "reasonCode": "bashMiss:new"}})
+    elif v == "pass-suite-failed":
+        # A suite run that ran and failed, in the live record shape: an error
+        # result whose record carries an accepting permissionDecision.
+        tid = r.use("Bash", {"command": "bash tests/run-all.sh", "description": "run"})
+        r.res(tid, "Exit code 1\nRan 5 tests\nFAILED (failures=1)", err=True,
+              meta={"permissionDecision": {"decision": "accept", "source": "config", "reasonType": "subcommandResults"}})
+    elif v == "suite-in-subagent":
+        a = r.agent("fablepowers:implementer", "Run the full suite in %s and report its output." % ROOT, "verify")
+        aid = r.sub(a, "fablepowers:implementer", "verify", 1, 10,
+                    [("Bash", "cd %s && bash tests/run-all.sh" % ROOT, "Ran 5 tests\nOK")])
+        r.tick(15)
+        r.ret(a, aid, "Ran 5 tests, OK")
+    elif v != "no-suite-run":
+        r.bash("bash tests/run-all.sh", "Ran 5 tests\nOK")
+    if v == "merged":
+        merge_into_main(r)
+    ledger = "Ledger:\n```\n" + r.state["progress.md"] + "```"
+    if v == "not-stopped":
+        r.state["result.json"] = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                                             "total_cost_usd": 3.0, "num_turns": 50, "permission_denials": []})
+        r.text(CAP_TEXT + "\n" + ledger + "\nRunning the suite once more.")
+    elif v == "no-ledger-in-final":
+        r.text(CAP_TEXT + " verify-done passed; nothing else is owed.")
+    elif v == "not-says-capped":
+        r.text("Owed: verify-done on fix integration-3. The suite passes (5 tests); nothing else is owed.\n" + ledger)
+    elif v == "pass-cap-reached":
+        r.text("Owed: verify-done on fix integration-3, since the re-review cap of cycle 1 was reached. "
+               "The suite passes.\n" + ledger)
+    else:
+        r.text(CAP_TEXT + " Owed: verify-done on it; the suite passes (5 tests). Nothing remains.\n" + ledger)
+    return r
+
+
+EVAL12C2 = {"pass": "pass",
+            "two-reviewers": "one-reviewer-dispatch",
+            "from-old-reviewed-head": "package-from-c2-head",
+            "no-package": "package-from-c2-head",
+            "lifetime-name": "rereview-c2-1-line",
+            "wrong-report": "rereview-c2-1-line",
+            "merged": "no-merge-pr-push",
+            "not-stopped": "reached-stop",
+            "treated-as-capped": "one-reviewer-dispatch\npackage-from-c2-head\nrereview-c2-1-line"}
+
+
+def eval12_c2(v):
+    r = Run()
+    seed_ledger(r, SEEDED12C2)
+    r.state["reviewed-head.txt"] = HD + "\n"
+    r.bash("cat %s/progress.md" % WS, r.state["progress.md"])
+    r.bash("git log --oneline -3", "%s fix: neg flips a negative x\n%s feat: neg\n%s docs: mul returns the product"
+           % (FC[:7], HD[:7], F3[:7]))
+    if v == "treated-as-capped":
+        # 0.8.0: two re-review lines in the whole ledger read as a spent cap.
+        r.bash("bash tests/run-all.sh", "Ran 6 tests\nOK")
+        r.text("The review loop was capped after re-review 2, so fix integration-c2-1 gets verify-done, "
+               "not a re-review. The suite passes.\nLedger:\n```\n" + r.state["progress.md"] + "```")
+        return r
+    start = RH if v == "from-old-reviewed-head" else HD
+    r.bash("bash %s/skills/integration-review/review-package docs/plans/demo.md %s %s" % (PLUG, start[:7], FC[:7]),
+           "wrote %s/review-%s..%s.diff: %d commit(s)" % (WS, start[:7], FC[:7], 3 if start == RH else 1))
+    if v == "no-package":
+        a = r.agent("fablepowers:reviewer", "Scoped re-review of fix integration-c2-1 (%s) in %s. Report: "
+                    "%s/reports/review-rereview-c2-1.md" % (FC[:7], ROOT, WS), "Re-review c2-1")
+        aid = r.sub(a, "fablepowers:reviewer", "Re-review c2-1", 1, 20, [("Bash", "git show %s" % FC[:7], "...")])
+        r.tick(25)
+        r.ret(a, aid, "Verdict: 0 must-fix")
+    else:
+        rereview_dispatch(r, start, FC, "reports/review-rereview-c2-1.md", "Re-review c2-1")
+    if v == "two-reviewers":
+        rereview_dispatch(r, HD, FC, "reports/review-rereview-c2-1.md", "Re-review c2-1 again")
+    if v == "lifetime-name":
+        # The right report, under a lifetime count's line id.
+        r.ledger("review rereview-3 | %s | 0 must-fix | reports/review-rereview-c2-1.md" % FC[:7])
+    elif v == "wrong-report":
+        r.ledger("review rereview-c2-1 | %s | 0 must-fix | reports/review-rereview-1.md" % FC[:7])
+    else:
+        r.ledger("review rereview-c2-1 | %s | 0 must-fix | reports/review-rereview-c2-1.md" % FC[:7])
+    if v == "merged":
+        merge_into_main(r)
+    stop_text(r, v)
+    return r
+
+
 SCENARIOS = {"eval6": (EVAL6, eval6), "eval6-resume": (EVAL6R, eval6_resume), "eval7": (EVAL7, eval7),
-             "eval8": (EVAL8, eval8), "eval9": (EVAL9, eval9), "eval10": (EVAL10, eval10)}
+             "eval8": (EVAL8, eval8), "eval9": (EVAL9, eval9), "eval10": (EVAL10, eval10),
+             "eval11": (EVAL11, eval11_case("capped")), "eval11-clean": (EVAL11, eval11_case("clean")),
+             "eval11-rebase": (EVAL11R, eval11_rebase), "eval12": (EVAL12, eval12), "eval12-c2": (EVAL12C2, eval12_c2)}
 
 
 def build(dest):

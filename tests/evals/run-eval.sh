@@ -2,12 +2,14 @@
 # Live eval driver (manual; not part of the offline suites). Bills your Claude
 # Code login: each run is capped at $3 (--max-budget-usd) and a --max-turns cap.
 #
-# Usage: bash tests/evals/run-eval.sh <eval-name>     (eval6, eval6-resume, eval7, eval8, eval9, eval10)
+# Usage: bash tests/evals/run-eval.sh <eval-name>     (eval6, eval6-resume, eval7, eval8, eval9, eval10,
+#                                                       eval11, eval11-clean, eval11-rebase, eval12, eval12-c2)
 #
 # 1. Copies tests/evals/fixtures/<eval>/seed/ (or the seed of the fixture named
 #    in its seed-from file) into a fresh `mktemp -d`, as a git repo on main.
 #    Runs the fixture's setup.sh there, if any (env PLUGIN_ROOT, OUT, FIXTURE).
-# 2. Runs headless `claude -p` in that repo with this checkout as --plugin-dir,
+# 2. Runs headless `claude -p` in that repo with this checkout (or
+#    EVAL_PLUGIN_DIR) as --plugin-dir,
 #    the installed fablepowers plugin disabled, acceptEdits plus a pattern
 #    allowlist (see ALLOWED; never --dangerously-skip-permissions), and the
 #    fixture's prompt.txt.
@@ -23,7 +25,10 @@
 # 5. Prints each assertion and the run's cost; exits 0 on pass, 1 on fail,
 #    2 on a usage or setup error.
 #
-# Env: CLAUDE_BIN (default claude); EVAL_OUT (output directory, default
+# Env: CLAUDE_BIN (default claude); EVAL_PLUGIN_DIR (the plugin checkout the
+# session loads, default this one, e.g. a worktree of an older release for a
+# baseline run; setup.sh and the checker still come from this checkout);
+# EVAL_OUT (output directory, default
 # <tmp>/out); EVAL_MAX_BUDGET (a lower cap than $3); EVAL_RECHECK=<out-dir>
 # re-runs only the checker on an earlier run's output. The temp directory is
 # kept for inspection and its path printed; it holds the transcript, which can
@@ -88,6 +93,13 @@ if [[ -n "${EVAL_RECHECK:-}" ]]; then
   exit $(( rc ? 1 : 0 ))
 fi
 
+PLUGIN_DIR="${EVAL_PLUGIN_DIR:-$REPO_ROOT}"
+if [[ ! -f "$PLUGIN_DIR/.claude-plugin/plugin.json" ]]; then
+  echo "run-eval: EVAL_PLUGIN_DIR=$PLUGIN_DIR has no .claude-plugin/plugin.json" >&2
+  exit 2
+fi
+PLUGIN_DIR="$(cd "$PLUGIN_DIR" && pwd)"
+
 BUDGET=3
 if [[ -n "${EVAL_MAX_BUDGET:-}" ]]; then
   BUDGET="$("$PY" -I -c 'import sys; print(min(3.0, float(sys.argv[1])))' "$EVAL_MAX_BUDGET")"
@@ -140,11 +152,11 @@ ALLOWED=(
   "Bash(true)" "Bash(until:*)" "Bash(while:*)" "Bash(wait:*)"
 )
 
-echo "eval $EVAL: repo $R, budget \$$BUDGET, max turns $MAX_TURNS"
+echo "eval $EVAL: repo $R, plugin $PLUGIN_DIR, budget \$$BUDGET, max turns $MAX_TURNS"
 rc_claude=0
 (cd "$R" && "${CLAUDE_BIN:-claude}" -p "$(cat "$FIX/prompt.txt")" \
   --allowedTools "${ALLOWED[@]}" \
-  --plugin-dir "$REPO_ROOT" \
+  --plugin-dir "$PLUGIN_DIR" \
   --settings '{"enabledPlugins":{"fablepowers@fablepowers":false}}' \
   --permission-mode acceptEdits \
   --max-budget-usd "$BUDGET" --max-turns "$MAX_TURNS" \

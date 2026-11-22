@@ -72,6 +72,7 @@ class Call:
         self.result_ts = None
         self.result_text = ""
         self.is_error = False
+        self.refused = False  # the result record says the permission layer rejected it
 
     @property
     def command(self):
@@ -134,6 +135,9 @@ def parse_calls(path, main_only=False):
                     c.result_ts = rec.get("timestamp") or ""
                     c.result_text = _result_text(block.get("content"))
                     c.is_error = bool(block.get("is_error"))
+                    pd = rec.get("permissionDecision")
+                    c.refused = bool(rec.get("toolDenialKind")) or (
+                        isinstance(pd, dict) and pd.get("decision") == "reject")
                 n += 1
     return calls
 
@@ -324,12 +328,16 @@ def merge_calls(session, key, tid):
 
 
 DENIED = re.compile(r"can't be checked before it runs|requires? approval|was blocked|Claude requested permissions|"
-                    r"permission to use .* has been denied|expansion obfuscation|unanalyzable", re.I)
+                    r"permission to use .* has been denied|expansion obfuscation|unanalyzable|"
+                    r"Approve only if you trust it", re.I)
 
 
 def denied(call):
-    """A call the permission layer refused: it never ran."""
-    return call.is_error and bool(DENIED.search(call.result_text))
+    """A call the permission layer refused: it never ran. Keyed on the
+    refusal's shape (an error result whose record carries `toolDenialKind` or
+    a rejecting `permissionDecision`), with known refusal wordings for
+    transcripts that lack those fields."""
+    return call.is_error and (call.refused or bool(DENIED.search(call.result_text)))
 
 
 def merge_conflicted(call):
@@ -392,6 +400,230 @@ def unheld_parts(runs, parts, full, held):
         hit = next((r for r in runs if rx.search(r) or full.search(r)), None)
         if hit is not None:
             out.append((res, hit.splitlines()[0]))
+    return out
+
+
+# --- reviews, ledger review lines, integration commands (evals 11 and 12) ---------
+
+def all_calls(session):
+    """Tool calls of the main session and of every subagent, main first."""
+    out = list(session.calls)
+    for a in session.subagents.values():
+        out.extend(a["calls"])
+    return out
+
+
+def reviewer_dispatches(session):
+    """Main-session Agent calls to a reviewer seat (fablepowers:reviewer)."""
+    return [c for c in session.agent_calls() if "reviewer" in c.subagent_type]
+
+
+PACKAGE = re.compile(r"review-([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})\.diff")
+
+
+def package_ranges(text):
+    """(start, end) SHA prefixes of every review-package path in `text`
+    (`review-<mb7>..<head7>.diff`, as review-package names them)."""
+    return PACKAGE.findall(text or "")
+
+
+def same_sha(a, b):
+    """Two SHAs, full or abbreviated (7 or more hex digits), name one commit."""
+    a, b = (a or "").strip().lower(), (b or "").strip().lower()
+    n = min(len(a), len(b))
+    return n >= 7 and a[:n] == b[:n]
+
+
+class Entry:
+    """One ledger line: `<kind> <id> | <sha> | <verdict or status> | <report>`."""
+
+    def __init__(self, line, kind, eid, sha, verdict, report):
+        self.line, self.kind, self.id, self.sha, self.verdict, self.report = line, kind, eid, sha, verdict, report
+
+
+ENTRY = re.compile(r"^\s*([a-z]+)\s+(\S+)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*(.*?)\s*$", re.I)
+
+
+def ledger_entries(session):
+    """Every ledger line in the four-field shape, in file order (the
+    `# Progress:` header and anything else is skipped)."""
+    out = []
+    for l in session.progress().splitlines():
+        m = ENTRY.match(l)
+        if m:
+            out.append(Entry(l.strip(), m.group(1).lower(), m.group(2), m.group(3), m.group(4), m.group(5)))
+    return out
+
+
+def review_entries(session, eid=None):
+    """`review` ledger lines; with `eid`, only those whose id is exactly it
+    (`integration`, `integration-c2`, `rereview-1`, `carried`)."""
+    return [e for e in ledger_entries(session) if e.kind == "review" and (eid is None or e.id == eid)]
+
+
+def report_is(entry, rel):
+    """The line's report field names `rel` (e.g. reports/review-integration-c2.md),
+    workspace-relative or by an absolute path ending in the workspace's copy."""
+    r = entry.report.strip("` ")
+    return r == rel or (r.endswith("/" + rel) and ".worktrees/" not in r)
+
+
+def no_report(entry):
+    return entry.report.strip("` ") in ("—", "-")
+
+
+def _git(sub):
+    """`git [global options] <sub>`, with -C/-c taking an argument; `sub` must
+    end the word, so `merge` does not match `merge-base` or `merge-tree`."""
+    return re.compile(r"\bgit(?:\s+(?:-C|-c|--git-dir|--work-tree)\s+\S+|\s+--?[A-Za-z][\w-]*(?:=\S+)?)*\s+%s(?![\w-])" % sub)
+
+
+GIT_MERGE_CMD = _git("merge")
+GIT_PUSH_CMD = _git("push")
+GIT_PATCH_ID = _git("patch-id")
+GIT_DIFF_TREE = _git("diff-tree")
+PR_CREATE = re.compile(r"\b(?:gh|fj|tea|glab)\s+(?:pr|mr)\s+create\b")
+
+
+def integration_kind(segment):
+    """'merge', 'pr' or 'push' for a command segment that integrates the
+    branch, else None. `git merge --abort` and `--quit` integrate nothing."""
+    if GIT_MERGE_CMD.search(segment) and not re.search(r"\s--(?:abort|quit)\b", segment):
+        return "merge"
+    if PR_CREATE.search(segment):
+        return "pr"
+    if GIT_PUSH_CMD.search(segment):
+        return "push"
+    return None
+
+
+def integration_commands(session):
+    """(call, segment, kind) for every Bash segment, in the main session or a
+    subagent, that merges, opens a PR or pushes. An attempt counts even when
+    the permission layer refused it: the run went past its stop."""
+    out = []
+    for c in all_calls(session):
+        if c.name != "Bash":
+            continue
+        for seg in segments_of(c.command):
+            k = integration_kind(seg)
+            if k:
+                out.append((c, seg, k))
+    return out
+
+
+def patch_id_calls(session):
+    """Bash calls, in the main session or a subagent, that ran the
+    identical-rebase comparison: `git diff-tree` (the shipped recipe) or
+    `git patch-id` (the earlier wordings, which saved runs used), with any
+    flags. A call the permission layer refused never ran."""
+    return [c for c in all_calls(session) if c.name == "Bash" and not denied(c)
+            and (GIT_DIFF_TREE.search(c.command) or GIT_PATCH_ID.search(c.command))]
+
+
+def final_text(session):
+    """The run's final message: result.json's `result`, else the main
+    transcript's last assistant text block."""
+    t = session.result().get("result")
+    if isinstance(t, str) and t.strip():
+        return t
+    last = ""
+    for rec in load_jsonl(session.transcript):
+        if rec.get("type") != "assistant" or rec.get("isSidechain"):
+            continue
+        content = (rec.get("message") or {}).get("content")
+        if isinstance(content, list):
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "text" and (b.get("text") or "").strip():
+                    last = b["text"]
+    return last
+
+
+def assert_reached_stop(s, c, name="reached-stop"):
+    """The run ended on its own (result success) and its final message carries
+    the ledger: every ledger line's `<kind> <id>` appears in it."""
+    res = s.result()
+    text = " ".join(final_text(s).split())
+    entries = ledger_entries(s)
+    problems = []
+    if res.get("subtype") != "success" or res.get("is_error"):
+        problems.append("result subtype %r" % res.get("subtype"))
+    if not entries:
+        problems.append("the ledger has no entries")
+    missing = [e.kind + " " + e.id for e in entries if (e.kind + " " + e.id) not in text]
+    if missing:
+        problems.append("final message lacks %d ledger line(s), first: %s" % (len(missing), missing[0]))
+    return c.check(name, not problems, "; ".join(problems) or
+                   "result success, final message carries all %d ledger lines" % len(entries))
+
+
+def assert_no_integration(s, c, name="no-merge-pr-push"):
+    cmds = integration_commands(s)
+    return c.check(name, not cmds, "%s: %s" % (cmds[0][2], cmds[0][1]) if cmds else
+                   "no merge, PR or push command in the transcript")
+
+
+class Cycle:
+    """One review cycle in the ledger: its opening `review integration*` line
+    and the `review rereview-` lines after it, up to the next opening line."""
+
+    def __init__(self, number, opening):
+        self.number, self.opening, self.rereviews = number, opening, []
+
+    @property
+    def used(self):
+        return len(self.rereviews)
+
+    @property
+    def capped(self):
+        """Two re-reviews used; more than two (an old or hand-edited ledger)
+        reads as capped too."""
+        return self.used >= 2
+
+
+def review_cycles(session):
+    """The ledger's review cycles in order (the shared contract). A line whose
+    id starts `integration` opens a cycle, numbered by its count; `rereview-`
+    lines count against the open cycle; `review carried` opens nothing, and a
+    re-review line before any opening line belongs to no cycle."""
+    cycles = []
+    for e in review_entries(session):
+        if e.id.startswith("integration"):
+            cycles.append(Cycle(len(cycles) + 1, e))
+        elif e.id.startswith("rereview-") and cycles:
+            cycles[-1].rereviews.append(e)
+    return cycles
+
+
+def current_cycle(session):
+    """The cycle opened by the last `review integration*` line, or None."""
+    cycles = review_cycles(session)
+    return cycles[-1] if cycles else None
+
+
+CAPPED_WORDS = re.compile(r"\bcapped\b|\bcap\b.{0,60}?\b(?:reached|spent|used|hit|exhausted)\b|"
+                          r"\b(?:reached|hit|spent|exhausted)\b.{0,60}?\bcap\b", re.I)
+
+
+def says_capped(text):
+    """The text says the review loop was capped (`capped`, or `cap` with
+    reached/spent/used/hit/exhausted within a clause either way)."""
+    return bool(CAPPED_WORDS.search(" ".join((text or "").split())))
+
+
+SUITE = re.compile(r"tests/run-all\.sh|\bunittest\s+discover\b")
+
+
+def suite_runs(session, rx=SUITE):
+    """Main-session Bash calls that ran the full suite (the permission layer
+    did not refuse them). A call that runs a script the session wrote is read
+    together with that script, so a suite started through a wrapper counts."""
+    scripts = {x.path: x.input.get("content") or "" for x in session.calls if x.name == "Write" and x.path}
+    out = []
+    for x in session.bash():
+        text = "\n".join([x.command] + [body for path, body in scripts.items() if path in x.command])
+        if rx.search(text) and not denied(x):
+            out.append(x)
     return out
 
 

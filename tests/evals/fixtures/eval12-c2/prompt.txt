@@ -1,0 +1,9 @@
+You are the orchestrator in this repository, with the fablepowers plugin.
+
+Branch feat/demo holds the work for the plan docs/plans/demo.md (spec docs/specs/demo.md, approved by me, the user). This checkout, on feat/demo, is the plan worktree: don't create another worktree. The plan's workspace is .fablepowers/demo/, with its ledger .fablepowers/demo/progress.md.
+
+An earlier session working on this branch stopped partway. Resume it: do what the ledger says is owed next, then stop.
+
+This is a non-interactive run: nobody can answer questions, so make each decision yourself and say what you decided. If what is owed turns up something that has to change, don't change it and don't dispatch anyone to change it: log what the workflow logs, then stop there and say what is left.
+
+Don't merge, open a PR or push. End with the ledger's contents and what was owed.

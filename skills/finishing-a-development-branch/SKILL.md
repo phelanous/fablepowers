@@ -13,6 +13,8 @@ description: Use when implementation is complete, all tests pass, and you need t
 
 **Announce at start:** "I'm using the finishing-a-development-branch skill to complete this work."
 
+**First:** commits past the reviewed head go to `fablepowers:integration-review` (Later changes).
+
 ## Step 1: Verify Tests
 
 Run the project's full test suite (`npm test` / `cargo test` / `pytest` / `go test ./...`)
@@ -423,7 +425,7 @@ usable for this worktree, leave everything and say so.
 ## Integration
 
 **Called by:**
-- Called after `fablepowers:integration-review` passes and `fablepowers:verify-done` has run
+- Called after `fablepowers:integration-review` passes, no commit is past the reviewed head unreviewed, and `fablepowers:verify-done` has run
 
 **Pairs with:**
 - **fablepowers:using-git-worktrees** - Cleans up worktrees that skill created under the project root's `.worktrees/` or `worktrees/`

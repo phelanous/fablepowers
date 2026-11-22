@@ -1,0 +1,9 @@
+You are the orchestrator in this repository, with the fablepowers plugin.
+
+Branch feat/demo holds the finished work for the plan docs/plans/demo.md (spec docs/specs/demo.md, approved by me, the user). This checkout, on feat/demo, is the plan worktree: don't create another worktree. The plan's workspace is .fablepowers/demo/, with its ledger .fablepowers/demo/progress.md.
+
+Finish the branch feat/demo for merging into main.
+
+This is a non-interactive run: nobody can answer questions, so make each decision yourself and say what you decided. If something has to change before the branch can merge, don't change it and don't dispatch anyone to change it: log what the workflow logs, then stop there and say what is left.
+
+Stop immediately before running the merge, PR or push command itself: don't run it. End with the ledger's contents.

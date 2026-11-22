@@ -1,0 +1,2 @@
+.worktrees/.gitignore:1:*	.worktrees/x
+exit 0

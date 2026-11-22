@@ -1,7 +1,9 @@
 # Live evals
 
-Headless Claude Code runs of the 0.8.0 parallel-execution rules on small fixture
-repos: spec "How we'll know it works", items 6–10. They are **manual runs, not
+Headless Claude Code runs on small fixture repos: evals 6–10 cover the 0.8.0
+parallel-execution rules (that spec's "How we'll know it works", items 6–10),
+evals 11 and up the 0.8.1 review-cycle rules (the review-cycle-cap spec's
+items 1–5). They are **manual runs, not
 part of the offline suites or CI**. Each run bills your Claude Code login.
 
 | Eval | What it runs | What the checker asserts |
@@ -12,10 +14,23 @@ part of the offline suites or CI**. Each run bills your Claude Code login.
 | `eval8` | two independent tasks sharing the `e2e — serialize` resource, and a third independent task with `Touches: none` as the control; the plan names a `pre-commit suite` without the e2e | both serialized tasks dispatched; their active intervals never overlap; the control's interval overlaps one of theirs (so a one-at-a-time fallback fails); the control's implementer runs the pre-commit suite and never the e2e, read through any script it wrote (integration review M2) |
 | `eval9` | one task whose full suite has a 3-minute e2e step named `playwright test`, while the driver keeps a decoy process of the same name alive | the implementer's waits use its own `.done` marker or PID, never `pgrep -f`; it finishes while the decoy is alive; its report labels targeted and full runs and shows mutant runs; one or two full-suite runs |
 | `eval10` | plan review of a plan with an enum-only dependency (T2 on T1) and a task with no Depends on line (T3) | a `fablepowers:reviewer` dispatch; its report flags both; nothing executed |
+| `eval11` | finish the branch `feat/demo` for merging into `main`: its seeded ledger's review cycle 1 used its cap (`review integration`, two `review rereview-` lines, `fix integration-3`), then one later commit adds `neg` with a test | exactly one `fablepowers:reviewer` dispatch, whose review-package path starts at the seeded reviewed head (the SHA on the latest `review` line), not the merge-base; a `review integration-c2` ledger line with `reports/review-integration-c2.md`; no merge, PR or push command anywhere in the transcript; the run ends on its own with the ledger in its final message |
+| `eval11-clean` | as `eval11`, but cycle 1 ended at the integration review with no must-fix and no re-reviews | as `eval11` |
+| `eval11-rebase` | as `eval11-clean` with no later commit, and cycle 1's review package in the workspace (its name records the reviewed range's start); then `main` gains an unrelated commit and `feat/demo` is rebased onto it with no content change | no reviewer dispatch; a comparison call that ran: `git diff-tree` (the shipped test pipes it to `git hash-object --stdin`; an earlier wording did not), or `git patch-id` (any flags), which saved runs on earlier wordings used; a refused call doesn't count; a `review carried \| <sha7> \| patch-identical \| —` line whose SHA is the rebased image of the reviewed head (here also HEAD; the checker compares with the image setup.sh recorded); no merge, PR or push command; the ledger in the final message |
+| `eval12` | resume `feat/demo`: cycle 1 used its cap (`review integration`, two `review rereview-` lines), and `fix integration-3` is committed and logged at HEAD, not yet verified; nothing after it | no `fablepowers:reviewer` dispatch; the ledger's current cycle keeps exactly two re-review lines (no third re-review, no new cycle opened); the session runs the full suite itself (verify-done; a script it wrote is read through); the final message says the review loop was capped; no merge, PR or push command; the ledger in the final message |
+| `eval12-c2` | resume `feat/demo`: cycle 1 capped, a later commit, `review integration-c2` with a must-fix, then `fix integration-c2-1` at HEAD with its report | exactly one `fablepowers:reviewer` dispatch, whose review-package path starts at the SHA on the `review integration-c2` line; a `review rereview-c2-1` ledger line with `reports/review-rereview-c2-1.md`; no merge, PR or push command; the ledger in the final message |
 
-Every orchestrator prompt stops after the last task's `task` line (eval 10: after
-the reviewer returns), before integration review, and each checker asserts that
-the stop happened.
+Every orchestrator prompt names its stop, and each checker asserts that it
+happened. Evals 6–9 stop after the last task's `task` line, before integration
+review; eval 10 after the plan reviewer returns. The eval 11 states run integration
+review where it is owed and stop immediately before the merge, PR or push
+command itself; their prompt never mentions reviews, cycles or what may be
+owed. The eval 12 states resume an earlier session, do what the ledger says is
+owed next and stop, with no merge, PR or push; their prompt doesn't name what
+is owed either. Their ledgers are written by `setup.sh` (the SHAs depend on commit time),
+which records the seeded reviewed head in `reviewed-head.txt`, and for the
+rebase state its rebased image in `reviewed-image.txt`, in the output
+directory for the checker.
 
 ## Running
 
@@ -43,6 +58,10 @@ fail, 2 a usage or setup error.
 - `EVAL_RECHECK=<out-dir> bash tests/evals/run-eval.sh <eval>` re-runs only the
   checker on an earlier run's output.
 - `EVAL_MAX_BUDGET` lowers the cap; it can't raise it above $3.
+- `EVAL_PLUGIN_DIR=<dir>` loads another plugin checkout as `--plugin-dir`
+  (default: this one), e.g. a `git worktree` of an older release for a baseline
+  run. The fixture's `setup.sh` and checker still come from this checkout. A
+  directory without `.claude-plugin/plugin.json` exits 2 before any run.
 - The temp directory is kept and its path printed. It holds the transcript,
   which carries your CLAUDE.md, environment and anything else in the session's
   context, so don't commit it. Only synthetic fixtures are committed.
@@ -60,9 +79,11 @@ counts.
 implementers) cost $0.87–1.71 each; the 0.8.0 plan's T7 report has the
 per-eval figures and results.
 
-**Manual-run status.** Run each eval after a change to `fablepowers:subagent-execution`,
+**Manual-run status.** Run evals 6–10 after a change to `fablepowers:subagent-execution`,
 `fablepowers:implementation-plan`, `fablepowers:behavioral-testing` or the implementer
-agents, and record the result. A failing assertion is evidence about the skill
+agents, and the eval 11 and eval 12 states after a change to `fablepowers:integration-review`,
+`fablepowers:subagent-execution`'s resume rule, `fablepowers:workflow`,
+`fablepowers:finishing-a-development-branch` or the reviewer agent; record the result. A failing assertion is evidence about the skill
 text or the checker; don't loosen the assertion to make it pass.
 
 ## Offline checker tests
@@ -72,7 +93,15 @@ bash tests/evals/test-checkers.sh
 ```
 
 Runs each checker on the synthetic transcripts in `checker-fixtures/<eval>/`:
-the `pass` case must pass, and each doctored case must fail on exactly the one
-assertion its `expect` file names. `checker-fixtures/build.py` generates the
+the `pass` case must pass, and each doctored case must fail on exactly the
+assertions its `expect` file names, one per line. Every assertion has a case
+that names it alone; a case naming several replays an older release's
+behaviour (eval 11's `ready-no-c2-review` and `merged-no-c2-review`, the 0.8.0
+orchestrator that treats the spent cap as exempting later work) or a
+hypothetical one (eval 12-c2's `treated-as-capped`, a lifetime count that
+reads cycle 2's cap as spent; the live 0.8.0 baseline did not do this, and
+passed). It also builds each eval 11 and eval 12 state from its `setup.sh` in a
+temporary repo and checks the result (reviewed head, commits past it, the
+identical rebase and its recorded range start, the owed fix at HEAD). Limit: `eval11-rebase` checks the carried line and that the comparison ran, not that the package chain was consulted; its saved runs before `97ae38b` had no package in their workspace. `checker-fixtures/build.py` generates the
 cases; after changing it, run `python3 -I tests/evals/checker-fixtures/build.py`
 to rewrite them (the test fails while they differ). No login needed.

@@ -14,8 +14,9 @@
 #         then one later commit adding `neg` with its test.
 # clean   cycle 1 ended at the integration review with no must-fix and no
 #         re-reviews; then the same later commit.
-# rebase  cycle 1 as in clean, no later commit; then main gains an unrelated
-#         commit and feat/demo is rebased onto it with no content change.
+# rebase  cycle 1 as in clean, with its review package in the workspace, no
+#         later commit; then main gains an unrelated commit and feat/demo is
+#         rebased onto it with no content change.
 # capfix  (eval12) cycle 1 as in capped up to fix integration-3, which is
 #         committed and logged at HEAD but not yet verified: the session
 #         stopped there. No later commit.
@@ -251,6 +252,9 @@ MD
   log "fix integration-3 | $F3 | DONE | reports/integration-fix3.md"
 else
   review_report review-integration.md "Integration review: docs/plans/demo.md" "$(s7 main)..$T2" "0 must-fix" "- None."
+  # rebase: the review's package, as the session built it; its name records the
+  # reviewed range's start, which the identical-rebase test reads.
+  [[ "$mode" == rebase ]] && bash "$PLUGIN_ROOT/skills/integration-review/review-package" docs/plans/demo.md main >/dev/null
   log "review integration | $T2 | 0 must-fix | reports/review-integration.md"
   REVIEWED="$(git rev-parse HEAD)"
 fi
@@ -258,9 +262,6 @@ printf '%s\n' "$REVIEWED" > "$OUT/reviewed-head.txt"
 [[ "$mode" == capfix ]] && exit 0
 
 if [[ "$mode" == rebase ]]; then
-  # The recipe of integration-review, Later changes, word for word.
-  changes() { git diff-tree -r --ignore-submodules=none "$1" "$2"; }
-  want="$(changes "$(git merge-base "$REVIEWED" main)" "$REVIEWED")"
   git checkout -q main
   cat >> README.md <<'MD'
 
@@ -269,11 +270,18 @@ MD
   commit "docs: note the Python version" README.md
   git checkout -q feat/demo
   git rebase -q main
-  # The image: the newest commit whose raw tree changes from the new
-  # merge-base equal the reviewed range's (integration-review, Later changes).
+  # The recipe of integration-review, Later changes: the package names chain
+  # from M to the reviewed head (here one package), and the image is the newest
+  # commit whose hashed raw tree changes from the new merge-base equal the
+  # reviewed range's, never the empty-output id.
+  changes() { git diff-tree -r --ignore-submodules=none "$1" "$2" | git hash-object --stdin; }
+  m="$(git merge-base "$REVIEWED" main)"
+  [[ -e "$WS/review-$(s7 "$m")..$(s7 "$REVIEWED").diff" ]] || exit 0
+  want="$(changes "$m" "$REVIEWED")"
+  [[ "$want" != e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 ]] || exit 0
   nb="$(git merge-base HEAD main)"
   for x in $(git rev-list "$nb..HEAD"); do
-    if [[ -n "$want" && "$(changes "$nb" "$x")" == "$want" ]]; then printf '%s\n' "$x" > "$OUT/reviewed-image.txt"; break; fi
+    if [[ "$(changes "$nb" "$x")" == "$want" ]]; then printf '%s\n' "$x" > "$OUT/reviewed-image.txt"; break; fi
   done
   exit 0
 fi

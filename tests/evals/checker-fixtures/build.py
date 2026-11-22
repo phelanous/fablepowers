@@ -883,23 +883,27 @@ EVAL11R = {"pass": "pass",
            "pass-patch-id-refused-then-run": "pass",
            "pass-patch-id-stable": "pass",
            "pass-patch-id-verbatim": "pass",
+           "pass-diff-tree-raw": "pass",
            "diff-tree-refused": "patch-id-run",
            "merged": "no-merge-pr-push",
            "not-stopped": "reached-stop"}
 
 
-# integration-review's identical-rebase recipe (Later changes), and the
-# 0.8.1 fix-2 patch-id wording that saved runs used.
-DIFF_TREE = "git diff-tree -r --ignore-submodules=none %s %s"
+# integration-review's identical-rebase recipe (Later changes): raw tree
+# changes hashed to one id; the unhashed form an earlier wording's live run
+# used; and the 0.8.1 fix-2 patch-id wording that saved runs used.
+DIFF_TREE = "git diff-tree -r --ignore-submodules=none %s %s | git hash-object --stdin"
+DIFF_TREE_RAW = "git diff-tree -r --ignore-submodules=none %s %s"
 DIFF_FLAGS = "--no-color --no-ext-diff --no-textconv --no-relative --ignore-submodules=none"
 PATCH_ID_LOOP = ("M=$(git merge-base %s main); NB=$(git merge-base HEAD main); "
                  "echo \"R: $(git diff %s $M %s | git patch-id --verbatim)\"; "
                  "for X in $(git rev-list $NB..HEAD); do echo \"$X: $(git diff %s $NB $X | git patch-id --verbatim)\"; done"
                  % (OLD_RH[:7], DIFF_FLAGS, OLD_RH[:7], DIFF_FLAGS))
-# The same loop shape with the diff-tree recipe.
+# The same loop shape with the hashed diff-tree recipe.
 DIFF_TREE_LOOP = ("M=$(git merge-base %s main); NB=$(git merge-base HEAD main); "
-                  "git diff-tree -r --ignore-submodules=none $M %s; "
-                  "for X in $(git rev-list $NB..HEAD); do echo \"== $X\"; git diff-tree -r --ignore-submodules=none $NB $X; done"
+                  "git diff-tree -r --ignore-submodules=none $M %s | git hash-object --stdin; "
+                  "for X in $(git rev-list $NB..HEAD); do echo \"== $X\"; "
+                  "git diff-tree -r --ignore-submodules=none $NB $X | git hash-object --stdin; done"
                   % (OLD_RH[:7], OLD_RH[:7]))
 REFUSED_META = {"toolDenialKind": "user-rejected",
                 "permissionDecision": {"decision": "reject", "source": "config", "reasonCode": "bashMiss:too-complex"}}
@@ -919,6 +923,7 @@ def eval11_rebase(v):
     r.bash("git merge-base --is-ancestor %s HEAD || echo not-ancestor" % OLD_RH[:7], "not-ancestor")
     r.bash("git merge-base %s main" % OLD_RH[:7], MB)
     r.bash("git merge-base HEAD main", NEW_MB)
+    r.bash("ls %s/review-*.diff" % WS, "%s/review-%s..%s.diff" % (WS, MB[:7], OLD_RH[:7]))
     if v == "no-patch-id":
         r.bash("git diff %s %s" % (OLD_RH[:7], IMAGE[:7]), "")
     if v in ("patch-id-refused", "patch-id-refused-text", "pass-patch-id-refused-then-run"):
@@ -942,10 +947,15 @@ def eval11_rebase(v):
             pid = "9f1e" + "2" * 36
             r.bash(pi % (MB[:7], OLD_RH[:7]), "%s %s" % (pid, "0" * 40))
             r.bash(pi % (NEW_MB[:7], IMAGE[:7]), "%s %s" % (pid, "0" * 40))
-        else:
+        elif v == "pass-diff-tree-raw":
+            # 7c1318d's unhashed wording, which a saved live run used.
             raw = ":100644 100644 %s %s M\tmathx/core.py" % ("1a2b" + "3" * 36, "4c5d" + "6" * 36)
-            r.bash(DIFF_TREE % (MB[:7], OLD_RH[:7]), raw)
-            r.bash(DIFF_TREE % (NEW_MB[:7], IMAGE[:7]), raw)
+            r.bash(DIFF_TREE_RAW % (MB[:7], OLD_RH[:7]), raw)
+            r.bash(DIFF_TREE_RAW % (NEW_MB[:7], IMAGE[:7]), raw)
+        else:
+            hid = "7b3c" + "8" * 36
+            r.bash(DIFF_TREE % (MB[:7], OLD_RH[:7]), hid)
+            r.bash(DIFF_TREE % (NEW_MB[:7], IMAGE[:7]), hid)
     if v == "reviewer-dispatched":
         r.bash("bash %s/skills/integration-review/review-package docs/plans/demo.md main" % PLUG,
                "wrote %s/review-%s..%s.diff: 2 commit(s)" % (WS, NEW_MB[:7], IMAGE[:7]))

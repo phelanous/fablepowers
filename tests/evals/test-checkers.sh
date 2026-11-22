@@ -334,13 +334,17 @@ for ev in eval11 eval11-clean eval11-rebase eval12 eval12-c2; do
       rc=1; [[ "$(G cat-file -t "$rh" 2>/dev/null)" == commit ]] && ! G merge-base --is-ancestor "$rh" HEAD && rc=0
       state_check "$ev: the reviewed head exists and is not an ancestor of HEAD" "$rc" "$rh"
       old_mb="$(G merge-base "$rh" main)"
-      want_ch="$(G diff-tree -r --ignore-submodules=none "$old_mb" "$rh")"
+      pkg_name="review-$(G rev-parse --short=7 "$old_mb")..$(G rev-parse --short=7 "$rh").diff"
+      rc=1; [[ -f "$R/.fablepowers/demo/$pkg_name" ]] && rc=0
+      state_check "$ev: the workspace records the reviewed range's start ($pkg_name)" "$rc" "$(ls "$R/.fablepowers/demo")"
+      hid() { G diff-tree -r --ignore-submodules=none "$1" "$2" | git hash-object --stdin; }
+      want_ch="$(hid "$old_mb" "$rh")"
       match=""
       for x in $(G rev-list "$mb..HEAD"); do
-        [[ "$(G diff-tree -r --ignore-submodules=none "$mb" "$x")" == "$want_ch" ]] && { match="$x"; break; }
+        [[ "$(hid "$mb" "$x")" == "$want_ch" ]] && { match="$x"; break; }
       done
-      rc=1; [[ -n "$want_ch" && -n "$match" && "$match" == "$img" ]] && rc=0
-      state_check "$ev: the newest commit with the reviewed range's raw tree changes is reviewed-image.txt" "$rc" "match '$match', image '$img'"
+      rc=1; [[ "$want_ch" != e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 && -n "$match" && "$match" == "$img" ]] && rc=0
+      state_check "$ev: the newest commit with the reviewed range's hashed raw tree changes is reviewed-image.txt" "$rc" "match '$match', image '$img'"
       rc=1; [[ -n "$img" && "$img" == "$(G rev-parse HEAD)" && "$(G rev-list --count main)" == 2 ]] && rc=0
       state_check "$ev: reviewed-image.txt is HEAD; main moved one commit" "$rc" "image $img, HEAD $(G rev-parse HEAD)"
       ;;

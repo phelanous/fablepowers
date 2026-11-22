@@ -939,25 +939,26 @@ latest `review` line) is either a fix the current cycle owes a re-review or
 verify-done, or it is owed a new cycle: a fresh `fablepowers:reviewer` with
 the full mandate over `<reviewed head>..HEAD`, logged as
 `review integration-c<c>`, with its own cap of two. Size never exempts a
-change. A rebase carries the verdict (`review carried`) only to a commit `X`
-for which `git diff-tree -r --ignore-submodules=none <new merge-base> X`
-prints exactly what the same command prints for
-`<old merge-base> <reviewed head>`, and that output is not empty: the
-branch changes the same files from the same content to the same content.
-Any other
+change. A rebase carries the verdict (`review carried`) only when the
+workspace's review package names chain from `<old merge-base>` (recomputed
+now) to the reviewed head, and then only to a commit `X` for which
+`git diff-tree -r --ignore-submodules=none <new merge-base> X | git hash-object --stdin`
+prints the id the same command prints for `<old merge-base> <reviewed head>`,
+and that id is not the empty-output id: the branch changes the same files
+from the same content to the same content. Any other
 rebase, amend or reset gets a whole-branch cycle from the merge-base. Cycle-1
 ledger and report names are unchanged, so existing ledgers resume as before.
 
 **What the evals showed.** These were live `claude -p` runs on Claude Code
 2.1.322, one each, against the 0.8.1 skills, plus a baseline of two of them
-against the 0.8.0 skills on `main`, plus two reruns of `eval11-rebase` on
+against the 0.8.0 skills on `main`, plus three reruns of `eval11-rebase` on
 later wordings of its test. In total, ten runs cost $6.72.
 
 | Eval | 0.8.1 | 0.8.0 baseline |
 |---|---|---|
 | `eval11`: follow-up after a capped cycle | pass, $0.95 | fail on 3 of 5 assertions, $0.57 |
 | `eval11-clean`: follow-up after a clean cycle | pass, $0.90 | not run (guard) |
-| `eval11-rebase`: identical rebase | pass, $0.44 (range-diff test); reruns pass, $0.52 (patch-id `--stable`) and $0.56 (patch-id `--verbatim`, five flags); see below | not run (guard) |
+| `eval11-rebase`: identical rebase | pass, $0.44 (range-diff test); reruns pass, $0.52 (patch-id `--stable`), $0.56 (patch-id `--verbatim`, five flags) and $0.67 (raw `diff-tree`); see below | not run (guard) |
 | `eval12`: cap inside a cycle | pass, $0.50 | not run (guard) |
 | `eval12-c2`: second cycle's own count | pass, $0.79 | pass, $0.82 (guard) |
 
@@ -975,11 +976,12 @@ later wordings of its test. In total, ten runs cost $6.72.
   are guards as well.
 - Rebase in the middle of a cycle, new work arriving while a re-review is
   pending, an amended or garbage-collected reviewed head, a ledger with no
-  `review` line, and a docs-only follow-up are not covered by an eval. Only
+  `review` line, a base rewritten or retargeted since the review, and a
+  docs-only follow-up are not covered by an eval. Only
   the skill wording covers them.
-- **The identical-rebase test changed three times after the evals**, each
-  time because a review reproduced a carry over changed code on scratch
-  repos:
+- **The identical-rebase test changed four times after the evals**: three
+  times because a review reproduced a carry over changed code on scratch
+  repos, once to close two should-fix gaps review cycle 2 found:
   1. `git range-diff` ("only `=` pairs"), replaced after the integration
      review: it skips merge commits, so on a plan branch of `--no-ff` task
      merges a differently re-resolved conflict still showed only `=` pairs,
@@ -1003,7 +1005,7 @@ later wordings of its test. In total, ten runs cost $6.72.
      stanzas, or a line moved to an identical-context spot in another
      function, carried (with `diff.context=0`, any move did).
      `eval11-rebase` was rerun on it and passed (5 of 5, $0.56, 18 turns).
-  4. Raw tree changes, shipped: `git diff-tree -r --ignore-submodules=none`
+  4. Raw tree changes: `git diff-tree -r --ignore-submodules=none`
      on both ranges must print the same paths, modes, statuses and full
      pre- and post-image blob or gitlink SHAs. That compares whole file
      contents, so it is conservative by construction: a base change to any
@@ -1014,14 +1016,29 @@ later wordings of its test. In total, ten runs cost $6.72.
      linearized, and finds none for every case above. The plumbing command
      ignores the porcelain diff settings that broke the earlier wordings;
      `--ignore-submodules=none` stays because a submodule's `ignore = all`
-     hides gitlink changes from `diff-tree` too. The review loop had reached
-     its cap of two re-reviews, so this change was not reviewed.
-- **The shipped `git diff-tree` wording passed one further live run** of `eval11-rebase` (5 of 5, $0.67, 23 turns), made after the capped fix. It was not reviewed.
+     hides gitlink changes from `diff-tree` too. `eval11-rebase` was rerun on
+     it and passed (5 of 5, $0.67, 23 turns). Review cycle 2 reviewed it and
+     found no must-fix and two should-fix items, fixed in step 5.
+  5. Shipped: the same comparison from a recorded range start, hashed. The
+     old merge-base had been recomputed from the current base branch, so
+     after the base was force-pushed to drop a commit, or the branch
+     retargeted to another base, `git rebase` replayed base commits no
+     reviewer saw and the whole range still carried. Now the review package
+     names (`review-<start7>..<head7>.diff`) must chain from that merge-base
+     to the reviewed head; otherwise, as after an earlier carry (whose start
+     no package records), it is a whole-branch cycle. And each listing is
+     piped to `git hash-object --stdin`, so the orchestrator compares two ids
+     rather than reading raw listings by eye; the empty-output id
+     (`e69de29…`) never matches. On scratch repos both force-push and
+     retarget cases now fall to a whole-branch cycle, cycle 1, re-review and
+     cycle 2 ledgers still carry, and every case in step 4 comes out the same.
+- **The shipped hashed, recorded-start wording has no live run** as of this commit.
 
 ### What to watch next audit
 
 1. **Review lines per merged feature**: `review integration-c<c>` lines, and
    commits past the reviewed head at merge time (should be none).
 2. **`review carried` lines**: each should follow a matching pair of
-   `git diff-tree -r` outputs. A carried verdict after a conflict-resolving
-   rebase means the rule was misread.
+   hashed `git diff-tree -r` ids, from a range start the package names
+   record. A carried verdict after a conflict-resolving rebase means the rule
+   was misread.

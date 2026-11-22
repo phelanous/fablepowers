@@ -951,14 +951,14 @@ ledger and report names are unchanged, so existing ledgers resume as before.
 
 **What the evals showed.** These were live `claude -p` runs on Claude Code
 2.1.322, one each, against the 0.8.1 skills, plus a baseline of two of them
-against the 0.8.0 skills on `main`, plus three reruns of `eval11-rebase` on
-later wordings of its test. In total, ten runs cost $6.72.
+against the 0.8.0 skills on `main`, plus four reruns of `eval11-rebase` on
+later wordings of its test. In total, eleven runs cost $7.25.
 
 | Eval | 0.8.1 | 0.8.0 baseline |
 |---|---|---|
 | `eval11`: follow-up after a capped cycle | pass, $0.95 | fail on 3 of 5 assertions, $0.57 |
 | `eval11-clean`: follow-up after a clean cycle | pass, $0.90 | not run (guard) |
-| `eval11-rebase`: identical rebase | pass, $0.44 (range-diff test); reruns pass, $0.52 (patch-id `--stable`), $0.56 (patch-id `--verbatim`, five flags) and $0.67 (raw `diff-tree`); see below | not run (guard) |
+| `eval11-rebase`: identical rebase | pass, $0.44 (range-diff test); reruns pass, $0.52 (patch-id `--stable`), $0.56 (patch-id `--verbatim`, five flags), $0.67 (raw `diff-tree`) and $0.53 (hashed, recorded start); see below | not run (guard) |
 | `eval12`: cap inside a cycle | pass, $0.50 | not run (guard) |
 | `eval12-c2`: second cycle's own count | pass, $0.79 | pass, $0.82 (guard) |
 
@@ -976,8 +976,8 @@ later wordings of its test. In total, ten runs cost $6.72.
   are guards as well.
 - Rebase in the middle of a cycle, new work arriving while a re-review is
   pending, an amended or garbage-collected reviewed head, a ledger with no
-  `review` line, a base rewritten or retargeted since the review, and a
-  docs-only follow-up are not covered by an eval. Only
+  `review` line, a rebase onto a base rewritten or retargeted since the
+  review, and a docs-only follow-up are not covered by an eval. Only
   the skill wording covers them.
 - **The identical-rebase test changed four times after the evals**: three
   times because a review reproduced a carry over changed code on scratch
@@ -1030,9 +1030,27 @@ later wordings of its test. In total, ten runs cost $6.72.
      piped to `git hash-object --stdin`, so the orchestrator compares two ids
      rather than reading raw listings by eye; the empty-output id
      (`e69de29…`) never matches. On scratch repos both force-push and
-     retarget cases now fall to a whole-branch cycle, cycle 1, re-review and
-     cycle 2 ledgers still carry, and every case in step 4 comes out the same.
-- **The shipped hashed, recorded-start wording has no live run** as of this commit.
+     retarget cases followed by a rebase now fall to a whole-branch cycle;
+     cycle 1, re-review and cycle 2 ledgers still carry, and every case in
+     step 4 comes out the same. The recorded-start check runs only on this
+     rebase path (reviewed head not an ancestor of HEAD). `eval11-rebase` was
+     rerun on 97ae38b and passed (5 of 5, $0.53, 16 turns); the orchestrator
+     ran `git diff-tree -r --ignore-submodules=none … | git hash-object --stdin`.
+     Re-review 1 of cycle 2 found no must-fix; its one should-fix is the
+     open item below. Its minor finding that the guard named only the
+     SHA-1 id is fixed after that run: the skill now also names the SHA-256
+     empty-output id (`473a0f4…`), which a net-empty range hashes to there.
+- **Limit of the eval:** it checks the carried line and that the comparison
+  ran, not that the package chain was consulted; the saved runs made before
+  97ae38b had no package in their workspace.
+
+### Open items
+
+1. **A base rewritten or retargeted without a rebase** (or merged into the
+   branch instead) leaves base-side commits in `<base>..HEAD` that no cycle
+   reviewed, since the reviewed head stays an ancestor and the recorded-start
+   check never runs. Reproduced on scratch repos in re-review c2-1; present
+   in 0.8.0 too; not addressed in 0.8.1.
 
 ### What to watch next audit
 

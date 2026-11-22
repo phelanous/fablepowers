@@ -102,6 +102,6 @@ hypothetical one (eval 12-c2's `treated-as-capped`, a lifetime count that
 reads cycle 2's cap as spent; the live 0.8.0 baseline did not do this, and
 passed). It also builds each eval 11 and eval 12 state from its `setup.sh` in a
 temporary repo and checks the result (reviewed head, commits past it, the
-identical rebase and its recorded range start, the owed fix at HEAD). `checker-fixtures/build.py` generates the
+identical rebase and its recorded range start, the owed fix at HEAD). Limit: `eval11-rebase` checks the carried line and that the comparison ran, not that the package chain was consulted; its saved runs before `97ae38b` had no package in their workspace. `checker-fixtures/build.py` generates the
 cases; after changing it, run `python3 -I tests/evals/checker-fixtures/build.py`
 to rewrite them (the test fails while they differ). No login needed.
